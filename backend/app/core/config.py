@@ -30,6 +30,14 @@ class Settings(BaseModel):
     fmp_timeout_seconds: float = float(os.getenv("FMP_TIMEOUT_SECONDS", "15"))
     fmp_max_results: int = int(os.getenv("FMP_MAX_RESULTS", "100"))
     fmp_allowed_hosts: tuple[str, ...] = tuple(filter(None, (item.strip().lower() for item in os.getenv("FMP_ALLOWED_HOSTS", "financialmodelingprep.com").split(","))))
+    # Which adapter in app.integrations.news.REGISTRY answers a fetch that names no provider.
+    news_provider: str = os.getenv("NEWS_PROVIDER", "FMP")
+    marketaux_api_key: str | None = os.getenv("MARKETAUX_API_KEY")
+    marketaux_base_url: str = os.getenv("MARKETAUX_BASE_URL", "https://api.marketaux.com/v1")
+    marketaux_timeout_seconds: float = float(os.getenv("MARKETAUX_TIMEOUT_SECONDS", "15"))
+    marketaux_max_results: int = int(os.getenv("MARKETAUX_MAX_RESULTS", "100"))
+    marketaux_language: str = os.getenv("MARKETAUX_LANGUAGE", "en")
+    marketaux_allowed_hosts: tuple[str, ...] = tuple(filter(None, (item.strip().lower() for item in os.getenv("MARKETAUX_ALLOWED_HOSTS", "api.marketaux.com").split(","))))
     workspace_root: Path = _WORKSPACE_ROOT
     # backend/ itself: test fixtures and alembic live under the service, not the repository root.
     service_root: Path = _SERVICE_ROOT

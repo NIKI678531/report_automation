@@ -1,6 +1,6 @@
 # Implementation status against V2.1
 
-Last verified: 2026-08-06
+Last verified: 2026-08-07
 
 ## Implemented and tested
 
@@ -19,7 +19,9 @@ Last verified: 2026-08-06
 - Fund title selector plus six-module report workspace. The previous global snapshot/recalculate/draft/review/finalize buttons now live in their data, content, or review context.
 - Initial controlled 12-column Month in Review layout with mouse drag ordering, keyboard move controls, immutable document-version saves, and responsive desktop/mobile presentation.
 - Historical Performance, Company News selection, full constituent table, four-part Final Analytics, formula context, and Footnotes module views backed by the existing report document.
-- `3033-v2` Review editor with 12-column drag/resize, controlled TipTap rich text, server overlap/bounds validation, HTML sanitization, responsive stacking, and shared HTML/DOCX rendering. `3033-v1` remains version-isolated.
+- `3033-v2` Review editor with editable month-derived report and block titles, 12-column drag/resize, controlled TipTap rich text, server overlap/bounds validation, HTML sanitization, responsive stacking, and shared HTML/PDF/DOCX rendering. `3033-v1` remains version-isolated.
+- Physical-page navigation aligned to the canonical four-page output (`01`, `01`, `02`, `03`, `04`, with cross-page Footnotes at `01/03/04`), plus synchronized fund/date/report revision selection.
+- Final Analytics period and Portfolio Analysis ticker are bound to server-owned report identity; out-of-month Final Analytics observations are rejected before snapshot application.
 - FMP Stable server adapter with header-only secret handling, constituent/general scopes, report-month date filters, provider normalization, URL/hash deduplication, report-scoped candidates, and fail-closed error handling.
 - Historical Performance raw Total Return CSV and Final Analytics constituent/KPI CSV, including preview/diff/reasoned apply, explicit ratio scale, server calculations, and immutable input snapshots.
 - DA-Report-derived workbench tokens: local Inter/Roboto Mono, glass surfaces, restrained elevation, responsive filter bars, selected news states, and reduced-motion support.

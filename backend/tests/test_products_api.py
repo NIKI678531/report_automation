@@ -1,3 +1,10 @@
+from types import SimpleNamespace
+
+from docx import Document
+
+from app.rendering.artifacts import render_docx
+
+
 def test_products_are_effective_dated_and_drive_report_identity(client):
     products = client.get("/api/v1/products", params={"as_of_date": "2026-06-30"})
     assert products.status_code == 200
@@ -24,7 +31,7 @@ def test_report_creation_rejects_unknown_or_client_supplied_product_identity(cli
     assert spoofed.status_code == 422
 
 
-def test_non_3033_product_uses_its_own_count_formula_and_never_golden_data(client):
+def test_non_3033_product_uses_its_own_count_formula_and_never_golden_data(client, tmp_path):
     report = client.post("/api/v1/reports", json={"product_code": "TEST", "report_date": "2026-06-30"})
     assert report.status_code == 201, report.text
     report_id = report.json()["id"]
@@ -58,12 +65,58 @@ def test_non_3033_product_uses_its_own_count_formula_and_never_golden_data(clien
     assert calculated.status_code == 200, calculated.text
     assert calculated.json()["formula_version"] == "test-index-v1"
     assert calculated.json()["metrics"]["constituent_count"] == 2
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
     preview = client.post(f"/api/v1/reports/{report_id}/preview")
     assert preview.status_code == 200
-    assert "Historical Performance of TEST.HK and Synthetic Test Index" in preview.text
+    assert "Historical Performance of 9999.HK and Synthetic Test Index" in preview.text
     assert "The Performance of TESTIDX Constituents" in preview.text
-    assert "TEST.HK Portfolio Analysis" in preview.text
+    assert "9999.HK Portfolio Analysis" in preview.text
     assert "3033.HK" not in preview.text
+
+    destination = tmp_path / "test-fund.docx"
+    render_docx(
+        SimpleNamespace(product_name=report.json()["product_name"], benchmark_code=report.json()["benchmark_code"]),
+        detail["latest_document"]["content"],
+        destination,
+    )
+    docx = Document(destination)
+    text = "\n".join(
+        [paragraph.text for paragraph in docx.paragraphs]
+        + [cell.text for table in docx.tables for row in table.rows for cell in row.cells]
+    )
+    assert "Historical Performance of 9999.HK and Synthetic Test Index" in text
+    assert "9999.HK Portfolio Analysis" in text
+    assert "3033.HK" not in text
+
+
+def test_document_update_rebinds_system_owned_report_identity(client):
+    report = client.post("/api/v1/reports", json={"product_code": "TEST", "report_date": "2026-06-30"}).json()
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    content = detail["latest_document"]["content"]
+    content.update({
+        "report_id": "spoofed",
+        "report_date": "2025-01-01",
+        "month_name": "January",
+        "product_ticker": "SPOOF.HK",
+        "benchmark_name": "Spoofed Index",
+        "template_version": "spoof-v1",
+        "design_token_version": "spoof-v1",
+        "language_mode": "SPOOF",
+    })
+    saved = client.put(
+        f"/api/v1/reports/{report['id']}/document",
+        json={"version": detail["latest_document"]["version"], "content": content},
+    )
+    assert saved.status_code == 200, saved.text
+    identity = saved.json()["content"]
+    assert identity["report_id"] == report["id"]
+    assert identity["report_date"] == "2026-06-30"
+    assert identity["month_name"] == "June"
+    assert identity["product_ticker"] == "9999.HK"
+    assert identity["benchmark_name"] == "Synthetic Test Index"
+    assert identity["template_version"] == "test-v1"
+    assert identity["design_token_version"] == "test-v1"
+    assert identity["language_mode"] == "EN"
 
 
 def test_admin_can_import_an_approved_product_catalog(client):

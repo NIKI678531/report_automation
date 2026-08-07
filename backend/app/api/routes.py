@@ -307,9 +307,17 @@ def list_news(db: Db, security_code: str | None = None, importance: str | None =
     return list(db.scalars(query))
 
 
+@router.get("/news/providers")
+def list_news_providers() -> list[dict]:
+    """Which news providers this environment can actually reach, so the UI can disable the rest."""
+    from app.integrations import news
+
+    return news.list_providers()
+
+
 @router.post("/reports/{report_id}/news/candidates/fetch")
 async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db: Db, x_request_id: Annotated[str, Depends(request_id)]) -> dict:
-    from app.integrations.fmp import FmpProviderError, fetch_news
+    from app.integrations.news import NewsProviderError, fetch_news
     report = service.get_report(db, report_id)
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED"})
@@ -327,11 +335,11 @@ async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db:
         if not symbols:
             raise HTTPException(status_code=422, detail={"error_code": "CONSTITUENT_TICKERS_REQUIRED"})
     try:
-        candidates = await fetch_news(command.scope, symbols, from_date, to_date, command.page, command.limit)
-    except FmpProviderError as error:
+        provider, candidates = await fetch_news(command.provider, command.scope, symbols, from_date, to_date, command.page, command.limit)
+    except NewsProviderError as error:
         raise HTTPException(status_code=error.http_status, detail={"error_code": error.code, "message": error.message, "retryable": error.retryable}) from error
-    items, created = service.upsert_news_candidates(db, report, candidates, x_request_id)
-    return {"fetched": len(candidates), "created": created, "items": [NewsRead.model_validate(item).model_dump() for item in items]}
+    items, created = service.upsert_news_candidates(db, report, candidates, x_request_id, provider=provider)
+    return {"provider": provider, "fetched": len(candidates), "created": created, "items": [NewsRead.model_validate(item).model_dump() for item in items]}
 
 
 @router.get("/reports/{report_id}/news/candidates", response_model=list[NewsRead])

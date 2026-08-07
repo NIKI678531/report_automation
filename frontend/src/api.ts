@@ -45,6 +45,14 @@ export interface NewsCandidateInput {
   ticker: string | null;
 }
 
+export interface NewsProvider {
+  key: string;
+  title: string;
+  description: string;
+  configured: boolean;
+  default: boolean;
+}
+
 export type DatasetType = "constituents" | "historical_performance" | "final_analytics";
 
 export interface ImportResult {
@@ -68,6 +76,7 @@ export interface Report {
   benchmark_code: string;
   report_date: string;
   status: ReportStatus;
+  revision: number;
   version: number;
   active_snapshot_id: string | null;
   finalized_document_version: number | null;
@@ -102,8 +111,9 @@ export const api = {
   generateDraft: (id: string, version: number, user_prompt: string) => request<{ version: number }>(`/reports/${id}/ai/in-review`, { method: "POST", body: JSON.stringify({ version, user_prompt }) }),
   review: (id: string) => request<{ ready: boolean; blocking: Array<{ check_id: string; fix_hint: string }>; warnings: unknown[] }>(`/reports/${id}/review`),
   listNews: () => request<NewsCandidate[]>("/news"),
+  listNewsProviders: () => request<NewsProvider[]>("/news/providers"),
   listReportNewsCandidates: (id: string) => request<NewsCandidate[]>(`/reports/${id}/news/candidates`),
-  fetchNewsCandidates: (id: string, scope: "CONSTITUENTS" | "GENERAL", from_date: string, to_date: string) => request<{ fetched: number; created: number; items: NewsCandidate[] }>(`/reports/${id}/news/candidates/fetch`, { method: "POST", body: JSON.stringify({ scope, from_date, to_date, page: 0, limit: 100 }) }),
+  fetchNewsCandidates: (id: string, scope: "CONSTITUENTS" | "GENERAL", from_date: string, to_date: string, provider?: string) => request<{ provider: string; fetched: number; created: number; items: NewsCandidate[] }>(`/reports/${id}/news/candidates/fetch`, { method: "POST", body: JSON.stringify({ scope, from_date, to_date, page: 0, limit: 100, provider }) }),
   addNewsCandidate: (id: string, item: NewsCandidateInput) => request<NewsCandidate>(`/reports/${id}/news/candidates`, { method: "POST", body: JSON.stringify(item) }),
   selectNews: (id: string, version: number, selections: NewsSelectionDraft[] | string[]) => {
     const items = selections.map((item, position) => typeof item === "string" ? { news_item_id: item, position } : item);

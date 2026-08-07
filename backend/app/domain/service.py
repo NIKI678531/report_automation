@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from . import ingestion
 from .calculation import calculate_snapshot, quality_checks
-from .document import bind_snapshot, checksum, initial_document, validate_document_content
+from .document import DocumentValidationError, bind_snapshot, checksum, initial_document, validate_document_content
 from .models import AuditEvent, DataImport, DataSnapshot, NewsItem, ProductCatalog, Report, ReportDocument, ReportStatus, SnapshotStatus, utcnow
 from .schemas import ReportCreate
 
@@ -419,8 +419,30 @@ def update_document(db: Session, report: Report, expected_version: int, content:
             "current_version": current.version,
             "current_checksum": current.checksum,
         })
+    product = resolve_product(db, report.product_code, report.report_date)
+    canonical = dict(content)
+    canonical.update({
+        "report_id": report.id,
+        "report_date": report.report_date.isoformat(),
+        "month_name": report.report_date.strftime("%B"),
+        "product_ticker": product.ticker,
+        "benchmark_name": product.benchmark_name or product.benchmark_code,
+        "template_version": report.template_version,
+        "design_token_version": product.design_token_version,
+        "language_mode": report.language_mode,
+        "snapshot_id": report.active_snapshot_id,
+    })
     try:
-        content = validate_document_content(content)
+        content = validate_document_content(canonical)
+    except DocumentValidationError as error:
+        raise HTTPException(status_code=422, detail={
+            "error_code": error.error_code,
+            "field": error.field,
+            "entity_id": error.entity_id,
+            "message": str(error),
+            "severity": "BLOCKING",
+            "fix_hint": error.fix_hint,
+        }) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail={
             "error_code": "REVIEW_LAYOUT_INVALID",
@@ -428,8 +450,6 @@ def update_document(db: Session, report: Report, expected_version: int, content:
             "severity": "BLOCKING",
             "fix_hint": "Keep every Review block inside the 12-column canvas without overlap.",
         }) from error
-    content["report_id"] = report.id
-    content["snapshot_id"] = report.active_snapshot_id
     document = ReportDocument(
         report_id=report.id,
         version=current.version + 1,

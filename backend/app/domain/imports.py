@@ -237,6 +237,8 @@ def parse_final_analytics(filename: str, data: bytes, report_date: date) -> dict
             as_of_date = _date(row.get("as_of_date"), "as_of_date", index)
             if as_of_date > report_date:
                 raise ValueError(f"Row {index}: as_of_date cannot be later than report_date")
+            if (as_of_date.year, as_of_date.month) != (report_date.year, report_date.month):
+                raise ValueError(f"Row {index}: as_of_date must be in the report month")
             security_code = _required(row, "security_code", index).lstrip("0") or "0"
             if security_code in constituent_codes:
                 raise ValueError(f"Row {index}: duplicate constituent {security_code}")
@@ -267,6 +269,8 @@ def parse_final_analytics(filename: str, data: bytes, report_date: date) -> dict
             metric_date = _date(row.get("metric_date"), "metric_date", index)
             if metric_date > report_date:
                 raise ValueError(f"Row {index}: metric_date cannot be later than report_date")
+            if (metric_date.year, metric_date.month) != (report_date.year, report_date.month):
+                raise ValueError(f"Row {index}: metric_date must be in the report month")
             key = (metric_code, metric_date)
             if key in kpi_keys:
                 raise ValueError(f"Row {index}: duplicate KPI {metric_code}/{metric_date.isoformat()}")

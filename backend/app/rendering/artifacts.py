@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.storage import storage
+from app.domain.document import review_display_title
 from app.domain.models import RenderArtifact, Report, ReportDocument
 from .html import pct, price, render_html
 
@@ -105,7 +106,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     document.add_heading(report.product_name, 0)
     review = sections["month_in_review"]
     enable_review_layout = content.get("template_version") != "3033-v1"
-    document.add_heading("Review" if enable_review_layout else review.get("title", "Review"), 1)
+    document.add_heading(review_display_title(content), 1)
     if enable_review_layout and review.get("blocks"):
         grouped: dict[int, list[dict]] = {}
         for block in sorted(review["blocks"], key=lambda item: (item["y"], item["x"], item["block_id"])):
@@ -130,7 +131,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
             document.add_paragraph(f"{item['title']}\n{item['body']}", style="List Number")
         document.add_heading("Outlook", 1)
         document.add_paragraph(review["outlook"])
-    document.add_heading("Historical Performance of 3033.HK and Hang Seng TECH Index*", 1)
+    document.add_heading(f"Historical Performance of {content['product_ticker']} and {content['benchmark_name']}*", 1)
     history = sections["historical_performance"]["rows"]
     _table(document, ["", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[x["name"], pct(x["return_1m"]), pct(x["return_3m"]), pct(x["return_6m"]), pct(x["return_ytd"])] for x in history])
     document.add_paragraph(sections["footnotes"].get("historical", ""), style="Caption")
@@ -144,9 +145,9 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         paragraph.add_run("\n" + item["summary"])
 
     _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 3)
-    heading = document.add_heading("The Performance of HSTECH Constituents", 1)
+    heading = document.add_heading(f"The Performance of {report.benchmark_code} Constituents", 1)
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    document.add_paragraph("(*Next Rebalancing Date: 4 September 2026)").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document.add_paragraph(f"(*Next Rebalancing Date: {content.get('next_rebalancing_date') or 'N/A'})").alignment = WD_ALIGN_PARAGRAPH.CENTER
     constituents = sections["constituents"]
     _table(document, ["Stock Code", "Stock Name", "Closing Price (HKD)", "Weighting (%)", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[x["security_code"], x["name_en"], price(x["close_price"]), pct(x["weight"]), pct(x["return_1m"]), pct(x["return_3m"]), pct(x["return_6m"]), pct(x["return_ytd"])] for x in constituents], blue_first=True)
     document.add_paragraph(sections["footnotes"].get("constituents", ""), style="Caption")
@@ -161,7 +162,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _table(document, ["Issuer", "Return (%)"], [[x["issuer"], pct(x["return"])] for x in analytics["top"]])
     document.add_heading(f"Bottom Performers in {content['month_name']}", 1)
     _table(document, ["Issuer", "Return (%)"], [[x["issuer"], pct(x["return"])] for x in analytics["bottom"]])
-    document.add_heading("3033.HK Portfolio Analysis", 1)
+    document.add_heading(f"{content['product_ticker']} Portfolio Analysis", 1)
     _table(document, ["Measure", "Value"], [[x["label"], x["value"]] for x in analytics["portfolio"]])
     document.add_paragraph(sections["footnotes"].get("analytics", ""), style="Caption")
     document.save(destination)

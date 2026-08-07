@@ -3,7 +3,7 @@ import { DndContext, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, verticalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Check, ExternalLink, GripVertical, Plus, RefreshCw, Save, Search, X } from "lucide-react";
-import { api, type NewsCandidate, type NewsCandidateInput, type NewsSelectionDraft, type Report } from "../../api";
+import { api, type NewsCandidate, type NewsCandidateInput, type NewsProvider, type NewsSelectionDraft, type Report } from "../../api";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 type SnapshotNews = Record<string, unknown>;
@@ -58,6 +58,8 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
   const [site, setSite] = useState("");
   const [symbol, setSymbol] = useState("");
   const [scope, setScope] = useState<"CONSTITUENTS" | "GENERAL">("CONSTITUENTS");
+  const [providers, setProviders] = useState<NewsProvider[]>([]);
+  const [provider, setProvider] = useState("");
   const [sort, setSort] = useState<SortOrder>("newest");
   const [adding, setAdding] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -68,6 +70,13 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
   const load = () => api.listReportNewsCandidates(report.id).then(setCandidates);
   useEffect(() => { setLoading(true); load().catch(() => setCandidates([])).finally(() => setLoading(false)); }, [report.id, version]);
   useEffect(() => {
+    // A provider without a credential in this environment cannot answer, so it is listed but not offered.
+    api.listNewsProviders().then((items) => {
+      setProviders(items);
+      setProvider((current) => current || (items.find((item) => item.default && item.configured) ?? items.find((item) => item.configured))?.key || "");
+    }).catch(() => setProviders([]));
+  }, []);
+  useEffect(() => {
     const fromDocument = selectedSnapshot.filter((item) => item.news_item_id).map((item, index) => ({
       news_item_id: String(item.news_item_id), position: index, title: String(item.title ?? ""), summary: String(item.summary ?? ""),
       source: String(item.source_name ?? ""), publishedAt: String(item.published_at ?? report.report_date), ticker: String(item.ticker ?? "") || null,
@@ -76,7 +85,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
     if (fromDocument.length) setSelected(fromDocument);
   }, [version]);
 
-  const refresh = () => run(async () => { setLoading(true); try { await api.fetchNewsCandidates(report.id, scope, fromDate, toDate); await load(); } finally { setLoading(false); } });
+  const refresh = () => run(async () => { setLoading(true); try { await api.fetchNewsCandidates(report.id, scope, fromDate, toDate, provider || undefined); await load(); } finally { setLoading(false); } });
   const addManual = (item: NewsCandidateInput) => run(async () => { await api.addNewsCandidate(report.id, item); setAdding(false); await load(); });
   const sources = useMemo(() => [...new Set(candidates.map((item) => item.source_name))].sort(), [candidates]);
   const sites = useMemo(() => [...new Set(candidates.map((item) => item.site).filter(Boolean) as string[])].sort(), [candidates]);
@@ -111,7 +120,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
       <header className="news-panel-head">
         <div className="news-panel-title"><h3>News &amp; Report</h3><span>新聞與報告</span></div>
         <div className="news-panel-count"><strong>{visible.length}</strong><small>of {candidates.length}</small></div>
-        <button disabled={busy || readOnly} onClick={refresh} title="Fetch FMP news for the selected scope and date range"><RefreshCw size={15} className={busy ? "spin" : ""} /> Refresh</button>
+        <button disabled={busy || readOnly || !providers.some((item) => item.configured)} onClick={refresh} title={providers.some((item) => item.configured) ? `Fetch ${provider || "news"} for the selected scope and date range` : "No news provider holds a credential in this environment"}><RefreshCw size={15} className={busy ? "spin" : ""} /> Refresh</button>
       </header>
 
       <div className="news-panel-filters">
@@ -120,6 +129,9 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
         <select value={site} onChange={(event) => setSite(event.target.value)} aria-label="Filter by site"><option value="">全部站点 All sites</option>{sites.map((item) => <option key={item}>{item}</option>)}</select>
         <select value={symbol} onChange={(event) => setSymbol(event.target.value)} aria-label="Filter by company"><option value="">全部公司 All companies</option>{symbols.map((item) => <option key={item}>{item}</option>)}</select>
         <label className="search-field"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="关键词 Keywords — headline, summary, ticker" aria-label="Search keywords" /></label>
+        <select value={provider} onChange={(event) => setProvider(event.target.value)} aria-label="News provider" title="Which provider Refresh queries">
+          {providers.map((item) => <option key={item.key} value={item.key} disabled={!item.configured}>{item.configured ? item.title : `${item.title} — 未配置`}</option>)}
+        </select>
         <div className="scope-control" role="group" aria-label="News scope">
           <button className={scope === "CONSTITUENTS" ? "active" : ""} onClick={() => setScope("CONSTITUENTS")}>成分股 Constituents</button>
           <button className={scope === "GENERAL" ? "active" : ""} onClick={() => setScope("GENERAL")}>大市 General</button>
@@ -159,7 +171,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
             </div>
           </article>;
         })}
-        {!loading && !visible.length && <div className="news-empty"><RefreshCw size={20} /><strong>{candidates.length ? "No news matches these filters" : "No candidates loaded"}</strong><span>{candidates.length ? "Clear the keyword or dropdown filters to see the rest." : "Pick a scope and date range, then refresh FMP news for this report."}</span></div>}
+        {!loading && !visible.length && <div className="news-empty"><RefreshCw size={20} /><strong>{candidates.length ? "No news matches these filters" : "No candidates loaded"}</strong><span>{candidates.length ? "Clear the keyword or dropdown filters to see the rest." : "Pick a provider, scope and date range, then refresh news for this report."}</span></div>}
       </div>
     </section>
 

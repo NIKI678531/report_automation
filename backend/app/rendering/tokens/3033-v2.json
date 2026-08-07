@@ -2,9 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "id": "3033-v2",
   "extends": "3033-v1",
-  "change": "Review title and validated 12-column Review block layout",
+  "change": "Editable month-derived Review title and validated 12-column Review block layout",
   "review": {
-    "title": "Review",
+    "defaultTitlePattern": "{month_name} in Review",
+    "titleEditable": true,
+    "blockTitlesEditable": true,
+    "titleMaxLength": 200,
     "columns": 12,
     "allowOverlap": false,
     "allowedBlockTypes": [

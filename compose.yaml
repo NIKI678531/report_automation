@@ -22,6 +22,9 @@ services:
       DOWNLOAD_SECRET: local-compose-secret-change-me
       FMP_API_KEY: ${FMP_API_KEY:-}
       FMP_BASE_URL: ${FMP_BASE_URL:-https://financialmodelingprep.com/stable}
+      NEWS_PROVIDER: ${NEWS_PROVIDER:-FMP}
+      MARKETAUX_API_KEY: ${MARKETAUX_API_KEY:-}
+      MARKETAUX_BASE_URL: ${MARKETAUX_BASE_URL:-https://api.marketaux.com/v1}
     volumes: ["./var/output:/app/var/output"]
     depends_on: { db: { condition: service_healthy }, redis: { condition: service_started } }
   worker:

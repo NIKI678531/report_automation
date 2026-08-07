@@ -11,6 +11,15 @@ from urllib.parse import urlparse
 REVIEW_BLOCK_TYPES = {"rich_text", "heading", "bullet_list", "key_drivers", "areas_to_monitor", "outlook", "metric_callout", "image", "data_table", "page_break"}
 
 
+class DocumentValidationError(ValueError):
+    def __init__(self, error_code: str, message: str, field: str, fix_hint: str, entity_id: str | None = None) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.field = field
+        self.entity_id = entity_id
+        self.fix_hint = fix_hint
+
+
 class ReviewHtmlSanitizer(HTMLParser):
     allowed_tags = {"p", "strong", "em", "ul", "ol", "li", "a", "br", "h2", "h3", "blockquote"}
 
@@ -46,6 +55,16 @@ def sanitize_review_html(value: str) -> str:
     return "".join(sanitizer.parts)
 
 
+def review_display_title(document: dict[str, Any]) -> str:
+    review = document.get("sections", {}).get("month_in_review", {})
+    for field in ("display_title", "title"):
+        value = review.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    month_name = str(document.get("month_name", "")).strip()
+    return f"{month_name} in Review" if month_name else "Review"
+
+
 def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
     result = deepcopy(content)
     sections = result.get("sections")
@@ -54,9 +73,26 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
     review = sections.get("month_in_review")
     if not isinstance(review, dict):
         raise ValueError("month_in_review must be an object")
-    if result.get("template_version") != "3033-v1":
-        review["title"] = "Review"
-        review["display_title"] = "Review"
+    title_value = review.get("display_title")
+    if not isinstance(title_value, str):
+        title_value = review.get("title", review_display_title(result))
+    title = str(title_value).strip()
+    if not title:
+        raise DocumentValidationError(
+            "REVIEW_TITLE_INVALID",
+            "Review title cannot be empty.",
+            "sections.month_in_review.display_title",
+            "Enter a Review title before saving.",
+        )
+    if len(title) > 200:
+        raise DocumentValidationError(
+            "REVIEW_TITLE_INVALID",
+            "Review title cannot exceed 200 characters.",
+            "sections.month_in_review.display_title",
+            "Shorten the Review title to 200 characters or fewer.",
+        )
+    review["title"] = title
+    review["display_title"] = title
     blocks = review.get("blocks")
     if blocks is None:
         return result
@@ -83,11 +119,20 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
         content_html = str(raw.get("content", ""))
         if len(content_html) > 50_000:
             raise ValueError(f"Review block {block_id} content is too long")
+        block_title = str(raw.get("title", "")).strip()
+        if not block_title or len(block_title) > 200:
+            raise DocumentValidationError(
+                "REVIEW_BLOCK_TITLE_INVALID",
+                f"Review block {block_id} requires a title of 1 to 200 characters.",
+                f"sections.month_in_review.blocks.{index}.title",
+                "Enter a non-empty block title of 200 characters or fewer.",
+                block_id,
+            )
         normalized.append({
             **raw,
             "block_id": block_id,
             "type": block_type,
-            "title": str(raw.get("title", ""))[:200],
+            "title": block_title,
             "content": sanitize_review_html(content_html),
             "x": x, "y": y, "w": width, "h": height,
         })
@@ -131,8 +176,8 @@ def initial_document(
         "next_rebalancing_date": None,
         "sections": {
             "month_in_review": {
-                "title": "Review" if template_version != "3033-v1" else f"{month} in Review",
-                "display_title": "Review" if template_version != "3033-v1" else f"{month} in Review",
+                "title": f"{month} in Review",
+                "display_title": f"{month} in Review",
                 "summary": "Add the approved monthly market review.",
                 "drivers": [],
                 "monitor": [],
@@ -155,12 +200,9 @@ def bind_snapshot(content: dict[str, Any], snapshot_payload: dict[str, Any]) -> 
     if snapshot_payload.get("month_in_review"):
         existing_review = result["sections"].get("month_in_review", {})
         incoming_review = deepcopy(snapshot_payload["month_in_review"])
-        if result.get("template_version") != "3033-v1":
-            incoming_review["title"] = "Review"
-            incoming_review["display_title"] = "Review"
-        if existing_review.get("blocks"):
-            incoming_review["blocks"] = existing_review["blocks"]
-            incoming_review["layout_schema_version"] = existing_review.get("layout_schema_version", 2)
+        for field in ("title", "display_title", "blocks", "layout_schema_version"):
+            if field in existing_review:
+                incoming_review[field] = deepcopy(existing_review[field])
         result["sections"]["month_in_review"] = incoming_review
     result["sections"]["analytics"] = snapshot_payload.get("analytics", result["sections"]["analytics"])
     result["sections"]["footnotes"] = snapshot_payload.get("footnotes", {})

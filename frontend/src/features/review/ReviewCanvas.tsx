@@ -35,7 +35,7 @@ export function legacyReviewBlocks(review: Record<string, unknown>): ReviewBlock
   ];
 }
 
-function RichTextBlock({ block, disabled, onChange, onDelete }: { block: ReviewBlock; disabled: boolean; onChange: (content: string) => void; onDelete: () => void }) {
+function RichTextBlock({ block, disabled, onChange, onTitleChange, onDelete }: { block: ReviewBlock; disabled: boolean; onChange: (content: string) => void; onTitleChange: (title: string) => void; onDelete: () => void }) {
   const editor = useEditor({
     extensions: [StarterKit.configure({ link: { openOnClick: false } })],
     content: block.content,
@@ -45,7 +45,7 @@ function RichTextBlock({ block, disabled, onChange, onDelete }: { block: ReviewB
   useEffect(() => { editor?.setEditable(!disabled); }, [disabled, editor]);
   useEffect(() => { if (editor && editor.getHTML() !== block.content) editor.commands.setContent(block.content); }, [block.content, editor]);
   return <article className="review-block">
-    <header><span className="review-drag-handle" title="Drag block"><GripVertical size={18} /></span><strong>{block.title}</strong><span>{block.w}/12</span><button className="icon-button danger" title="Delete block" disabled={disabled} onClick={onDelete}><Trash2 size={15} /></button></header>
+    <header><span className="review-drag-handle" title="Drag block"><GripVertical size={18} /></span><input className="review-block-title" aria-label={`Title for ${block.block_id} block`} value={block.title} maxLength={200} required disabled={disabled} onChange={(event) => onTitleChange(event.target.value)} /><span>{block.w}/12</span><button className="icon-button danger" title="Delete block" disabled={disabled} onClick={onDelete}><Trash2 size={15} /></button></header>
     <div className="rich-toolbar" aria-label="Text formatting">
       <button className="icon-button" title="Bold" disabled={disabled} onClick={() => editor?.chain().focus().toggleBold().run()}><Bold size={15} /></button>
       <button className="icon-button" title="Italic" disabled={disabled} onClick={() => editor?.chain().focus().toggleItalic().run()}><Italic size={15} /></button>
@@ -69,7 +69,7 @@ export function ReviewCanvas({ initialBlocks, disabled, onChange }: { initialBlo
   return <div className="review-builder">
     <div className="review-builder-tools"><span>12-column canvas · drag from the handle · resize from the lower corner</span><button disabled={disabled} onClick={addBlock}><Plus size={16} /> Add text block</button></div>
     <TwelveColumnGrid className="review-grid" layout={layout} cols={12} rowHeight={34} margin={[16, 16]} containerPadding={[0, 0]} compactType="vertical" preventCollision={false} isDraggable={!disabled} isResizable={!disabled} draggableHandle=".review-drag-handle" onLayoutChange={layoutChange}>
-      {blocks.map((block) => <div key={block.block_id}><RichTextBlock block={block} disabled={disabled} onChange={(content) => update(blocks.map((item) => item.block_id === block.block_id ? { ...item, content } : item))} onDelete={() => update(blocks.filter((item) => item.block_id !== block.block_id))} /></div>)}
+      {blocks.map((block) => <div key={block.block_id}><RichTextBlock block={block} disabled={disabled} onChange={(content) => update(blocks.map((item) => item.block_id === block.block_id ? { ...item, content } : item))} onTitleChange={(title) => update(blocks.map((item) => item.block_id === block.block_id ? { ...item, title } : item))} onDelete={() => update(blocks.filter((item) => item.block_id !== block.block_id))} /></div>)}
     </TwelveColumnGrid>
   </div>;
 }

@@ -19,13 +19,28 @@ def test_report_golden_lifecycle_and_preview(client):
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     assert detail["active_snapshot_id"]
     assert detail["latest_document"]["version"] == 2
+    content = detail["latest_document"]["content"]
+    review = content["sections"]["month_in_review"]
+    review["title"] = "June Technology Review"
+    review["display_title"] = "June Technology Review"
+    review["blocks"] = [
+        {"block_id": "summary", "type": "rich_text", "title": "Market Context", "content": "<p>Approved market context.</p>", "x": 0, "y": 0, "w": 12, "h": 4},
+        {"block_id": "outlook", "type": "outlook", "title": "Forward View", "content": "<p>Approved forward view.</p>", "x": 0, "y": 4, "w": 12, "h": 4},
+    ]
+    saved = client.put(
+        f"/api/v1/reports/{report['id']}/document",
+        json={"version": detail["latest_document"]["version"], "content": content},
+    )
+    assert saved.status_code == 200, saved.text
 
     preview = client.post(f"/api/v1/reports/{report['id']}/preview")
     assert preview.status_code == 200
     assert preview.text.count('class="report-page"') == 4
     assert "The Performance of HSTECH Constituents" in preview.text
+    assert "June Technology Review" in preview.text
+    assert "Market Context" in preview.text
 
-    finalized = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": 2})
+    finalized = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": saved.json()["version"]})
     assert finalized.status_code == 200, finalized.text
     assert finalized.json()["status"] == "FINALIZED"
 
@@ -44,7 +59,12 @@ def test_report_golden_lifecycle_and_preview(client):
         assert download.status_code == 200
         assert len(download.content) > 1000
         if job["format"] == "pdf":
-            assert len(pdfium.PdfDocument(download.content)) == 4
+            pdf = pdfium.PdfDocument(download.content)
+            assert len(pdf) == 4
+            first_page_text = pdf[0].get_textpage().get_text_range()
+            assert "June Technology Review" in first_page_text
+            assert "Market Context" in first_page_text
+            assert "Forward View" in first_page_text
 
 
 def test_optimistic_lock_returns_conflict(client):

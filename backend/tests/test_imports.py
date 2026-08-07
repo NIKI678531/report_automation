@@ -94,6 +94,19 @@ def test_final_analytics_csv_normalizes_constituents_and_kpis():
     assert {row["metric_code"] for row in parsed["fund_kpis"]} == {"AUM", "DAILY_TURNOVER"}
 
 
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        ("CONSTITUENT,2026-05-31,1,0001.HK,Alpha,,10,HKD,PERCENT,100,Technology,10,11,12,13,,,,,,", "as_of_date must be in the report month"),
+        ("KPI,,,,,,,HKD,,,,,,,,AUM,2026-05-31,1000,million,Approved", "metric_date must be in the report month"),
+    ],
+)
+def test_final_analytics_rejects_dates_outside_report_month(row, message):
+    header = "record_type,as_of_date,security_code,ticker,name_en,name_zh_hant,close_price,currency,value_scale,weight,sector,return_1m,return_3m,return_6m,return_ytd,metric_code,metric_date,value,unit,source\n"
+    with pytest.raises(ValueError, match=message):
+        parse_final_analytics("analytics.csv", f"{header}{row}\n".encode(), date(2026, 6, 30))
+
+
 def historical_csv() -> bytes:
     rows = [
         ("2025-12-30", 100, 200), ("2025-12-31", 100, 200),

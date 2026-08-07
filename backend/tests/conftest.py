@@ -34,7 +34,7 @@ def client():
         ))
         session.add(ProductCatalog(
             product_code="TEST",
-            ticker="TEST.HK",
+            ticker="9999.HK",
             name_en="Synthetic Test Fund",
             benchmark_code="TESTIDX",
             benchmark_name="Synthetic Test Index",

@@ -224,6 +224,8 @@ class NewsCandidateFetch(BaseModel):
     to_date: date | None = None
     page: int = Field(default=0, ge=0, le=100)
     limit: int = Field(default=20, ge=1, le=250)
+    #: A key from app.integrations.news.REGISTRY; None uses the environment's configured default.
+    provider: str | None = None
 
 
 class AiDraftRequest(BaseModel):

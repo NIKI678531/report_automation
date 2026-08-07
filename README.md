@@ -45,7 +45,9 @@ The report title is an effective-dated fund selector backed by the API product c
 
 The workspace is organized around six report modules: Month in Review, Historical Performance, Company News, Constituent Performance, Final Analytics, and Footnotes & Disclosures. Snapshot loading, recalculation, assisted drafting, review, and finalization now live in their relevant module or report stage.
 
-The first module is displayed and rendered as `Review` in `3033-v2`. It uses a validated 12-column drag-and-resize layout with controlled rich text. Company News can import report-scoped FMP candidates, while Historical Performance and Final Analytics accept auditable CSV inputs. See [docs/fmp-news-and-data-imports.md](docs/fmp-news-and-data-imports.md).
+The first module defaults to `<Month> in Review` in `3033-v2`. Its report title and every 12-column block title are editable and versioned in the same `ReportDocument` used by HTML, PDF, and DOCX. The workspace navigation displays physical PDF pages (`01`, `01`, `02`, `03`, `04`); Footnotes & Disclosures shows `01/03/04` because its content is embedded across those pages.
+
+Final Analytics takes its displayed month and fund ticker from the canonical report document. Changing the top report date navigates to the latest report for that fund and date, or opens the create-report state when none exists. Company News can import report-scoped FMP candidates, while Historical Performance and Final Analytics accept auditable CSV inputs. See [docs/fmp-news-and-data-imports.md](docs/fmp-news-and-data-imports.md).
 
 ## Verification
 

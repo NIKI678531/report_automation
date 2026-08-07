@@ -8,15 +8,11 @@ from urllib.parse import urlparse
 import httpx
 
 from app.core.config import settings
+from app.integrations.news import NewsProviderError
 
 
-class FmpProviderError(Exception):
-    def __init__(self, code: str, message: str, http_status: int, retryable: bool = False):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.http_status = http_status
-        self.retryable = retryable
+class FmpProviderError(NewsProviderError):
+    """Kept as its own name so existing callers and tests still catch what they expect."""
 
 
 def _provider_url(path: str) -> str:
