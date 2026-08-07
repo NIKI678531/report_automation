@@ -1,36 +1,195 @@
+/* Design tokens — the single source of truth for the product UI.
+ *
+ * Every value here is a 1:1 transcription of the DESIGN.md front matter at the repository root.
+ * Component styles must reference these variables and must never hardcode a colour, radius,
+ * spacing step, duration or easing. Changing a value here changes the whole product surface;
+ * changing DESIGN.md without changing this file is a spec drift and should be treated as a bug.
+ *
+ * Naming map: colors.x -> --color-x · rounded.x -> --radius-x · spacing.x -> --space-x
+ *             typography.x -> --font-x / --text-x / --weight-x / --leading-x
+ */
 :root {
-  --color-primary: #2361ad;
-  --color-primary-hover: #1a4e8a;
-  --color-primary-container: #e7eef8;
-  --color-accent: #60a5fa;
-  --color-background: #f8fafc;
-  --color-surface: rgba(255, 255, 255, .80);
-  --color-surface-strong: rgba(255, 255, 255, .92);
-  --color-text: #1e293b;
-  --color-text-secondary: #64748b;
-  --color-text-disabled: #94a3b8;
-  --color-border: rgba(100, 116, 139, .35);
-  --color-border-strong: rgba(100, 116, 139, .55);
-  --color-success: #52c41a;
-  --color-warning: #faad14;
-  --color-error: #f5222d;
-  --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-pill: 9999px;
-  --space-xs: 4px;
-  --space-sm: 8px;
-  --space-md: 16px;
-  --space-lg: 24px;
-  --space-xl: 32px;
-  --space-xxl: 40px;
-  --shadow-1: 0 2px 6px rgba(35, 97, 173, .10);
-  --shadow-2: 0 8px 24px rgba(17, 24, 39, .08);
-  --dur-micro: 120ms;
-  --dur-fast: 200ms;
-  --dur-base: 300ms;
-  --ease-standard: cubic-bezier(.4, 0, .2, 1);
-  --ease-emphasized: cubic-bezier(.2, 0, 0, 1);
-  --ease-bounce: cubic-bezier(.34, 1.56, .64, 1);
+	/* ===== Primary & neutrals ===== */
+	--color-primary: #2361ad;
+	--color-primary-hover: #1a4e8a;
+	--color-primary-container: #e7eef8;
+	--color-on-primary: #ffffff;
+	--color-accent: #60a5fa;
+
+	/* ===== Surfaces & background ===== */
+	--color-background: #f8fafc;
+	--color-background-overlay: rgba(248, 250, 252, .80);
+	--color-surface: rgba(255, 255, 255, .80);
+	--color-surface-strong: rgba(255, 255, 255, .92);
+
+	/* ===== Text ===== */
+	--color-text: #1e293b;
+	--color-text-secondary: #64748b;
+	--color-text-disabled: #94a3b8;
+
+	/* ===== Borders — transparent by default, revealed on focus/hover ===== */
+	--color-border: rgba(100, 116, 139, .35);
+	--color-border-strong: rgba(100, 116, 139, .55);
+
+	/* ===== Semantic — icons, 3px rails and small emphasis only, never full backgrounds ===== */
+	--color-success: #52c41a;
+	--color-warning: #faad14;
+	--color-error: #f5222d;
+	--color-info: #1890ff;
+	--color-on-success: #ffffff;
+	--color-on-warning: #1e293b;
+	--color-on-error: #ffffff;
+
+	/* ===== Category semantics — badge-* only, never borrowed for status ===== */
+	--color-cat-research: #2361ad;
+	--color-cat-marketing: #722ed1;
+	--color-cat-trading: #52c41a;
+	--color-cat-pcs: #faad14;
+	--color-cat-data: #1890ff;
+	--color-cat-system: #6b7280;
+	--color-cat-research-container: rgba(35, 97, 173, .24);
+	--color-cat-marketing-container: rgba(114, 46, 209, .24);
+	--color-cat-trading-container: rgba(82, 196, 26, .24);
+	--color-cat-pcs-container: rgba(250, 173, 20, .24);
+	--color-cat-data-container: rgba(24, 144, 255, .24);
+	--color-cat-system-container: rgba(107, 114, 128, .18);
+	--color-cat-system-text: #374151;
+
+	/* ===== Derived from the above — not in the DESIGN.md front matter, but required so that
+	 *       styles.css never has to write a literal colour. Each is a tint or a darkened text
+	 *       pair of an existing semantic/brand colour, checked for AA on its own container. ===== */
+	--color-success-container: rgba(82, 196, 26, .16);
+	--color-warning-container: rgba(250, 173, 20, .18);
+	--color-error-container: rgba(245, 34, 45, .14);
+	--color-error-container-hover: rgba(245, 34, 45, .22);
+	--color-on-success-container: #2f7a10;
+	--color-on-warning-container: #8a5a00;
+	--color-on-error-container: #a3121a;
+	--shimmer-highlight: rgba(255, 255, 255, .55);
+	--gradient-ambient:
+		radial-gradient(60vw 46vw at 12% -8%, rgba(35, 97, 173, .13), transparent 62%),
+		radial-gradient(52vw 42vw at 92% 4%, rgba(96, 165, 250, .15), transparent 60%),
+		radial-gradient(46vw 40vw at 68% 104%, rgba(114, 46, 209, .08), transparent 62%);
+
+	/* ===== Typography ===== */
+	--font-sans: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+	--font-numeric: "Roboto Mono", ui-monospace, monospace;
+
+	--text-display-hero: 2.25rem;   /* 36px — one hero per screen */
+	--text-h1: 1.5rem;              /* 24px */
+	--text-h2: 1.25rem;             /* 20px */
+	--text-h3: 1.125rem;            /* 18px — card titles */
+	--text-body-lg: .9375rem;       /* 15px — inputs, emphasised body */
+	--text-body-md: .875rem;        /* 14px — default body */
+	--text-body-sm: .8125rem;       /* 13px — helper text */
+	--text-label-md: .875rem;       /* 14px — chip / badge */
+	--text-label-sm: .75rem;        /* 12px — lock hint / timestamp */
+	--text-numeric: .875rem;
+
+	--weight-body: 400;
+	--weight-emphasis: 500;
+	--weight-h3: 600;
+	--weight-h2: 600;
+	--weight-hero: 600;
+	--weight-h1: 700;
+
+	--leading-hero: 1.25;
+	--leading-h1: 1.3;
+	--leading-h2: 1.35;
+	--leading-h3: 1.4;
+	--leading-numeric: 1.4;
+	--leading-tight: 1.5;
+	--leading-body: 1.6;
+	--leading-label: 1.2;
+
+	--tracking-hero: -.01em;
+	--numeric-features: "tnum" on, "lnum" on;
+
+	/* ===== Shapes ===== */
+	--radius-none: 0;
+	--radius-sm: 8px;    /* controls inside buttons */
+	--radius-md: 10px;   /* buttons */
+	--radius-lg: 12px;   /* inputs */
+	--radius-xl: 16px;   /* cards / popovers */
+	--radius-pill: 9999px;
+
+	/* ===== Spacing ===== */
+	--space-none: 0;
+	--space-xs: 4px;
+	--space-sm: 8px;
+	--space-md: 16px;
+	--space-lg: 24px;
+	--space-xl: 32px;
+	--space-xxl: 40px;
+	--space-page-x: 40px;
+	--space-page-y: 32px;
+	--space-grid-gap: 24px;
+
+	/* ===== Layout ===== */
+	--layout-max-width: 1440px;
+	--layout-hero-width: 720px;
+	--layout-grid-min: 300px;
+
+	/* ===== Elevation — glass + soft shadow + edge highlight, never multi-level hard shadows ===== */
+	--shadow-1: 0 2px 6px rgba(35, 97, 173, .10);
+	--shadow-1-primary: 0 2px 6px rgba(35, 97, 173, .18);
+	--shadow-2: 0 8px 24px rgba(17, 24, 39, .08);
+	--shadow-3: 0 12px 32px rgba(17, 24, 39, .10);
+	--focus-ring: 0 0 0 4px rgba(35, 97, 173, .14);
+	--edge-highlight: linear-gradient(135deg, rgba(255, 255, 255, .5), transparent 60%);
+	--blur-1: blur(8px);
+	--blur-2: blur(12px);
+	--blur-3: blur(16px);
+
+	/* ===== Gradient accents — emphasis points only, never a whole card background ===== */
+	--gradient-primary: linear-gradient(135deg, #2361ad 0%, #4a8ed6 100%);
+	--gradient-primary-hover: linear-gradient(135deg, #1a4e8a 0%, #2361ad 100%);
+	--gradient-brand-rule: linear-gradient(var(--color-primary), var(--color-accent));
+
+	/* ===== z-index ===== */
+	--z-bg: 0;
+	--z-content: 2;
+	--z-dropdown: 1000;
+	--z-modal: 2000;
+	--z-message: 3000;
+
+	/* ===== Motion vocabulary — do not invent new values ===== */
+	--dur-micro: 120ms;   /* hover, button rebound */
+	--dur-fast: 200ms;    /* tooltip, badge, popover */
+	--dur-base: 300ms;    /* panel expand, cross-fade */
+	--dur-slow: 500ms;    /* page transition, hero morph */
+	--dur-scroll: 800ms;  /* long smooth scroll */
+	--ease-standard: cubic-bezier(.4, 0, .2, 1);
+	--ease-emphasized: cubic-bezier(.2, 0, 0, 1);
+	--ease-bounce: cubic-bezier(.34, 1.56, .64, 1);
+	--stagger-step: 60ms;
+}
+
+/* Dark mode overrides dark-* tokens only; component structure is untouched. */
+body.dark-mode {
+	--color-background: #0f172a;
+	--color-background-overlay: rgba(15, 23, 42, .82);
+	--color-surface: rgba(30, 41, 59, .72);
+	--color-surface-strong: rgba(30, 41, 59, .88);
+	--color-primary-container: rgba(35, 97, 173, .26);
+	--color-text: #e5e7eb;
+	--color-text-secondary: #c4c7c5;
+	--color-text-disabled: #94a3b8;
+	--color-border: rgba(148, 163, 184, .28);
+	--color-border-strong: rgba(148, 163, 184, .45);
+	--color-cat-system-text: #d1d5db;
+	--color-on-success-container: #86e05a;
+	--color-on-warning-container: #fbc95a;
+	--color-on-error-container: #ff8c86;
+	--shimmer-highlight: rgba(255, 255, 255, .10);
+	--gradient-ambient:
+		radial-gradient(60vw 46vw at 12% -8%, rgba(35, 97, 173, .30), transparent 62%),
+		radial-gradient(52vw 42vw at 92% 4%, rgba(96, 165, 250, .18), transparent 60%),
+		radial-gradient(46vw 40vw at 68% 104%, rgba(114, 46, 209, .20), transparent 62%);
+	--shadow-1: 0 2px 6px rgba(0, 0, 0, .32);
+	--shadow-1-primary: 0 2px 6px rgba(0, 0, 0, .40);
+	--shadow-2: 0 8px 24px rgba(0, 0, 0, .38);
+	--shadow-3: 0 12px 32px rgba(0, 0, 0, .46);
+	--focus-ring: 0 0 0 4px rgba(96, 165, 250, .26);
+	--edge-highlight: linear-gradient(135deg, rgba(255, 255, 255, .12), transparent 60%);
 }

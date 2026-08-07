@@ -60,12 +60,13 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
   const [scope, setScope] = useState<"CONSTITUENTS" | "GENERAL">("CONSTITUENTS");
   const [sort, setSort] = useState<SortOrder>("newest");
   const [adding, setAdding] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [fromDate, setFromDate] = useState(`${report.report_date.slice(0, 8)}01`);
   const [toDate, setToDate] = useState(report.report_date);
   const frozenSnapshot = selectedSnapshot.filter((item) => !item.news_item_id);
 
   const load = () => api.listReportNewsCandidates(report.id).then(setCandidates);
-  useEffect(() => { load().catch(() => setCandidates([])); }, [report.id, version]);
+  useEffect(() => { setLoading(true); load().catch(() => setCandidates([])).finally(() => setLoading(false)); }, [report.id, version]);
   useEffect(() => {
     const fromDocument = selectedSnapshot.filter((item) => item.news_item_id).map((item, index) => ({
       news_item_id: String(item.news_item_id), position: index, title: String(item.title ?? ""), summary: String(item.summary ?? ""),
@@ -75,7 +76,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
     if (fromDocument.length) setSelected(fromDocument);
   }, [version]);
 
-  const refresh = () => run(async () => { await api.fetchNewsCandidates(report.id, scope, fromDate, toDate); await load(); });
+  const refresh = () => run(async () => { setLoading(true); try { await api.fetchNewsCandidates(report.id, scope, fromDate, toDate); await load(); } finally { setLoading(false); } });
   const addManual = (item: NewsCandidateInput) => run(async () => { await api.addNewsCandidate(report.id, item); setAdding(false); await load(); });
   const sources = useMemo(() => [...new Set(candidates.map((item) => item.source_name))].sort(), [candidates]);
   const sites = useMemo(() => [...new Set(candidates.map((item) => item.site).filter(Boolean) as string[])].sort(), [candidates]);
@@ -138,7 +139,8 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
       {adding && <AddNewsForm reportDate={report.report_date} busy={busy} onCancel={() => setAdding(false)} onSubmit={addManual} />}
 
       <div className="news-list">
-        {visible.map((item) => {
+        {loading && <div className="skeleton-list" role="status" aria-label="Loading news candidates">{[0, 1, 2, 3].map((index) => <div className="skeleton skeleton-card" key={index} />)}</div>}
+        {!loading && visible.map((item) => {
           const isSelected = selectedIds.has(item.id);
           return <article className={`news-item ${isSelected ? "selected" : ""}`} key={item.id}>
             <input type="checkbox" className="news-checkbox" checked={isSelected} disabled={readOnly} onChange={() => toggle(item)} aria-label={`Select ${item.title}`} />
@@ -157,7 +159,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
             </div>
           </article>;
         })}
-        {!visible.length && <div className="news-empty"><RefreshCw size={20} /><strong>{candidates.length ? "No news matches these filters" : "No candidates loaded"}</strong><span>{candidates.length ? "Clear the keyword or dropdown filters to see the rest." : "Pick a scope and date range, then refresh FMP news for this report."}</span></div>}
+        {!loading && !visible.length && <div className="news-empty"><RefreshCw size={20} /><strong>{candidates.length ? "No news matches these filters" : "No candidates loaded"}</strong><span>{candidates.length ? "Clear the keyword or dropdown filters to see the rest." : "Pick a scope and date range, then refresh FMP news for this report."}</span></div>}
       </div>
     </section>
 
