@@ -1,10 +1,12 @@
 {
   "name": "monthly-commentary-platform",
   "private": true,
-  "packageManager": "pnpm@11.16.0",
+  "workspaces": [
+    "frontend"
+  ],
   "scripts": {
-    "dev": "pnpm --filter @commentary/web dev",
-    "build": "pnpm --filter @commentary/web build",
-    "test": "pnpm --filter @commentary/web test"
+    "dev": "npm run dev --workspace @commentary/web",
+    "build": "npm run build --workspace @commentary/web",
+    "test": "npm run test --workspace @commentary/web"
   }
 }

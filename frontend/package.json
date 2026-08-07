@@ -21,7 +21,7 @@
     "lucide-react": "^1.28.0",
     "react": "latest",
     "react-dom": "latest",
-    "react-grid-layout": "1.5.2",
+    "react-grid-layout": "1.5.4",
     "react-resizable": "3.2.0",
     "typescript": "latest",
     "vite": "latest"
