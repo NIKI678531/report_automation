@@ -11,9 +11,9 @@ jobs:
         with: { version: "11.16.0" }
       - uses: actions/setup-node@v4
         with: { node-version: "24", cache: "pnpm" }
-      - run: pip install -e './services/api[dev,render]'
+      - run: pip install -e './backend[dev,render]'
       - run: python -m playwright install --with-deps chromium
-      - run: python -m pytest services/api/tests -q
+      - run: python -m pytest backend/tests -q
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build

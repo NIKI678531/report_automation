@@ -2,14 +2,24 @@
 
 Implementation of the V2.1 Agent Execution Specification. The platform uses a React + TypeScript frontend, a Python FastAPI backend, an immutable report document, and shared design tokens for HTML, PDF, and editable DOCX output.
 
+## Repository layout
+
+```
+backend/    FastAPI service: app/, migrations/, tests/ (with the golden fixtures) and design tokens
+frontend/   React + TypeScript editor, preview and admin surface
+docs/       ADRs, the V2.1 specification, import guides and CSV templates
+scripts/    Operational one-offs such as visual QA
+var/        Runtime products only (rendered output, QA evidence, local databases) — gitignored
+```
+
 ## Quick start
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".\services\api[dev,render]"
+.\.venv\Scripts\python -m pip install -e ".\backend[dev,render]"
 pnpm install
-Push-Location services/api
-..\..\.venv\Scripts\python -m alembic upgrade head
+Push-Location backend
+..\.venv\Scripts\python -m alembic upgrade head
 Pop-Location
 pnpm dev
 ```
@@ -17,7 +27,7 @@ pnpm dev
 Run the API separately with:
 
 ```powershell
-.\.venv\Scripts\python -m uvicorn app.main:app --app-dir services/api --reload --port 8000
+.\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --reload --port 8000
 ```
 
 The web application is served at `http://localhost:5173` and proxies `/api` to FastAPI.
@@ -33,9 +43,9 @@ The first module is displayed and rendered as `Review` in `3033-v2`. It uses a v
 ## Verification
 
 ```powershell
-.\.venv\Scripts\python -m pytest services/api/tests
+.\.venv\Scripts\python -m pytest backend/tests
 pnpm test
 pnpm build
 ```
 
-The checked-in 3033 visual baseline is under `tests/fixtures/3033_202606`.
+The checked-in 3033 visual baseline is under `backend/tests/fixtures/3033_202606`.

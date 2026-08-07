@@ -1,0 +1,14 @@
+# This service builds with `context: ./backend`, so Docker reads this file rather than the root one.
+
+# Secrets: FMP_API_KEY and friends come from the environment, never baked into a layer.
+.env
+
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Local databases are recreated by alembic on start.
+*.db
