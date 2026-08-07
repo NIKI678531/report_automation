@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "id": "3033-v1",
+  "reference": "3033_LCD_20260630",
+  "page": {
+    "size": "A4",
+    "orientation": "portrait",
+    "widthPt": 595.2,
+    "heightPt": 841.92,
+    "marginTopMm": 7.0,
+    "marginRightMm": 10.0,
+    "marginBottomMm": 12.0,
+    "marginLeftMm": 10.0
+  },
+  "font": {
+    "family": "Calibri, Carlito, Arial, sans-serif",
+    "bodyPt": 10,
+    "smallPt": 8,
+    "sectionPt": 14,
+    "pageTitlePt": 16,
+    "reportTitlePt": 24
+  },
+  "color": {
+    "brandDeep": "#22327f",
+    "brandTable": "#2660ad",
+    "text": "#000000",
+    "paper": "#ffffff",
+    "muted": "#666666"
+  },
+  "rules": {
+    "pages": 4,
+    "constituentRows": 30,
+    "logoPosition": "footer-right",
+    "header": "Monthly Commentary | {report_date_long}"
+  }
+}

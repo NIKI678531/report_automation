@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ report.product_name }} - {{ report_date_long }}</title>
+  <style>
+    :root { --deep:#22327f; --blue:#2660ad; --text:#000; --paper:#fff; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; background:#eee; color:var(--text); font-family:Calibri,Carlito,Arial,sans-serif; font-size:10pt; line-height:1.22; }
+    .report-page { position:relative; width:210mm; height:297mm; margin:8mm auto; padding:5mm 7mm 15mm; background:var(--paper); overflow:hidden; page-break-after:always; }
+    .report-page:last-child { page-break-after:auto; }
+    .page-header { height:8mm; color:var(--deep); font-size:11pt; border-bottom:0.45pt solid var(--deep); padding:0 3mm; }
+    .page-body { padding:3mm 3mm 0; }
+    .page-footer { position:absolute; left:10mm; right:8mm; bottom:3mm; height:12mm; }
+    .page-footer img { position:absolute; right:0; bottom:0; width:44mm; height:auto; }
+    .page-number { position:absolute; right:0; bottom:-1.5mm; transform:translateX(5mm); color:#777; font-size:8pt; }
+    h1 { margin:0 0 1.5mm; padding-bottom:3mm; border-bottom:0.45pt solid var(--deep); color:var(--deep); font-size:24pt; line-height:1.05; }
+    h2 { margin:2mm 0 1.5mm; color:var(--deep); font-size:14pt; line-height:1.1; }
+    h3 { margin:1.5mm 0 1mm; color:var(--deep); font-size:12pt; }
+    p { margin:0 0 1.4mm; }
+    .columns-2 { display:grid; grid-template-columns:1fr 1fr; gap:8mm; }
+    .review-layout { display:grid; grid-template-columns:repeat(12,1fr); grid-auto-rows:minmax(8mm,auto); gap:2mm; margin-bottom:2mm; }
+    .review-layout-block { min-width:0; padding:1.5mm 2mm; border-left:.8mm solid var(--blue); background:#f7f9fc; overflow:visible; }
+    .review-layout-block h3 { margin:0 0 1mm; font-size:10.5pt; }
+    .review-layout-content { font-size:8.7pt; line-height:1.18; }
+    .review-layout-content p { margin:0 0 .8mm; }
+    .review-layout-content ul,.review-layout-content ol { margin:0; padding-left:5mm; }
+    .review-layout-content li { margin-bottom:.5mm; }
+    ol { margin:0; padding-left:6mm; } li { padding-left:1mm; margin-bottom:1mm; }
+    .history { margin-top:3mm; }
+    table { width:100%; border-collapse:collapse; }
+    th { background:var(--blue); color:#fff; font-weight:700; text-align:center; padding:2mm 1mm; }
+    td { padding:1.5mm 2mm; }
+    .history td { text-align:center; } .history td:first-child { text-align:left; }
+    .footnote { position:absolute; left:13mm; right:13mm; bottom:20mm; font-size:8pt; line-height:1.2; }
+    .news-list { margin:0; padding-left:4mm; }
+    .news-list li { margin:0 0 3mm; padding-left:2mm; }
+    .news-title { color:var(--blue); font-weight:700; margin-bottom:1mm; }
+    .center { text-align:center; }
+    .constituent-title { font-size:16pt; margin-top:2mm; }
+    .constituents { table-layout:fixed; font-size:9.3pt; }
+    .constituents th { padding:2mm .6mm; }
+    .constituents td { padding:1.05mm .8mm; text-align:center; white-space:nowrap; }
+    .constituents .code { background:var(--blue); color:#fff; }
+    .constituents .name { text-align:center; overflow:hidden; text-overflow:ellipsis; }
+    .analytics-grid { display:grid; grid-template-columns:1fr 1fr; gap:7mm; }
+    .blue-title { background:var(--blue); color:#fff; font-weight:700; font-size:12pt; text-align:center; padding:2.2mm; margin-bottom:2mm; }
+    .top10 td { padding:1.8mm .5mm; font-size:11pt; } .top10 td:last-child { text-align:right; }
+    .donut { width:52mm; height:52mm; margin:5mm auto 2mm; border-radius:50%; background:conic-gradient(#5186bd 0 47.8%,#223a8b 47.8% 97.1%,#00b0f0 97.1% 98.8%,#8064a2 98.8% 100%); position:relative; }
+    .donut::after { content:""; position:absolute; inset:13mm; background:white; border-radius:50%; }
+    .legend { display:grid; grid-template-columns:1fr 1fr; gap:1mm; font-size:9pt; }
+    .swatch { display:inline-block; width:2mm; height:2mm; margin-right:1mm; }
+    .performers { margin-top:8mm; }
+    .simple th { background:white; color:black; border-bottom:1px solid #000; text-align:left; }
+    .simple th:last-child,.simple td:last-child { text-align:center; }
+    .simple td { border-bottom:1px solid #000; }
+    .portfolio { margin-top:7mm; } .portfolio td { border-bottom:1px solid #000; padding:2mm; }
+    .portfolio td:first-child { font-weight:700; }
+    .empty-note { color:#666; font-style:italic; }
+    [data-page="1"] .page-header { border-bottom:0; height:5mm; }
+    [data-page="1"] .page-body { padding-top:2mm; }
+    @media print {
+      html,body { background:white; }
+      @page { size:A4 portrait; margin:0; }
+      .report-page { margin:0; print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+    }
+    @media screen and (max-width:800px) {
+      .report-page { width:100%; height:auto; min-height:297mm; margin:0 0 8px; overflow-x:auto; }
+    }
+  </style>
+</head>
+<body>
+{% macro chrome(page) -%}
+  <header class="page-header">Monthly Commentary | {{ report_date_long }}</header>
+  <footer class="page-footer"><img src="data:image/png;base64,{{ logo_data }}" alt="CSOP Asset Management"><span class="page-number">{{ page }}</span></footer>
+{%- endmacro %}
+
+<section class="report-page" data-page="1" data-section-key="month_in_review">
+  {{ chrome(1) }}
+  <main class="page-body">
+    <h1>{{ report.product_name }}</h1>
+    <h2>{{ review_title }}</h2>
+    {% if enable_review_layout and sections.month_in_review.get('blocks') %}
+    <div class="review-layout">
+      {% for block in sections.month_in_review.blocks %}<section class="review-layout-block" data-block-id="{{ block.block_id }}" style="grid-column:{{ block.x + 1 }} / span {{ block.w }};grid-row:{{ block.y + 1 }} / span {{ block.h }}"><h3>{{ block.title }}</h3><div class="review-layout-content">{{ block.content|safe }}</div></section>{% endfor %}
+    </div>
+    {% else %}
+      <p>{{ sections.month_in_review.summary }}</p>
+      <div class="columns-2">
+        <section><h2>Key Drivers of the Correction</h2><ol>{% for item in sections.month_in_review.drivers %}<li><strong>{{ item.title }}</strong><br>{{ item.body }}</li>{% else %}<li class="empty-note">Add approved key drivers.</li>{% endfor %}</ol></section>
+        <section><h2>Key Areas to Monitor</h2><ol>{% for item in sections.month_in_review.monitor %}<li><strong>{{ item.title }}</strong><br>{{ item.body }}</li>{% else %}<li class="empty-note">Add approved monitoring areas.</li>{% endfor %}</ol><h2>Outlook</h2><p>{{ sections.month_in_review.outlook }}</p></section>
+      </div>
+    {% endif %}
+    <h2 class="center">Historical Performance of {{ doc.product_ticker|default(report.product_code ~ '.HK', true) }} and {{ doc.benchmark_name|default(report.benchmark_code, true) }}*</h2>
+    <table class="history"><thead><tr><th></th><th>1-month return (%)</th><th>3-month return (%)</th><th>6-month return (%)</th><th>YTD return (%)</th></tr></thead><tbody>{% for row in sections.historical_performance.rows %}<tr><td>{{ row.name }}</td><td>{{ row.return_1m|pct }}</td><td>{{ row.return_3m|pct }}</td><td>{{ row.return_6m|pct }}</td><td>{{ row.return_ytd|pct }}</td></tr>{% endfor %}</tbody></table>
+  </main><div class="footnote">{{ sections.footnotes.historical|default('') }}</div>
+</section>
+
+<section class="report-page" data-page="2" data-section-key="company_news">
+  {{ chrome(2) }}<main class="page-body"><h2>Company News</h2><ul class="news-list">{% for item in sections.company_news %}<li><div class="news-title">{{ item.title }}</div><div>{{ item.summary }}</div></li>{% else %}<li class="empty-note">No approved company news has been selected.</li>{% endfor %}</ul></main>
+</section>
+
+<section class="report-page" data-page="3" data-section-key="constituents">
+  {{ chrome(3) }}<main class="page-body"><h2 class="center constituent-title">The Performance of {{ report.benchmark_code }} Constituents</h2><p class="center">(*Next Rebalancing Date: {{ doc.next_rebalancing_date|default('N/A', true) }})</p>
+  <table class="constituents"><colgroup><col style="width:6%"><col style="width:17%"><col style="width:12%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:14%"></colgroup><thead><tr><th>Stock<br>Code</th><th>Stock Name</th><th>Closing Price<br>(HKD)</th><th>Weighting<br>(%)</th><th>1-month<br>return (%)</th><th>3-month<br>return (%)</th><th>6-month<br>return (%)</th><th>YTD return<br>(%)</th></tr></thead><tbody>{% for row in sections.constituents %}<tr><td class="code">{{ row.security_code }}</td><td class="name">{{ row.name_en }}</td><td>{{ row.close_price|price }}</td><td>{{ row.weight|pct }}</td><td>{{ row.return_1m|pct }}</td><td>{{ row.return_3m|pct }}</td><td>{{ row.return_6m|pct }}</td><td>{{ row.return_ytd|pct }}</td></tr>{% endfor %}</tbody></table></main><div class="footnote">{{ sections.footnotes.constituents|default('') }}</div>
+</section>
+
+<section class="report-page" data-page="4" data-section-key="analytics">
+  {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title">Top 10 Index Constituents*　　(%)</div><table class="top10">{% for row in sections.analytics.top10 %}<tr><td>{{ row.issuer }}</td><td>{{ row.weight|pct }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">Index Sectors Breakdown*</div><div class="donut" role="img" aria-label="Index sector breakdown"></div><div class="legend">{% for row in sections.analytics.sectors %}<span><i class="swatch" style="background:{{ ['#5186bd','#223a8b','#00b0f0','#8064a2'][loop.index0 % 4] }}"></i>{{ row.sector }}</span>{% endfor %}</div></section></div>
+  <div class="analytics-grid performers"><section><h2>Top Performers in {{ doc.month_name }}**</h2><table class="simple"><thead><tr><th>Issuer</th><th>{{ doc.month_name }} Return (%)</th></tr></thead><tbody>{% for row in sections.analytics.top %}<tr><td>{{ row.issuer }}</td><td>{{ row.return|pct }}</td></tr>{% endfor %}</tbody></table></section><section><h2>Bottom Performers in {{ doc.month_name }}**</h2><table class="simple"><thead><tr><th>Issuer</th><th>{{ doc.month_name }} Return (%)</th></tr></thead><tbody>{% for row in sections.analytics.bottom %}<tr><td>{{ row.issuer }}</td><td>{{ row.return|pct }}</td></tr>{% endfor %}</tbody></table></section></div>
+  <section class="portfolio"><h2>{{ doc.product_ticker|default(report.product_code ~ '.HK', true) }} Portfolio Analysis</h2><table>{% for row in sections.analytics.portfolio %}<tr><td>{{ row.label }}</td><td>{{ row.value }}</td></tr>{% endfor %}</table></section></main><div class="footnote">{{ sections.footnotes.analytics|default('') }}</div>
+</section>
+</body></html>

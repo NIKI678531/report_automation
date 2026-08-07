@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "id": "3033-v2",
+  "extends": "3033-v1",
+  "change": "Review title and validated 12-column Review block layout",
+  "review": {
+    "title": "Review",
+    "columns": 12,
+    "allowOverlap": false,
+    "allowedBlockTypes": [
+      "rich_text",
+      "heading",
+      "bullet_list",
+      "key_drivers",
+      "areas_to_monitor",
+      "outlook",
+      "metric_callout",
+      "image",
+      "data_table",
+      "page_break"
+    ]
+  }
+}

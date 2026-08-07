@@ -1,0 +1,558 @@
+{
+  "as_of_date": "2026-06-30",
+  "next_rebalancing_date": "4 September 2026",
+  "constituents": [
+    {
+      "security_code": "981",
+      "ticker": "0981.HK",
+      "name_en": "SMIC",
+      "name_zh_hant": "中芯國際",
+      "close_price": 89.4,
+      "currency": "HKD",
+      "weight": 0.10149391388,
+      "sector": "Information Technology",
+      "return_1m": 0.09558823999999999,
+      "return_3m": 0.7633136,
+      "return_6m": 0.2512246,
+      "return_ytd": 0.2512246
+    },
+    {
+      "security_code": "9999",
+      "ticker": "9999.HK",
+      "name_en": "NTES - S",
+      "name_zh_hant": "網易 - S",
+      "close_price": 202.4,
+      "currency": "HKD",
+      "weight": 0.09529607364,
+      "sector": "Communication Services",
+      "return_1m": 0.048860400000000005,
+      "return_3m": 0.19403990000000002,
+      "return_6m": -0.04188783,
+      "return_ytd": -0.04188783
+    },
+    {
+      "security_code": "700",
+      "ticker": "0700.HK",
+      "name_en": "TENCENT",
+      "name_zh_hant": "騰訊控股",
+      "close_price": 429.8,
+      "currency": "HKD",
+      "weight": 0.08302929908,
+      "sector": "Communication Services",
+      "return_1m": 0.006086142,
+      "return_3m": -0.1016713,
+      "return_6m": -0.2741384,
+      "return_ytd": -0.2741384
+    },
+    {
+      "security_code": "3690",
+      "ticker": "3690.HK",
+      "name_en": "MEITUAN - W",
+      "name_zh_hant": "美團 - W",
+      "close_price": 68.5,
+      "currency": "HKD",
+      "weight": 0.07453768432999999,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.06739278,
+      "return_3m": -0.1742013,
+      "return_6m": -0.33688290000000004,
+      "return_ytd": -0.33688290000000004
+    },
+    {
+      "security_code": "1211",
+      "ticker": "1211.HK",
+      "name_en": "BYD COMPANY",
+      "name_zh_hant": "比亞迪股份",
+      "close_price": 72.45,
+      "currency": "HKD",
+      "weight": 0.06966888431,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.2025944,
+      "return_3m": -0.3118796,
+      "return_6m": -0.23646419999999999,
+      "return_ytd": -0.23646419999999999
+    },
+    {
+      "security_code": "1810",
+      "ticker": "1810.HK",
+      "name_en": "XIAOMI - W",
+      "name_zh_hant": "小米集團 - W",
+      "close_price": 21.64,
+      "currency": "HKD",
+      "weight": 0.06797099726,
+      "sector": "Information Technology",
+      "return_1m": -0.2282454,
+      "return_3m": -0.31863980000000003,
+      "return_6m": -0.44936390000000004,
+      "return_ytd": -0.44936390000000004
+    },
+    {
+      "security_code": "9988",
+      "ticker": "9988.HK",
+      "name_en": "BABA - W",
+      "name_zh_hant": "阿里巴巴 - W",
+      "close_price": 92.85,
+      "currency": "HKD",
+      "weight": 0.06599236625999999,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.2250498,
+      "return_3m": -0.2126767,
+      "return_6m": -0.34389719999999996,
+      "return_ytd": -0.34389719999999996
+    },
+    {
+      "security_code": "1347",
+      "ticker": "1347.HK",
+      "name_en": "HUA HONG GRACE",
+      "name_zh_hant": "華虹宏力",
+      "close_price": 215.2,
+      "currency": "HKD",
+      "weight": 0.051373422790000005,
+      "sector": "Information Technology",
+      "return_1m": 0.33415999999999996,
+      "return_3m": 1.77141,
+      "return_6m": 1.8963659999999998,
+      "return_ytd": 1.8963659999999998
+    },
+    {
+      "security_code": "9888",
+      "ticker": "9888.HK",
+      "name_en": "BIDU - SW",
+      "name_zh_hant": "百度集團 - SW",
+      "close_price": 109.6,
+      "currency": "HKD",
+      "weight": 0.04959799844,
+      "sector": "Information Technology",
+      "return_1m": -0.1569231,
+      "return_3m": 0.03689688,
+      "return_6m": -0.1665399,
+      "return_ytd": -0.1665399
+    },
+    {
+      "security_code": "9618",
+      "ticker": "9618.HK",
+      "name_en": "JD - SW",
+      "name_zh_hant": "京東集團 - SW",
+      "close_price": 99.25,
+      "currency": "HKD",
+      "weight": 0.04732491616,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.12555070000000002,
+      "return_3m": -0.09255069,
+      "return_6m": -0.07954066,
+      "return_ytd": -0.07954066
+    },
+    {
+      "security_code": "992",
+      "ticker": "0992.HK",
+      "name_en": "LENOVO GROUP",
+      "name_zh_hant": "聯想集團",
+      "close_price": 23.02,
+      "currency": "HKD",
+      "weight": 0.046987751529999996,
+      "sector": "Information Technology",
+      "return_1m": -0.040833329999999994,
+      "return_3m": 1.515847,
+      "return_6m": 1.485961,
+      "return_ytd": 1.485961
+    },
+    {
+      "security_code": "1024",
+      "ticker": "1024.HK",
+      "name_en": "KUAISHOU - W",
+      "name_zh_hant": "快手 - W",
+      "close_price": 41.6,
+      "currency": "HKD",
+      "weight": 0.03792611687,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.0711441,
+      "return_3m": -0.06249784,
+      "return_6m": -0.33854419999999996,
+      "return_ytd": -0.33854419999999996
+    },
+    {
+      "security_code": "9961",
+      "ticker": "9961.HK",
+      "name_en": "TRIP.COM - S",
+      "name_zh_hant": "攜程集團 - S",
+      "close_price": 311.6,
+      "currency": "HKD",
+      "weight": 0.025709415149999998,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.1550976,
+      "return_3m": -0.18172270000000001,
+      "return_6m": -0.4375451,
+      "return_ytd": -0.4375451
+    },
+    {
+      "security_code": "9868",
+      "ticker": "9868.HK",
+      "name_en": "XPENG - W",
+      "name_zh_hant": "小鵬集團 - W",
+      "close_price": 50.65,
+      "currency": "HKD",
+      "weight": 0.024651258880000002,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.2067345,
+      "return_3m": -0.22612680000000002,
+      "return_6m": -0.3616887,
+      "return_ytd": -0.3616887
+    },
+    {
+      "security_code": "2015",
+      "ticker": "2015.HK",
+      "name_en": "LI AUTO - W",
+      "name_zh_hant": "理想汽車 - W",
+      "close_price": 46.08,
+      "currency": "HKD",
+      "weight": 0.01934862773,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.2034572,
+      "return_3m": -0.31935009999999997,
+      "return_6m": -0.2894372,
+      "return_ytd": -0.2894372
+    },
+    {
+      "security_code": "300",
+      "ticker": "0300.HK",
+      "name_en": "MIDEA GROUP",
+      "name_zh_hant": "美的集團",
+      "close_price": 82.6,
+      "currency": "HKD",
+      "weight": 0.01527971926,
+      "sector": "Consumer Discretionary",
+      "return_1m": 0.013608309999999998,
+      "return_3m": 0.037194660000000004,
+      "return_6m": 0.023153760000000002,
+      "return_ytd": 0.023153760000000002
+    },
+    {
+      "security_code": "6690",
+      "ticker": "6690.HK",
+      "name_en": "HAIER SMARTHOME",
+      "name_zh_hant": "海爾智家",
+      "close_price": 19.98,
+      "currency": "HKD",
+      "weight": 0.0144989777,
+      "sector": "Industrials",
+      "return_1m": 0.014213199999999999,
+      "return_3m": -0.03571429,
+      "return_6m": -0.1771005,
+      "return_ytd": -0.1771005
+    },
+    {
+      "security_code": "9660",
+      "ticker": "9660.HK",
+      "name_en": "HORIZONROBOT - W",
+      "name_zh_hant": "地平線機器人 - W",
+      "close_price": 4.08,
+      "currency": "HKD",
+      "weight": 0.014307885789999999,
+      "sector": "Information Technology",
+      "return_1m": -0.22873349999999998,
+      "return_3m": -0.3836858,
+      "return_6m": -0.5288684,
+      "return_ytd": -0.5288684
+    },
+    {
+      "security_code": "20",
+      "ticker": "0020.HK",
+      "name_en": "SENSETIME - W",
+      "name_zh_hant": "商湯 - W",
+      "close_price": 1.34,
+      "currency": "HKD",
+      "weight": 0.01377511495,
+      "sector": "Information Technology",
+      "return_1m": -0.1927711,
+      "return_3m": -0.2717391,
+      "return_6m": -0.3909091,
+      "return_ytd": -0.3909091
+    },
+    {
+      "security_code": "2382",
+      "ticker": "2382.HK",
+      "name_en": "SUNNY OPTICAL",
+      "name_zh_hant": "舜宇光學科技",
+      "close_price": 61.0,
+      "currency": "HKD",
+      "weight": 0.01279918399,
+      "sector": "Information Technology",
+      "return_1m": -0.2612321,
+      "return_3m": 0.15825530000000002,
+      "return_6m": -0.05554926,
+      "return_ytd": -0.05554926
+    },
+    {
+      "security_code": "9626",
+      "ticker": "9626.HK",
+      "name_en": "BILIBILI - W",
+      "name_zh_hant": "嗶哩嗶哩 - W",
+      "close_price": 131.7,
+      "currency": "HKD",
+      "weight": 0.01256037588,
+      "sector": "Information Technology",
+      "return_1m": -0.03374908,
+      "return_3m": -0.228471,
+      "return_6m": -0.3172628,
+      "return_ytd": -0.3172628
+    },
+    {
+      "security_code": "2513",
+      "ticker": "2513.HK",
+      "name_en": "KNOWLEDGE ATLAS",
+      "name_zh_hant": "智譜",
+      "close_price": 2104.0,
+      "currency": "HKD",
+      "weight": 0.01114493658,
+      "sector": "Information Technology",
+      "return_1m": 0.3191223,
+      "return_3m": 2.033886,
+      "return_6m": 17.10671,
+      "return_ytd": 17.10671
+    },
+    {
+      "security_code": "6618",
+      "ticker": "6618.HK",
+      "name_en": "JD HEALTH",
+      "name_zh_hant": "京東健康",
+      "close_price": 32.84,
+      "currency": "HKD",
+      "weight": 0.011041114009999999,
+      "sector": "Information Technology",
+      "return_1m": -0.1447917,
+      "return_3m": -0.30216750000000003,
+      "return_6m": -0.40828830000000005,
+      "return_ytd": -0.40828830000000005
+    },
+    {
+      "security_code": "9863",
+      "ticker": "9863.HK",
+      "name_en": "LEAPMOTOR",
+      "name_zh_hant": "零跑汽車",
+      "close_price": 34.48,
+      "currency": "HKD",
+      "weight": 0.007583909359999999,
+      "sector": "Information Technology",
+      "return_1m": -0.1226463,
+      "return_3m": -0.266695,
+      "return_6m": -0.2908268,
+      "return_ytd": -0.2908268
+    },
+    {
+      "security_code": "9866",
+      "ticker": "9866.HK",
+      "name_en": "NIO - SW",
+      "name_zh_hant": "蔚來 - SW",
+      "close_price": 38.74,
+      "currency": "HKD",
+      "weight": 0.00717789114,
+      "sector": "Information Technology",
+      "return_1m": -0.08847059,
+      "return_3m": -0.11673510000000001,
+      "return_6m": -0.05419922,
+      "return_ytd": -0.05419922
+    },
+    {
+      "security_code": "241",
+      "ticker": "0241.HK",
+      "name_en": "ALI HEALTH",
+      "name_zh_hant": "阿里健康",
+      "close_price": 3.08,
+      "currency": "HKD",
+      "weight": 0.0059620400900000006,
+      "sector": "Health Care",
+      "return_1m": -0.1515152,
+      "return_3m": -0.3390558,
+      "return_6m": -0.39009900000000003,
+      "return_ytd": -0.39009900000000003
+    },
+    {
+      "security_code": "780",
+      "ticker": "0780.HK",
+      "name_en": "TONGCHENGTRAVEL",
+      "name_zh_hant": "同程旅行",
+      "close_price": 11.99,
+      "currency": "HKD",
+      "weight": 0.005067100559999999,
+      "sector": "Consumer Discretionary",
+      "return_1m": -0.1355932,
+      "return_3m": -0.32,
+      "return_6m": -0.4545454,
+      "return_ytd": -0.4545454
+    },
+    {
+      "security_code": "285",
+      "ticker": "0285.HK",
+      "name_en": "BYD ELECTRONIC",
+      "name_zh_hant": "比亞迪電子",
+      "close_price": 20.92,
+      "currency": "HKD",
+      "weight": 0.00493585222,
+      "sector": "Information Technology",
+      "return_1m": -0.2777908,
+      "return_3m": -0.23644690000000002,
+      "return_6m": -0.37354149999999997,
+      "return_ytd": -0.37354149999999997
+    },
+    {
+      "security_code": "100",
+      "ticker": "0100.HK",
+      "name_en": "MINIMAX - W",
+      "name_zh_hant": "MINIMAX - W",
+      "close_price": 417.0,
+      "currency": "HKD",
+      "weight": 0.00234770787,
+      "sector": "Information Technology",
+      "return_1m": -0.5035714,
+      "return_3m": -0.5513717,
+      "return_6m": 1.527273,
+      "return_ytd": 1.527273
+    },
+    {
+      "security_code": "1698",
+      "ticker": "1698.HK",
+      "name_en": "TME - SW",
+      "name_zh_hant": "騰訊音樂 - SW",
+      "close_price": 32.88,
+      "currency": "HKD",
+      "weight": 0.00060946428,
+      "sector": "Information Technology",
+      "return_1m": -0.06960951,
+      "return_3m": -0.09285373,
+      "return_6m": -0.5111928,
+      "return_ytd": -0.5111928
+    }
+  ],
+  "historical_performance": {
+    "rows": [
+      {
+        "name": "3033.HK",
+        "return_1m": -0.0822,
+        "return_3m": -0.035,
+        "return_6m": -0.1879,
+        "return_ytd": -0.1879
+      },
+      {
+        "name": "HSTECHN Index",
+        "return_1m": -0.0814,
+        "return_3m": -0.0324,
+        "return_6m": -0.1838,
+        "return_ytd": -0.1838
+      }
+    ]
+  },
+  "company_news": [],
+  "analytics": {
+    "top10": [
+      {
+        "issuer": "SMIC",
+        "weight": 0.10149391388
+      },
+      {
+        "issuer": "NTES - S",
+        "weight": 0.09529607364
+      },
+      {
+        "issuer": "TENCENT",
+        "weight": 0.08302929908
+      },
+      {
+        "issuer": "MEITUAN - W",
+        "weight": 0.07453768432999999
+      },
+      {
+        "issuer": "BYD COMPANY",
+        "weight": 0.06966888431
+      },
+      {
+        "issuer": "XIAOMI - W",
+        "weight": 0.06797099726
+      },
+      {
+        "issuer": "BABA - W",
+        "weight": 0.06599236625999999
+      },
+      {
+        "issuer": "HUA HONG GRACE",
+        "weight": 0.051373422790000005
+      },
+      {
+        "issuer": "BIDU - SW",
+        "weight": 0.04959799844
+      },
+      {
+        "issuer": "JD - SW",
+        "weight": 0.04732491616
+      }
+    ],
+    "sectors": [
+      {
+        "sector": "Communication Services",
+        "weight": 0.17832537271999999
+      },
+      {
+        "sector": "Consumer Discretionary",
+        "weight": 0.38550608951000004
+      },
+      {
+        "sector": "Health Care",
+        "weight": 0.0059620400900000006
+      },
+      {
+        "sector": "Industrials",
+        "weight": 0.0144989777
+      },
+      {
+        "sector": "Information Technology",
+        "weight": 0.41570751997
+      }
+    ],
+    "top": [
+      {
+        "issuer": "HUA HONG GRACE",
+        "return": 0.33415999999999996
+      },
+      {
+        "issuer": "KNOWLEDGE ATLAS",
+        "return": 0.3191223
+      },
+      {
+        "issuer": "SMIC",
+        "return": 0.09558823999999999
+      }
+    ],
+    "bottom": [
+      {
+        "issuer": "SUNNY OPTICAL",
+        "return": -0.2612321
+      },
+      {
+        "issuer": "BYD ELECTRONIC",
+        "return": -0.2777908
+      },
+      {
+        "issuer": "MINIMAX - W",
+        "return": -0.5035714
+      }
+    ],
+    "portfolio": [
+      {
+        "label": "Asset Under Management (HKD)^",
+        "value": "67,536.55 million"
+      },
+      {
+        "label": "Average Daily Turnover (HKD)^^",
+        "value": "12,882 million"
+      },
+      {
+        "label": "Number of holdings",
+        "value": "30"
+      }
+    ]
+  },
+  "footnotes": {
+    "historical": "*Bloomberg, as of 30/06/2026. Return periods follow the approved common-trading-date convention.",
+    "constituents": "Source: Bloomberg, Hang Seng Indexes Company Limited, as of 30/06/2026.",
+    "analytics": "*Hang Seng Indexes, as of 30/06/2026. ^CSOP, as of 30/06/2026. ^^Bloomberg, 01/06/2026 - 30/06/2026."
+  }
+}

@@ -1,0 +1,168 @@
+import hashlib
+import json
+from copy import deepcopy
+from datetime import date
+from html import escape
+from html.parser import HTMLParser
+from typing import Any
+from urllib.parse import urlparse
+
+
+REVIEW_BLOCK_TYPES = {"rich_text", "heading", "bullet_list", "key_drivers", "areas_to_monitor", "outlook", "metric_callout", "image", "data_table", "page_break"}
+
+
+class ReviewHtmlSanitizer(HTMLParser):
+    allowed_tags = {"p", "strong", "em", "ul", "ol", "li", "a", "br", "h2", "h3", "blockquote"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in self.allowed_tags:
+            return
+        if tag == "a":
+            href = next((value for key, value in attrs if key == "href"), None)
+            parsed = urlparse(href or "")
+            if parsed.scheme in {"http", "https", "mailto"}:
+                self.parts.append(f'<a href="{escape(href or "", quote=True)}">')
+                return
+            self.parts.append("<a>")
+            return
+        self.parts.append(f"<{tag}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self.allowed_tags and tag != "br":
+            self.parts.append(f"</{tag}>")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(escape(data))
+
+
+def sanitize_review_html(value: str) -> str:
+    sanitizer = ReviewHtmlSanitizer()
+    sanitizer.feed(value)
+    sanitizer.close()
+    return "".join(sanitizer.parts)
+
+
+def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
+    result = deepcopy(content)
+    sections = result.get("sections")
+    if not isinstance(sections, dict):
+        raise ValueError("sections must be an object")
+    review = sections.get("month_in_review")
+    if not isinstance(review, dict):
+        raise ValueError("month_in_review must be an object")
+    if result.get("template_version") != "3033-v1":
+        review["title"] = "Review"
+        review["display_title"] = "Review"
+    blocks = review.get("blocks")
+    if blocks is None:
+        return result
+    if not isinstance(blocks, list) or len(blocks) > 40:
+        raise ValueError("Review blocks must be a list with at most 40 items")
+    ids: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(blocks):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Review block {index} must be an object")
+        block_id = str(raw.get("block_id", "")).strip()
+        block_type = str(raw.get("type", "")).strip()
+        if not block_id or block_id in ids:
+            raise ValueError(f"Review block {index} requires a unique block_id")
+        if block_type not in REVIEW_BLOCK_TYPES:
+            raise ValueError(f"Review block {block_id} has an unsupported type")
+        ids.add(block_id)
+        try:
+            x, y, width, height = (int(raw[key]) for key in ("x", "y", "w", "h"))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"Review block {block_id} requires integer x/y/w/h") from error
+        if x < 0 or y < 0 or width < 1 or width > 12 or height < 2 or height > 40 or x + width > 12:
+            raise ValueError(f"Review block {block_id} is outside the 12-column layout bounds")
+        content_html = str(raw.get("content", ""))
+        if len(content_html) > 50_000:
+            raise ValueError(f"Review block {block_id} content is too long")
+        normalized.append({
+            **raw,
+            "block_id": block_id,
+            "type": block_type,
+            "title": str(raw.get("title", ""))[:200],
+            "content": sanitize_review_html(content_html),
+            "x": x, "y": y, "w": width, "h": height,
+        })
+    for index, left in enumerate(normalized):
+        for right in normalized[index + 1:]:
+            horizontal = left["x"] < right["x"] + right["w"] and right["x"] < left["x"] + left["w"]
+            vertical = left["y"] < right["y"] + right["h"] and right["y"] < left["y"] + left["h"]
+            if horizontal and vertical:
+                raise ValueError(f"Review blocks {left['block_id']} and {right['block_id']} overlap")
+    review["layout_schema_version"] = 2
+    review["blocks"] = sorted(normalized, key=lambda block: (block["y"], block["x"], block["block_id"]))
+    return result
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def checksum(value: Any) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def initial_document(
+    report_id: str,
+    report_date: date,
+    template_version: str,
+    design_token_version: str,
+    product_ticker: str,
+    benchmark_name: str,
+) -> dict[str, Any]:
+    month = report_date.strftime("%B")
+    return {
+        "report_id": report_id,
+        "template_version": template_version,
+        "design_token_version": design_token_version,
+        "language_mode": "EN",
+        "report_date": report_date.isoformat(),
+        "month_name": month,
+        "product_ticker": product_ticker,
+        "benchmark_name": benchmark_name,
+        "next_rebalancing_date": None,
+        "sections": {
+            "month_in_review": {
+                "title": "Review" if template_version != "3033-v1" else f"{month} in Review",
+                "display_title": "Review" if template_version != "3033-v1" else f"{month} in Review",
+                "summary": "Add the approved monthly market review.",
+                "drivers": [],
+                "monitor": [],
+                "outlook": "Add the approved outlook.",
+            },
+            "historical_performance": {"rows": []},
+            "company_news": [],
+            "constituents": [],
+            "analytics": {"top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": []},
+            "footnotes": {},
+        },
+    }
+
+
+def bind_snapshot(content: dict[str, Any], snapshot_payload: dict[str, Any]) -> dict[str, Any]:
+    result = deepcopy(content)
+    result["sections"]["constituents"] = snapshot_payload.get("constituents", [])
+    result["sections"]["historical_performance"] = snapshot_payload.get("historical_performance", {"rows": []})
+    result["sections"]["company_news"] = snapshot_payload.get("company_news", [])
+    if snapshot_payload.get("month_in_review"):
+        existing_review = result["sections"].get("month_in_review", {})
+        incoming_review = deepcopy(snapshot_payload["month_in_review"])
+        if result.get("template_version") != "3033-v1":
+            incoming_review["title"] = "Review"
+            incoming_review["display_title"] = "Review"
+        if existing_review.get("blocks"):
+            incoming_review["blocks"] = existing_review["blocks"]
+            incoming_review["layout_schema_version"] = existing_review.get("layout_schema_version", 2)
+        result["sections"]["month_in_review"] = incoming_review
+    result["sections"]["analytics"] = snapshot_payload.get("analytics", result["sections"]["analytics"])
+    result["sections"]["footnotes"] = snapshot_payload.get("footnotes", {})
+    result["next_rebalancing_date"] = snapshot_payload.get("next_rebalancing_date")
+    return result

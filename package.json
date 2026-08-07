@@ -1,0 +1,10 @@
+{
+  "name": "monthly-commentary-platform",
+  "private": true,
+  "packageManager": "pnpm@11.16.0",
+  "scripts": {
+    "dev": "pnpm --filter @commentary/web dev",
+    "build": "pnpm --filter @commentary/web build",
+    "test": "pnpm --filter @commentary/web test"
+  }
+}
