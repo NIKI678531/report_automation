@@ -12,16 +12,19 @@ scripts/    Operational one-offs such as visual QA
 var/        Runtime products only (rendered output, QA evidence, local databases) — gitignored
 ```
 
+`DESIGN.md` is the authoritative UI specification, `CLAUDE.md` the working guide for Claude Code, and
+`AGENTS.md` the non-negotiable execution constraints distilled from the V2.1 specification.
+
 ## Quick start
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e ".\backend[dev,render]"
-pnpm install
+npm install
 Push-Location backend
 ..\.venv\Scripts\python -m alembic upgrade head
 Pop-Location
-pnpm dev
+npm run dev
 ```
 
 Run the API separately with:
@@ -44,8 +47,8 @@ The first module is displayed and rendered as `Review` in `3033-v2`. It uses a v
 
 ```powershell
 .\.venv\Scripts\python -m pytest backend/tests
-pnpm test
-pnpm build
+npm test
+npm run build
 ```
 
 The checked-in 3033 visual baseline is under `backend/tests/fixtures/3033_202606`.
