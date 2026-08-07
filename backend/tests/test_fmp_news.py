@@ -61,7 +61,8 @@ def test_fmp_fetch_fails_closed_when_secret_is_not_configured(client, monkeypatc
     client.post(f"/api/v1/reports/{report['id']}/snapshots", json={"source_policy": "GOLDEN_FIXTURE"})
     response = client.post(f"/api/v1/reports/{report['id']}/news/candidates/fetch", json={"scope": "CONSTITUENTS"})
     assert response.status_code == 503
-    assert response.json()["detail"] == {
+    body = response.json()
+    assert {key: body[key] for key in ("error_code", "message", "retryable")} == {
         "error_code": "FMP_NOT_CONFIGURED",
         "message": "FMP news is not configured for this environment.",
         "retryable": False,
@@ -133,4 +134,4 @@ def test_manual_candidate_cannot_be_published_after_the_report_date(client):
         "summary": "", "ticker": None,
     })
     assert response.status_code == 422
-    assert response.json()["detail"]["error_code"] == "NEWS_DATE_RANGE_INVALID"
+    assert response.json()["error_code"] == "NEWS_DATE_RANGE_INVALID"

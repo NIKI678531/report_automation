@@ -4,7 +4,7 @@
 
 FMP is called only by FastAPI. React never receives the API key.
 
-Configure the runtime or approved secret store using `backend/.env.example` as the field reference. The key is sent in the `apikey` request header, never in the URL, audit log, exception text, or report artifact.
+Configure the runtime or approved secret store using `services/api/.env.example` as the field reference. The key is sent in the `apikey` request header, never in the URL, audit log, exception text, or report artifact.
 
 The key previously shared in chat must be rotated before live use.
 

@@ -31,6 +31,8 @@ class Settings(BaseModel):
     fmp_max_results: int = int(os.getenv("FMP_MAX_RESULTS", "100"))
     fmp_allowed_hosts: tuple[str, ...] = tuple(filter(None, (item.strip().lower() for item in os.getenv("FMP_ALLOWED_HOSTS", "financialmodelingprep.com").split(","))))
     workspace_root: Path = _WORKSPACE_ROOT
+    # backend/ itself: test fixtures and alembic live under the service, not the repository root.
+    service_root: Path = _SERVICE_ROOT
 
     @property
     def output_root(self) -> Path:

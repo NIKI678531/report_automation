@@ -2,42 +2,38 @@
 
 Implementation of the V2.1 Agent Execution Specification. The platform uses a React + TypeScript frontend, a Python FastAPI backend, an immutable report document, and shared design tokens for HTML, PDF, and editable DOCX output.
 
+## Repository layout
+
+```
+backend/    FastAPI service: app/, migrations/, tests/ (with the golden fixtures) and design tokens
+frontend/   React + TypeScript editor, preview and admin surface
+docs/       ADRs, the V2.1 specification, import guides and CSV templates
+scripts/    Operational one-offs such as visual QA
+var/        Runtime products only (rendered output, QA evidence, local databases) — gitignored
+```
+
+`DESIGN.md` is the authoritative UI specification, `CLAUDE.md` the working guide for Claude Code, and
+`AGENTS.md` the non-negotiable execution constraints distilled from the V2.1 specification.
+
 ## Quick start
 
 ```powershell
 python -m venv .venv
-\.\.venv\Scripts\python -m pip install -e ".\backend[dev,render]"
-npm ci
+.\.venv\Scripts\python -m pip install -e ".\backend[dev,render]"
+npm install
 Push-Location backend
 ..\.venv\Scripts\python -m alembic upgrade head
 Pop-Location
-```
-
-If `python` is not available on `PATH` but `uv` is installed, replace the first two commands with:
-
-```powershell
-uv venv --python 3.12 .venv
-uv pip install --link-mode copy --python .\.venv\Scripts\python.exe -e ".\backend[dev,render]"
-```
-
-Start the API in one terminal:
-
-```powershell
-$env:TASK_MODE = "EAGER"
-\.\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --reload --port 8000
-```
-
-Start the web application in a second terminal:
-
-```powershell
 npm run dev
 ```
 
-The web application is served at `http://localhost:5173` and proxies `/api` to FastAPI.
+Run the API separately with:
 
-For a checkout inside OneDrive, keep the SQLite database available offline. If an existing
-`var/commentary.db` returns `disk I/O error`, preserve it and set `DATABASE_URL` to a new local SQLite
-file before running both Alembic and the API.
+```powershell
+.\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --reload --port 8000
+```
+
+The web application is served at `http://localhost:5173` and proxies `/api` to FastAPI.
 
 ## Product catalog
 
@@ -50,7 +46,7 @@ The first module is displayed and rendered as `Review` in `3033-v2`. It uses a v
 ## Verification
 
 ```powershell
-\.\.venv\Scripts\python -m pytest backend/tests
+.\.venv\Scripts\python -m pytest backend/tests
 npm test
 npm run build
 ```

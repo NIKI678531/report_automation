@@ -53,14 +53,14 @@ def test_optimistic_lock_returns_conflict(client):
     content = detail["latest_document"]["content"]
     response = client.put(f"/api/v1/reports/{report['id']}/document", json={"version": 99, "content": content})
     assert response.status_code == 409
-    assert response.json()["detail"]["error_code"] == "VERSION_CONFLICT"
+    assert response.json()["error_code"] == "VERSION_CONFLICT"
 
 
 def test_finalize_requires_valid_snapshot(client):
     report = create_report(client)
     response = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": 1})
     assert response.status_code == 422
-    assert response.json()["detail"]["error_code"] == "SNAPSHOT_REQUIRED"
+    assert response.json()["error_code"] == "SNAPSHOT_REQUIRED"
 
 
 def test_finalized_report_creates_a_separate_revision(client):

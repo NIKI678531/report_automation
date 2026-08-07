@@ -46,6 +46,21 @@ def client():
             display_order=999,
             source="TEST_FIXTURE",
         ))
+        session.add(ProductCatalog(
+            product_code="SLOT",
+            ticker="SLOT.HK",
+            name_en="Slot Ingestion Test Fund",
+            benchmark_code="SLOTIDX",
+            benchmark_name="Slot Ingestion Test Index",
+            valid_from=date(2025, 1, 1),
+            template_version="test-v1",
+            design_token_version="test-v1",
+            # Matches backend/tests/fixtures/ingestion/, which samples five real constituents.
+            expected_constituent_count=5,
+            formula_profile="test-index-v1",
+            display_order=998,
+            source="TEST_FIXTURE",
+        ))
         session.commit()
     app = create_app()
 

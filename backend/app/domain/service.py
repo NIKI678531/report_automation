@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -8,10 +9,108 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from . import ingestion
 from .calculation import calculate_snapshot, quality_checks
 from .document import bind_snapshot, checksum, initial_document, validate_document_content
 from .models import AuditEvent, DataImport, DataSnapshot, NewsItem, ProductCatalog, Report, ReportDocument, ReportStatus, SnapshotStatus, utcnow
 from .schemas import ReportCreate
+
+
+def empty_payload(report_date: date) -> dict:
+    return {
+        "as_of_date": report_date.isoformat(),
+        "constituents": [],
+        "historical_performance": {"rows": []},
+        "company_news": [],
+        "analytics": {"top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": []},
+        "footnotes": {},
+        "datasets": {},
+    }
+
+
+def missing_required_slots(payload: dict) -> list[str]:
+    """Required slots that have not been applied to this snapshot yet.
+
+    A legacy combined upload satisfies everything it owns in one file, so a snapshot whose
+    constituents already carry sector and returns is treated as complete.
+    """
+    applied = set(payload.get("datasets", {}))
+    constituents = payload.get("constituents", [])
+    if constituents and all(row.get("sector") for row in constituents) and all(row.get("return_1m") is not None for row in constituents):
+        return []
+    return [key for key in ingestion.REQUIRED_SLOTS if key not in applied]
+
+
+def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> list[dict]:
+    """Write only the fields this slot owns onto the base snapshot, keyed by security code.
+
+    Returns findings describing rows the slot could not be joined to, so a mismatched
+    constituent set is visible instead of silently dropped.
+    """
+    findings: list[dict] = []
+    if spec.key == "index_constituents":
+        incoming = payload.get("constituents", [])
+        existing = {row["security_code"]: row for row in base.get("constituents", [])}
+        merged = []
+        for row in incoming:
+            carried = existing.get(row["security_code"], {})
+            # Preserve fields other slots already contributed for this security.
+            item = {key: value for key, value in carried.items() if key not in spec.owns}
+            item.update(row)
+            merged.append(item)
+        dropped = sorted(set(existing) - {row["security_code"] for row in incoming}, key=lambda code: int(code) if code.isdigit() else 0)
+        for code in dropped:
+            findings.append({
+                "error_code": "CONSTITUENT_REMOVED", "severity": "INFO", "entity_id": code,
+                "message": f"Security {code} is no longer in the index and was removed from the snapshot.",
+                "fix_hint": "This is expected when the index rebalances.",
+            })
+        base["constituents"] = merged
+        base["as_of_date"] = incoming[0]["as_of_date"] if incoming else base.get("as_of_date")
+        return findings
+
+    rows = payload.get("constituent_returns") or payload.get("sector_mapping") or payload.get("sector_overrides") or []
+    by_code = {row["security_code"]: row for row in rows}
+    constituents = base.get("constituents", [])
+    if not constituents:
+        findings.append({
+            "error_code": "CONSTITUENT_SET_MISSING", "severity": "BLOCKING", "entity_id": None,
+            "message": f"{spec.title} was applied before any index constituents exist.",
+            "fix_hint": "Upload the index constituents slot first; it defines which securities the report covers.",
+        })
+        return findings
+    for row in constituents:
+        source = by_code.get(row["security_code"])
+        if not source:
+            continue
+        for field in spec.owns:
+            if field in source:
+                row[field] = source[field]
+    unmatched = sorted(set(by_code) - {row["security_code"] for row in constituents}, key=lambda code: int(code) if code.isdigit() else 0)
+    for code in unmatched:
+        findings.append({
+            "error_code": "CONSTITUENT_SET_MISMATCH", "severity": "WARNING", "entity_id": code,
+            "message": f"{spec.title} carries security {code}, which is not in the index constituent list.",
+            "fix_hint": "The file covers a different index date; the extra row was ignored.",
+        })
+    uncovered = sorted(
+        (row["security_code"] for row in constituents if not any(row.get(field) is not None for field in spec.owns)),
+        key=lambda code: int(code) if code.isdigit() else 0,
+    )
+    error_code = "SECTOR_MAPPING_MISSING" if "sector" in spec.owns else "RETURNS_MISSING"
+    for code in uncovered:
+        name = next((row.get("name_en") for row in constituents if row["security_code"] == code), code)
+        findings.append({
+            "error_code": error_code, "severity": "WARNING", "entity_id": code,
+            "message": f"{name} ({code}) has no value from {spec.title}.",
+            "fix_hint": "Cover this security with an approved sector override, or refresh the vendor file." if "sector" in spec.owns else "Refresh the Bloomberg workbook so this security is included.",
+        })
+    if spec.key == "sector_overrides":
+        base.setdefault("overrides", {})["sector"] = [
+            {"security_code": row["security_code"], "sector": row["sector"], "reason": row["reason"], "source": row["source"]}
+            for row in rows
+        ]
+    return findings
 
 
 def audit(db: Session, action: str, entity_type: str, entity_id: str, request_id: str, details: dict | None = None) -> None:
@@ -174,7 +273,7 @@ def fixture_payload(product_code: str, report_date) -> dict:
             "severity": "BLOCKING",
             "fix_hint": "Use an approved CDB snapshot or upload a complete dataset for this product.",
         })
-    path: Path = settings.workspace_root / "tests" / "fixtures" / "3033_202606" / "snapshot.json"
+    path: Path = settings.service_root / "tests" / "fixtures" / "3033_202606" / "snapshot.json"
     if not path.exists():
         raise HTTPException(status_code=503, detail={"error_code": "FIXTURE_MISSING", "message": f"Golden fixture is missing: {path}"})
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -243,17 +342,10 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
     active_snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
     if active_snapshot:
         base = json.loads(json.dumps(active_snapshot.payload))
-    elif report.product_code == "3033" and report.report_date.isoformat() == "2026-06-30":
-        base = fixture_payload(report.product_code, report.report_date)
     else:
-        base = {
-            "as_of_date": report.report_date.isoformat(),
-            "constituents": [],
-            "historical_performance": {"rows": []},
-            "company_news": [],
-            "analytics": {"top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": []},
-            "footnotes": {},
-        }
+        base = empty_payload(report.report_date)
+    spec = ingestion.get_spec(data_import.dataset_type)
+    findings: list[dict] = []
     if data_import.dataset_type == "historical_performance":
         if not active_snapshot:
             raise HTTPException(status_code=422, detail={"error_code": "BASE_SNAPSHOT_REQUIRED", "message": "Historical Performance requires an active snapshot to preserve the remaining report datasets."})
@@ -263,21 +355,35 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         base["constituents"] = data_import.payload["constituents"]
         base["fund_kpis"] = data_import.payload["fund_kpis"]
         base["analytics"] = {"top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": []}
-    else:
+    elif data_import.dataset_type == "constituents":
         base["constituents"] = data_import.payload["constituents"]
+    else:
+        findings = overlay_slot(base, spec, data_import.payload)
+    base.setdefault("datasets", {})[data_import.dataset_type] = {
+        "import_id": data_import.id,
+        "filename": data_import.original_filename,
+        "checksum": data_import.checksum,
+        "applied_at": datetime.now(timezone.utc).isoformat(),
+    }
     results = quality_checks(base, product.expected_constituent_count)
-    failures = [item for item in results if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
-    if failures:
-        raise HTTPException(status_code=422, detail={"error_code": "IMPORT_QUALITY_BLOCKED", "checks": failures})
+    missing = missing_required_slots(base)
+    blocked = [item for item in results if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
+    # A slot upload is incomplete by design until every required slot has landed, so an incomplete
+    # snapshot is recorded as PENDING rather than rejected. Only a snapshot that is complete *and*
+    # passes every blocking check becomes VALID and therefore calculable.
+    complete = not missing
+    if complete and blocked and data_import.dataset_type in {"constituents", "historical_performance", "final_analytics"}:
+        raise HTTPException(status_code=422, detail={"error_code": "IMPORT_QUALITY_BLOCKED", "checks": blocked})
+    status = SnapshotStatus.VALID if complete and not blocked else SnapshotStatus.PENDING
     snapshot = DataSnapshot(
         report_id=report.id,
         as_of_date=report.report_date,
         source_policy="UPLOAD_OVERRIDE",
         mapping_version=data_import.parser_version,
-        status=SnapshotStatus.VALID,
+        status=status,
         checksum=checksum(base),
         payload=base,
-        quality_results=results,
+        quality_results=[*results, *findings],
     )
     db.add(snapshot); db.flush()
     report.active_snapshot_id = snapshot.id
@@ -294,7 +400,10 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
     data_import.status = "APPLIED"
     data_import.reason = reason
     data_import.applied_snapshot_id = snapshot.id
-    audit(db, "import.applied", "import", data_import.id, request_id, {"reason": reason, "snapshot_id": snapshot.id, "dataset_type": data_import.dataset_type})
+    audit(db, "import.applied", "import", data_import.id, request_id, {
+        "reason": reason, "snapshot_id": snapshot.id, "dataset_type": data_import.dataset_type,
+        "snapshot_status": status.value, "missing_slots": missing, "findings": len(findings),
+    })
     db.commit(); db.refresh(snapshot)
     return snapshot
 
@@ -347,7 +456,10 @@ def finalize(db: Session, report: Report, expected_version: int, request_id: str
     if not report.active_snapshot_id:
         raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED", "message": "A valid active snapshot is required."})
     snapshot = db.get(DataSnapshot, report.active_snapshot_id)
-    failures = [item for item in snapshot.quality_results if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
+    require_complete_snapshot(snapshot)
+    # quality_results mixes check results (which carry `status`) with overlay findings (which do
+    # not); an unresolved finding is a failure by default.
+    failures = [item for item in snapshot.quality_results if item["severity"] == "BLOCKING" and item.get("status", "FAILED") != "PASSED"]
     if failures:
         raise HTTPException(status_code=422, detail={"error_code": "QUALITY_BLOCKED", "checks": failures})
     if "Add the approved" in json.dumps(document.content, ensure_ascii=False):
@@ -385,12 +497,35 @@ def create_revision(db: Session, source: Report, reason: str, request_id: str) -
     return report
 
 
+def require_complete_snapshot(snapshot: DataSnapshot | None) -> None:
+    """Reject work that would present an incomplete snapshot as finished output.
+
+    A PENDING snapshot is a legitimate intermediate state while slots are still being uploaded,
+    but calculating or finalizing from one would publish blanks as if they were facts.
+    """
+    if snapshot is None:
+        raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED", "message": "This report has no active data snapshot."})
+    if snapshot.status == SnapshotStatus.VALID:
+        return
+    missing = missing_required_slots(snapshot.payload or {})
+    titles = [ingestion.REGISTRY[key].title for key in missing if key in ingestion.REGISTRY]
+    raise HTTPException(status_code=422, detail={
+        "error_code": "SNAPSHOT_INCOMPLETE",
+        "message": "The active snapshot is not complete enough to calculate from." if missing else "The active snapshot failed its blocking quality checks.",
+        "severity": "BLOCKING",
+        "fix_hint": f"Upload the remaining dataset(s): {', '.join(titles)}." if titles else "Resolve the reported quality check failures and apply the dataset again.",
+        "missing_slots": missing,
+        "snapshot_status": snapshot.status.value,
+    })
+
+
 def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict, ReportDocument, list[dict]]:
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED"})
     if not report.active_snapshot_id:
         raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED"})
     snapshot = db.get(DataSnapshot, report.active_snapshot_id)
+    require_complete_snapshot(snapshot)
     product = resolve_product(db, report.product_code, report.report_date)
     formula_version = product.formula_profile
     derived_payload = json.loads(json.dumps(snapshot.payload))

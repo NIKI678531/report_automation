@@ -138,6 +138,49 @@ def get_snapshot(report_id: str, snapshot_id: str, db: Db) -> DataSnapshot:
     return snapshot
 
 
+@router.get("/reports/{report_id}/datasets")
+def list_datasets(report_id: str, db: Db) -> list[dict]:
+    """Per-slot ingestion state, so the UI can show what is loaded and what is still missing."""
+    from app.domain import ingestion
+    report = service.get_report(db, report_id)
+    imports_by_slot: dict[str, DataImport] = {}
+    for item in db.scalars(select(DataImport).where(DataImport.report_id == report_id).order_by(DataImport.created_at.asc())):
+        imports_by_slot[item.dataset_type] = item
+    snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
+    applied = set((snapshot.payload or {}).get("datasets", {})) if snapshot else set()
+    slots = []
+    for key, spec in ingestion.REGISTRY.items():
+        if spec.legacy:
+            continue
+        item = imports_by_slot.get(key)
+        findings = list(item.validation_results or []) if item else []
+        slots.append({
+            "key": key,
+            "title": spec.title,
+            "description": spec.description,
+            "required": spec.required,
+            "accepts": list(spec.accepts),
+            "state": ("APPLIED" if key in applied else item.status) if item else "MISSING",
+            "latest_import_id": item.id if item else None,
+            "filename": item.original_filename if item else None,
+            "rows": _row_count(item.payload) if item else 0,
+            "uploaded_at": item.created_at.isoformat() if item else None,
+            "blocking": len([finding for finding in findings if finding.get("severity") == "BLOCKING"]),
+            "warnings": len([finding for finding in findings if finding.get("severity") == "WARNING"]),
+            "applied_snapshot_id": item.applied_snapshot_id if item else None,
+        })
+    return slots
+
+
+def _row_count(payload: dict | None) -> int:
+    if not payload:
+        return 0
+    for key in ("constituents", "constituent_returns", "sector_mapping", "sector_overrides", "total_return_series"):
+        if key in payload:
+            return len(payload[key])
+    return 0
+
+
 @router.post("/reports/{report_id}/imports", response_model=ImportRead, status_code=status.HTTP_201_CREATED)
 async def create_import(
     report_id: str,
@@ -147,37 +190,64 @@ async def create_import(
     dataset_type: str = Form("constituents"),
 ) -> DataImport:
     import hashlib
+    from app.domain import ingestion
     from app.domain.calculation import quality_checks
-    from app.domain.imports import SUPPORTED_DATASETS, diff_dataset, parse_dataset
+    from app.domain.imports import diff_dataset
     report = service.get_report(db, report_id)
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED"})
-    if dataset_type not in SUPPORTED_DATASETS:
-        raise HTTPException(status_code=422, detail={"error_code": "UNSUPPORTED_DATASET", "message": f"Supported datasets: {', '.join(sorted(SUPPORTED_DATASETS))}."})
+    spec = ingestion.get_spec(dataset_type)
+    if spec is None:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "UNSUPPORTED_DATASET",
+            "message": f"Unknown dataset type '{dataset_type}'.",
+            "fix_hint": f"Supported datasets: {', '.join(sorted(ingestion.REGISTRY))}.",
+        })
     data = await file.read()
     if len(data) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE"})
+        raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE", "message": "Uploads are limited to 20 MB."})
+    filename = file.filename or "upload"
     try:
-        payload = parse_dataset(dataset_type, file.filename or "upload", data, report.report_date)
-    except (ValueError, UnicodeError) as error:
-        raise HTTPException(status_code=422, detail={"error_code": "IMPORT_PARSE_FAILED", "message": str(error), "severity": "BLOCKING"}) from error
-    product = service.resolve_product(db, report.product_code, report.report_date)
-    validations = quality_checks(payload, product.expected_constituent_count) if dataset_type in {"constituents", "final_analytics"} else [{
-        "check_id": "HP-001", "severity": "BLOCKING", "status": "PASSED",
-        "actual": len(payload["total_return_series"]), "fix_hint": "FUND and BENCHMARK Total Return series must share valid period endpoints.",
-    }]
+        payload, collector = ingestion.parse(dataset_type, filename, data, report.report_date)
+    except UnicodeError as error:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "IMPORT_DECODE_FAILED", "message": "The file could not be decoded as UTF-8.",
+            "severity": "BLOCKING", "fix_hint": "Re-export the file as UTF-8 (or UTF-8 with BOM) and upload again.",
+        }) from error
+    # A file with bad rows is a first-class, inspectable resource rather than a 4xx: the user needs
+    # to see every finding at once, and REJECTED imports stay queryable in the report's history.
+    rejected = collector.has_blocking() or not payload
+    validations = collector.as_dicts()
+    if not rejected and dataset_type in {"constituents", "final_analytics"}:
+        validations = [*quality_checks(payload, service.resolve_product(db, report.product_code, report.report_date).expected_constituent_count), *validations]
     active_payload: dict = {}
     if report.active_snapshot_id:
         active_snapshot = db.get(DataSnapshot, report.active_snapshot_id)
         active_payload = active_snapshot.payload if active_snapshot else {}
+    if rejected:
+        diff = {"summary": {"added": 0, "removed": 0, "changed": 0}}
+    elif spec.legacy:
+        diff = diff_dataset(dataset_type, payload, active_payload)
+    elif dataset_type == "index_constituents":
+        diff = diff_dataset("constituents", payload, active_payload)
+    else:
+        # Field-level slots do not change the constituent set; the meaningful figure is how many
+        # of the securities in the active snapshot this file actually covers.
+        rows = payload.get("constituent_returns") or payload.get("sector_mapping") or payload.get("sector_overrides") or []
+        active_codes = {row["security_code"] for row in active_payload.get("constituents", [])}
+        covered = len([row for row in rows if row["security_code"] in active_codes]) if active_codes else 0
+        diff = {"summary": {"added": 0, "removed": 0, "changed": len(rows)}, "rows": len(rows), "covered": covered, "uncovered": max(len(active_codes) - covered, 0)}
     item = DataImport(
-        report_id=report.id, dataset_type=dataset_type, original_filename=file.filename or "upload",
+        report_id=report.id, dataset_type=dataset_type, original_filename=filename,
         mime_type=file.content_type or "application/octet-stream", size_bytes=len(data), checksum=hashlib.sha256(data).hexdigest(),
         parser_version=f"{dataset_type}-v1", payload=payload, validation_results=validations,
-        diff=diff_dataset(dataset_type, payload, active_payload),
+        status="REJECTED" if rejected else "VALIDATED",
+        diff=diff,
     )
     db.add(item); db.flush()
-    service.audit(db, "import.validated", "import", item.id, x_request_id, {"filename": item.original_filename, "dataset_type": dataset_type})
+    service.audit(db, "import.rejected" if rejected else "import.validated", "import", item.id, x_request_id, {
+        "filename": item.original_filename, "dataset_type": dataset_type, **collector.summary(),
+    })
     db.commit(); db.refresh(item)
     return item
 

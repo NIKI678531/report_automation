@@ -86,10 +86,11 @@ def _records_from_csv(data: bytes) -> list[dict[str, Any]]:
     return list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"))))
 
 
-def _records_from_xlsx(data: bytes) -> list[dict[str, Any]]:
+def _records_from_xlsx(data: bytes, sheet_name: str | None = None, header_row: int = 1) -> list[dict[str, Any]]:
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    sheet = workbook[workbook.sheetnames[0]]
-    rows = sheet.iter_rows(values_only=True)
+    name = sheet_name if sheet_name in workbook.sheetnames else workbook.sheetnames[0]
+    sheet = workbook[name]
+    rows = sheet.iter_rows(min_row=header_row, values_only=True)
     headers = [str(value).strip() if value is not None else "" for value in next(rows)]
     return [dict(zip(headers, values)) for values in rows if any(value not in (None, "") for value in values)]
 

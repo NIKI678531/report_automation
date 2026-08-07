@@ -10,7 +10,7 @@ from app.domain.imports import parse_final_analytics, parse_historical_performan
 
 
 def fixture_csv() -> bytes:
-    snapshot = json.loads((Path(__file__).parents[1] / "fixtures" / "3033_202606" / "snapshot.json").read_text(encoding="utf-8"))
+    snapshot = json.loads((Path(__file__).parent / "fixtures" / "3033_202606" / "snapshot.json").read_text(encoding="utf-8"))
     stream = io.StringIO()
     fields = ["Code", "Constituent Name", "Weighting", "GICS_SECTOR_NAME", "Cls Price", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"]
     writer = csv.DictWriter(stream, fieldnames=fields)
@@ -47,8 +47,13 @@ def test_upload_diff_and_apply(client):
 def test_upload_rejects_unsupported_file(client):
     report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
     response = client.post(f"/api/v1/reports/{report['id']}/imports", files={"file": ("bad.txt", b"bad", "text/plain")})
-    assert response.status_code == 422
-    assert response.json()["detail"]["error_code"] == "IMPORT_PARSE_FAILED"
+    # A file the parser cannot read is recorded as a REJECTED import rather than discarded, so the
+    # user can see why. The error envelope is flat: {error_code, message, severity, fix_hint}.
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "REJECTED"
+    assert [item["error_code"] for item in body["validation_results"]] == ["IMPORT_PARSE_FAILED"]
+    assert body["summary"]["blocking"] == 1
 
 
 def test_historical_performance_csv_calculates_common_period_returns():

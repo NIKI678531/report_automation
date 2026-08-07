@@ -101,6 +101,28 @@ class ImportRead(BaseModel):
     diff: dict[str, Any]
     reason: str | None
     applied_snapshot_id: str | None
+    # Derived for the UI: counts to summarise the upload at a glance, and a small sample so the
+    # user can confirm the file was read the way they expected before applying it.
+    summary: dict[str, int] = Field(default_factory=dict)
+    preview: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _derive_summary_and_preview(self) -> "ImportRead":
+        findings = self.validation_results or []
+        rows: list[dict[str, Any]] = []
+        for key in ("constituents", "constituent_returns", "sector_mapping", "sector_overrides", "total_return_series"):
+            if key in (self.payload or {}):
+                rows = self.payload[key]
+                break
+        self.summary = {
+            "rows_parsed": len(rows),
+            "blocking": len([item for item in findings if item.get("severity") == "BLOCKING" and item.get("status", "FAILED") != "PASSED"]),
+            "warnings": len([item for item in findings if item.get("severity") == "WARNING" and item.get("status", "FAILED") != "PASSED"]),
+        }
+        sample = rows[:20]
+        columns = [key for key in (sample[0].keys() if sample else ()) if not key.startswith("_")]
+        self.preview = {"columns": columns, "rows": [{key: row.get(key) for key in columns} for row in sample], "total": len(rows)}
+        return self
 
 
 class ImportApply(BaseModel):

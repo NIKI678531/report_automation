@@ -13,7 +13,7 @@ def test_products_are_effective_dated_and_drive_report_identity(client):
 def test_report_creation_rejects_unknown_or_client_supplied_product_identity(client):
     missing = client.post("/api/v1/reports", json={"product_code": "9999", "report_date": "2026-06-30"})
     assert missing.status_code == 422
-    assert missing.json()["detail"]["error_code"] == "PRODUCT_NOT_AVAILABLE"
+    assert missing.json()["error_code"] == "PRODUCT_NOT_AVAILABLE"
 
     spoofed = client.post("/api/v1/reports", json={
         "product_code": "3033",
@@ -31,7 +31,7 @@ def test_non_3033_product_uses_its_own_count_formula_and_never_golden_data(clien
 
     golden = client.post(f"/api/v1/reports/{report_id}/snapshots", json={"source_policy": "GOLDEN_FIXTURE"})
     assert golden.status_code == 422
-    assert golden.json()["detail"]["error_code"] == "FIXTURE_NOT_AVAILABLE"
+    assert golden.json()["error_code"] == "FIXTURE_NOT_AVAILABLE"
 
     csv_data = (
         "security_code,ticker,name_en,close_price,currency,weight,sector,return_1m\n"
@@ -94,7 +94,7 @@ def test_product_catalog_import_is_admin_only_and_atomic(client):
         headers={"X-User-Role": "EDITOR"},
     )
     assert denied.status_code == 403
-    assert denied.json()["detail"]["error_code"] == "PRODUCT_ADMIN_REQUIRED"
+    assert denied.json()["error_code"] == "PRODUCT_ADMIN_REQUIRED"
 
     invalid = (
         "product_code,ticker,name_en,benchmark_code,valid_from,template_version,design_token_version,formula_profile\n"

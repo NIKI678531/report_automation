@@ -81,7 +81,7 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
     invalid_content["sections"]["month_in_review"]["blocks"][1].update({"x": 5, "y": 2})
     rejected = client.put(f"/api/v1/reports/{report_id}/document", json={"version": saved.json()["version"], "content": invalid_content})
     assert rejected.status_code == 422
-    assert rejected.json()["detail"]["error_code"] == "REVIEW_LAYOUT_INVALID"
+    assert rejected.json()["error_code"] == "REVIEW_LAYOUT_INVALID"
 
 
 def test_review_blocks_render_to_html_and_editable_docx(client):
