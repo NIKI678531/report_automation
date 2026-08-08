@@ -55,7 +55,7 @@
 
 ### 安全
 
-- CDB 账号、访问令牌、签名 URL、付费新闻正文**不得**进入日志、提示词、代码库或成品。
+- CDB 账号、访问令牌、签名 URL **不得**进入日志、提示词、代码库或成品。
 - 所有写接口提交 `version` 做乐观锁；冲突返回 409。校验失败返回 422 且带
   `error_code / field / entity_id / message / severity / fix_hint`。
 - 授权在 API 层执行（`AuthorizationMiddleware`），不得只靠前端隐藏。
