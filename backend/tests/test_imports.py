@@ -163,6 +163,11 @@ def test_final_analytics_import_calculates_portfolio_without_mutating_snapshot(c
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     portfolio = detail["latest_document"]["content"]["sections"]["analytics"]["portfolio"]
     assert [row["label"] for row in portfolio] == ["Asset Under Management (HKD)^", "Average Daily Turnover (HKD)^^", "Number of holdings"]
+    preview = client.post(f"/api/v1/reports/{report['id']}/preview")
+    assert preview.status_code == 200, preview.text
+    assert "conic-gradient(#5186bd 0.0000% 40.0000%,#223a8b 40.0000% 100.0000%)" in preview.text
+    assert "Financials" in preview.text
+    assert "Technology" in preview.text
     unchanged = client.get(f"/api/v1/reports/{report['id']}/snapshots/{applied.json()['id']}").json()
     assert unchanged["checksum"] == input_checksum
     assert "analytics" in unchanged["payload"] and unchanged["payload"]["analytics"]["top10"] == []

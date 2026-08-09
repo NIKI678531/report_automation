@@ -31,6 +31,11 @@ def test_report_identity_changes_with_selected_etf(client):
     assert content["product_ticker"] == "3037.HK"
     assert content["benchmark_name"] == "Hang Seng Index"
 
+    preview = client.post(f"/api/v1/reports/{report['id']}/preview")
+    assert preview.status_code == 200, preview.text
+    assert '<div class="sector-empty">N/A</div>' in preview.text
+    assert 'class="donut"' not in preview.text
+
 
 def test_report_creation_rejects_unknown_or_client_supplied_product_identity(client):
     missing = client.post("/api/v1/reports", json={"product_code": "9999", "report_date": "2026-06-30"})
