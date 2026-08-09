@@ -33,6 +33,20 @@ def client():
             source="TEST_FIXTURE",
         ))
         session.add(ProductCatalog(
+            product_code="3037",
+            ticker="3037.HK",
+            name_en="CSOP Hang Seng Index ETF",
+            benchmark_code="HSI",
+            benchmark_name="Hang Seng Index",
+            valid_from=date(2026, 1, 1),
+            template_version="3033-v2",
+            design_token_version="3033-v2",
+            expected_constituent_count=None,
+            formula_profile="total-return-v1",
+            display_order=20,
+            source="TEST_FIXTURE",
+        ))
+        session.add(ProductCatalog(
             product_code="TEST",
             ticker="9999.HK",
             name_en="Synthetic Test Fund",

@@ -9,12 +9,27 @@ def test_products_are_effective_dated_and_drive_report_identity(client):
     products = client.get("/api/v1/products", params={"as_of_date": "2026-06-30"})
     assert products.status_code == 200
     assert ("3033", "3033.HK") in [(item["product_code"], item["ticker"]) for item in products.json()]
+    assert ("3037", "3037.HK") in [(item["product_code"], item["ticker"]) for item in products.json()]
 
     created = client.post("/api/v1/reports", json={"product_code": "3033", "report_date": "2026-06-30"})
     assert created.status_code == 201, created.text
     assert created.json()["product_name"] == "CSOP Hang Seng TECH Index ETF (3033.HK)"
     assert created.json()["benchmark_code"] == "HSTECH"
     assert created.json()["template_version"] == "3033-v2"
+
+
+def test_report_identity_changes_with_selected_etf(client):
+    created = client.post("/api/v1/reports", json={"product_code": "3037", "report_date": "2026-06-30"})
+    assert created.status_code == 201, created.text
+    report = created.json()
+    assert report["product_name"] == "CSOP Hang Seng Index ETF (3037.HK)"
+    assert report["benchmark_code"] == "HSI"
+
+    detail = client.get(f"/api/v1/reports/{report['id']}")
+    assert detail.status_code == 200, detail.text
+    content = detail.json()["latest_document"]["content"]
+    assert content["product_ticker"] == "3037.HK"
+    assert content["benchmark_name"] == "Hang Seng Index"
 
 
 def test_report_creation_rejects_unknown_or_client_supplied_product_identity(client):
