@@ -7,7 +7,10 @@ __pycache__/
 *.egg-info/
 *.tsbuildinfo
 *.db
+*.sqlite
 .env
+# OneDrive conflict copies: this repository is synced across machines and they must never be committed.
+*-AZ-AI-WS-07.*
 frontend/vite.config.js
 frontend/vite.config.d.ts
 # Runtime products: rendered artifacts, visual-QA evidence, scratch files and local databases.

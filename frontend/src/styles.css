@@ -968,10 +968,6 @@ tbody tr:last-child th, tbody tr:last-child td { box-shadow: none; }
 .selected-news-card input, .selected-news-card textarea { width: 100%; margin-top: var(--space-sm); min-height: 42px; padding: var(--space-sm) var(--space-md); font-size: var(--text-body-md); }
 .selected-news-card textarea { min-height: 92px; }
 .selected-news-card footer { margin-top: var(--space-sm); color: var(--color-text-secondary); font-size: var(--text-body-sm); }
-.selected-news-card.frozen { position: relative; }
-.selected-news-card.frozen::before { content: ""; position: absolute; left: 0; top: var(--space-sm); bottom: var(--space-sm); width: 3px; border-radius: var(--radius-pill); background: var(--color-primary); }
-.selected-news-card.frozen > strong { display: block; margin: var(--space-sm) 0; color: var(--color-text); font-size: var(--text-body-md); }
-.selected-news-card.frozen p { margin: 0; color: var(--color-text-secondary); font-size: var(--text-body-sm); line-height: var(--leading-body); }
 .news-drag-handle { cursor: grab; }
 .news-drag-handle:active { cursor: grabbing; }
 

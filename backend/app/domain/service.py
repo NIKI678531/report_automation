@@ -560,7 +560,7 @@ def import_products(db: Session, rows: list[dict], request_id: str) -> dict[str,
     return {"created": created, "updated": updated, "total": len(rows)}
 
 
-def upsert_news_candidates(db: Session, report: Report, candidates: list[dict], request_id: str, provider: str = "FMP") -> tuple[list[NewsItem], int]:
+def upsert_news_candidates(db: Session, report: Report, candidates: list[dict], request_id: str, provider: str = "DA_REPORT") -> tuple[list[NewsItem], int]:
     snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
     ticker_map = {
         str(row.get("ticker", "")).upper(): str(row.get("security_code", ""))

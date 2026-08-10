@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   draftsFromSnapshot,
-  FMP_SOURCE_FILTER,
   matchesNewsSource,
-  providerFromSourceFilter,
   reportNewsWindow,
   shouldAutoLoadDaNews,
   toggleNewsSelection,
@@ -67,30 +65,24 @@ describe("Company News report context", () => {
 });
 
 describe("Company News source filtering", () => {
-  const fmpCandidate: NewsCandidate = {
-    id: "news-fmp",
+  const candidate: NewsCandidate = {
+    id: "news-da",
     source_name: "Reuters",
-    source_url: "https://example.com/news-fmp",
+    source_url: "https://example.com/news-da",
     published_at: "2026-08-10T08:00:00Z",
-    title: "FMP headline",
-    summary: "FMP summary",
+    title: "DA-Report headline",
+    summary: "DA-Report summary",
     security_code: "0700",
     ticker: "0700.HK",
     importance: "HIGH",
     match_confidence: 100,
     site: "example.com",
-    provider: "FMP",
+    provider: "DA_REPORT",
   };
 
-  it("maps only the dedicated FMP option to a provider request", () => {
-    expect(providerFromSourceFilter(FMP_SOURCE_FILTER)).toBe("FMP");
-    expect(providerFromSourceFilter("Reuters")).toBeUndefined();
-  });
-
-  it("filters FMP by provider while preserving publisher filters", () => {
-    expect(matchesNewsSource(fmpCandidate, FMP_SOURCE_FILTER)).toBe(true);
-    expect(matchesNewsSource(fmpCandidate, "Reuters")).toBe(true);
-    expect(matchesNewsSource(fmpCandidate, "")).toBe(true);
-    expect(matchesNewsSource({ ...fmpCandidate, provider: "DA_REPORT", source_name: "FMP" }, FMP_SOURCE_FILTER)).toBe(false);
+  it("filters by publisher only", () => {
+    expect(matchesNewsSource(candidate, "")).toBe(true);
+    expect(matchesNewsSource(candidate, "Reuters")).toBe(true);
+    expect(matchesNewsSource(candidate, "Bloomberg")).toBe(false);
   });
 });

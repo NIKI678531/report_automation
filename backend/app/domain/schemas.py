@@ -220,7 +220,7 @@ class NewsRead(NewsCreate):
     id: str
     match_confidence: int
     created_at: datetime
-    # Provider facts FMP returns alongside the article; persisted in metadata_json rather than
+    # Provider facts returned alongside the article; persisted in metadata_json rather than
     # as columns so the provider payload stays additive. Lifted here for filtering in the UI.
     site: str | None = None
     provider: str | None = None

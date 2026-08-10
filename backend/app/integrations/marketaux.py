@@ -1,14 +1,15 @@
 """Marketaux news adapter.
 
 Marketaux tags every article with the entities it mentions, so one article can carry several symbols.
-FMP returns one row per symbol; here the article is emitted once and bound to the requested symbol it
-matches, with the full matched set kept in metadata for traceability.
+The article is emitted once and bound to the requested symbol it matches, with the full matched set
+kept in metadata for traceability.
 
-**Credential handling deviates from the FMP rule and the deviation is deliberate.** Marketaux accepts
-`api_token` as a query parameter only — it has no header auth — so the key necessarily appears in the
-outbound URL. Nothing in this module ever puts a URL into an exception message, a log record, an audit
-entry or a normalized candidate, which is where the rule in docs/fmp-news-and-data-imports.md actually
-bites. `_redact` is the backstop for anything that slips through.
+**Credential handling deviates from the header-only rule and the deviation is deliberate.** Marketaux
+accepts `api_token` as a query parameter only — it has no header auth — so the key necessarily appears
+in the outbound URL. Nothing in this module ever puts a URL into an exception message, a log record, an
+audit entry or a normalized candidate, which is where the rule in
+docs/news-sources-and-data-imports.md actually bites. `_redact` is the backstop for anything that slips
+through.
 """
 
 from __future__ import annotations
@@ -134,7 +135,7 @@ async def fetch_news(
         # The window is inclusive of both endpoints, which means the whole of `to_date`.
         "published_after": f"{from_date.isoformat()}T00:00:00",
         "published_before": f"{to_date.isoformat()}T23:59:59",
-        # Marketaux pages are 1-based; the shared interface is 0-based like FMP's.
+        # Marketaux pages are 1-based; the shared interface is 0-based.
         "page": page + 1,
         "limit": min(limit, settings.marketaux_max_results, MAX_PAGE_SIZE),
         "language": settings.marketaux_language,
@@ -179,7 +180,7 @@ async def fetch_news(
     for item in payload["data"]:
         candidate = normalize_news_item(item, scope, requested)
         # The API filters server-side, but the window is the caller's contract, so it is re-checked
-        # here for the same reason the FMP adapter does it: a provider that ignores it must not widen it.
+        # here: a provider that ignores it must not widen it.
         published_date = candidate["published_at"].date()
         if published_date < from_date or published_date > to_date:
             continue

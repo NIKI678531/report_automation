@@ -6,10 +6,11 @@ from pydantic import BaseModel
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]  # backend/
 _WORKSPACE_ROOT = _SERVICE_ROOT.parent  # repository root
-_LOCAL_DA_REPORT = Path.home() / "Downloads" / "da_report.sqlite"
+_LOCAL_DA_REPORT_CANDIDATES = (_WORKSPACE_ROOT / "da_report.sqlite", Path.home() / "Downloads" / "da_report.sqlite")
 
-# Load service-local secrets (FMP_API_KEY, DOWNLOAD_SECRET, ...) before any os.getenv default below.
-# Real process environment always wins, so container/CI settings are never overwritten by a stray .env.
+# Load service-local secrets (MARKETAUX_API_KEY, DOWNLOAD_SECRET, ...) before any os.getenv default
+# below. Real process environment always wins, so container/CI settings are never overwritten by a
+# stray .env.
 load_dotenv(_SERVICE_ROOT / ".env", override=False)
 
 
@@ -27,13 +28,8 @@ class Settings(BaseModel):
     storage_backend: str = os.getenv("STORAGE_BACKEND", "LOCAL")
     download_secret: str = os.getenv("DOWNLOAD_SECRET", "local-development-secret-change-me")
     download_ttl_seconds: int = int(os.getenv("DOWNLOAD_TTL_SECONDS", "300"))
-    fmp_api_key: str | None = os.getenv("FMP_API_KEY")
-    fmp_base_url: str = os.getenv("FMP_BASE_URL", "https://financialmodelingprep.com/stable")
-    fmp_timeout_seconds: float = float(os.getenv("FMP_TIMEOUT_SECONDS", "15"))
-    fmp_max_results: int = int(os.getenv("FMP_MAX_RESULTS", "100"))
-    fmp_allowed_hosts: tuple[str, ...] = tuple(filter(None, (item.strip().lower() for item in os.getenv("FMP_ALLOWED_HOSTS", "financialmodelingprep.com").split(","))))
     # Which adapter in app.integrations.news.REGISTRY answers a fetch that names no provider.
-    news_provider: str = os.getenv("NEWS_PROVIDER", "FMP")
+    news_provider: str = os.getenv("NEWS_PROVIDER", "DA_REPORT")
     marketaux_api_key: str | None = os.getenv("MARKETAUX_API_KEY")
     marketaux_base_url: str = os.getenv("MARKETAUX_BASE_URL", "https://api.marketaux.com/v1")
     marketaux_timeout_seconds: float = float(os.getenv("MARKETAUX_TIMEOUT_SECONDS", "15"))
@@ -43,7 +39,7 @@ class Settings(BaseModel):
     da_report_sqlite_path: Path | None = (
         Path(os.environ["DA_REPORT_SQLITE_PATH"]).expanduser()
         if os.getenv("DA_REPORT_SQLITE_PATH")
-        else (_LOCAL_DA_REPORT if _LOCAL_DA_REPORT.is_file() else None)
+        else next((path for path in _LOCAL_DA_REPORT_CANDIDATES if path.is_file()), None)
     )
     da_report_sqlite_sha256: str | None = os.getenv("DA_REPORT_SQLITE_SHA256")
     da_report_object_url: str | None = os.getenv("DA_REPORT_OBJECT_URL")

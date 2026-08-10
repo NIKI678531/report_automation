@@ -36,7 +36,7 @@
 - 领域层：`backend/app/domain/`（`models` ORM / `schemas` Pydantic / `service` 编排 /
   `calculation` 纯计算 / `document` 内容模型 / `imports` 解析 / `products` 目录）
 - 渲染：`backend/app/rendering/`（`templates/*.j2`、`tokens/3033-v*.json`、`artifacts.py`、`visual_qa.py`）
-- 外部适配器：`backend/app/integrations/`（当前为 FMP 新闻）
+- 外部适配器：`backend/app/integrations/`（`da_report.py` 只读快照新闻、`marketaux.py` 可选远程源）
 - 前端：`frontend/src/`（`components/` 通用件、`features/<domain>/` 业务工作台、
   `styles/tokens.css` 设计令牌、`styles.css` 组件样式）
 - 运行时产物：`var/`（已 gitignore，容器内不得作为持久化依赖）

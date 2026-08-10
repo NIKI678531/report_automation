@@ -10,17 +10,16 @@ answered.
 
 | Key | Vendor | Secret | Auth style |
 |---|---|---|---|
-| `FMP` | Financial Modeling Prep | `FMP_API_KEY` | `apikey` request header |
-| `MARKETAUX` | Marketaux | `MARKETAUX_API_KEY` | `api_token` query parameter |
 | `DA_REPORT` | Approved DA-Report SQLite snapshot | local read-only path or TOS presigned URL + SHA-256 | none |
+| `MARKETAUX` | Marketaux | `MARKETAUX_API_KEY` | `api_token` query parameter |
 
 `POST /api/v1/reports/{id}/news/candidates/fetch` takes an optional `provider` field; omitting it uses
-`NEWS_PROVIDER` (default `FMP`). `GET /api/v1/news/providers` reports which providers hold a credential
-in this environment — the boolean only, never the credential. An unknown key returns 422
+`NEWS_PROVIDER` (default `DA_REPORT`). `GET /api/v1/news/providers` reports which providers hold a
+credential in this environment — the boolean only, never the credential. An unknown key returns 422
 `NEWS_PROVIDER_UNKNOWN` before any outbound call is made.
 
-Each provider gets its own audit action, derived from the key: `news.fmp_fetched`,
-`news.marketaux_fetched`, `news.da_report_fetched`. Manual entries stay `news.manually_added`.
+Each provider gets its own audit action, derived from the key: `news.da_report_fetched`,
+`news.marketaux_fetched`. Manual entries stay `news.manually_added`.
 
 ## DA-Report configuration
 
@@ -28,15 +27,7 @@ Company News automatically ensures DA-Report candidates once when a mutable repo
 
 DA-Report has no news-to-security or news-to-product relation. `category=Corporate` means an item passed a regional holding check somewhere upstream; it does **not** prove that the item belongs to the current fund. This adapter therefore requires a unique title match against the active snapshot's controlled English/Traditional Chinese constituent names. Summary-only, ambiguous and unmatched items are excluded from automatic candidates.
 
-Development can set `DA_REPORT_SQLITE_PATH`. Production sets `DA_REPORT_OBJECT_URL` to a short-lived TOS/S3-compatible presigned URL and must set `DA_REPORT_SQLITE_SHA256`. The API downloads to `DA_REPORT_CACHE_DIR` on ephemeral disk, enforces the size limit, verifies SHA-256, atomically renames the completed file, and opens SQLite with both `mode=ro` and `PRAGMA query_only=ON`. The object URL is never included in provider errors.
-
-## FMP configuration
-
-FMP is called only by FastAPI. React never receives the API key.
-
-Configure the runtime or approved secret store using `backend/.env.example` as the field reference. The key is sent in the `apikey` request header, never in the URL, audit log, exception text, or report artifact.
-
-The key previously shared in chat must be rotated before live use.
+Development can set `DA_REPORT_SQLITE_PATH`; with it unset the API falls back to `da_report.sqlite` in the repository root, then `~/Downloads/da_report.sqlite`. Production sets `DA_REPORT_OBJECT_URL` to a short-lived TOS/S3-compatible presigned URL and must set `DA_REPORT_SQLITE_SHA256`. The API downloads to `DA_REPORT_CACHE_DIR` on ephemeral disk, enforces the size limit, verifies SHA-256, atomically renames the completed file, and opens SQLite with both `mode=ro` and `PRAGMA query_only=ON`. The object URL is never included in provider errors.
 
 Endpoints used:
 

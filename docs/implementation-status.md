@@ -22,7 +22,7 @@ Last verified: 2026-08-10
 - `3033-v2` Review editor with editable month-derived report and block titles, 12-column drag/resize, controlled TipTap rich text, server overlap/bounds validation, HTML sanitization, responsive stacking, and shared HTML/PDF/DOCX rendering. `3033-v1` remains version-isolated.
 - Physical-page navigation aligned to the canonical four-page output (`01`, `01`, `02`, `03`, `04`, with cross-page Footnotes at `01/03/04`), plus synchronized fund/date/report revision selection.
 - Final Analytics period and Portfolio Analysis ticker are bound to server-owned report identity; out-of-month Final Analytics observations are rejected before snapshot application.
-- FMP Stable server adapter with header-only secret handling, constituent/general scopes, report-month date filters, provider normalization, URL/hash deduplication, report-scoped candidates, and fail-closed error handling.
+- DA-Report SQLite adapter with read-only snapshot access, strict constituent-name matching, report-month date filters, provider normalization, URL/hash deduplication, report-scoped candidates, and fail-closed error handling. Marketaux remains available as an optional remote provider.
 - Historical Performance raw Total Return CSV and Final Analytics constituent/KPI CSV, including preview/diff/reasoned apply, explicit ratio scale, server calculations, and immutable input snapshots.
 - DA-Report-derived workbench tokens: local Inter/Roboto Mono, glass surfaces, restrained elevation, responsive filter bars, selected news states, and reduced-motion support.
 - Versioned MappingProfile persistence and administrator API; CSV/XLSX sheet/header scanning now reads field aliases, explicit units and approved unlabelled-column positions from the selected profile. Ambiguous or unknown formats stop in `NEEDS_MAPPING`, and duplicate Bloomberg return groups are recorded without double import.
@@ -44,7 +44,7 @@ Last verified: 2026-08-10
 - The output passes four-page A4 structural validation but does not meet the specification's recommended 0.5% pixel-difference target against the supplied reference PDF. The latest evidence manifest is generated under `artifacts/visual/latest/manifest.json`; current page differences remain materially above the target.
 - Formal Marketing, Business, Data Steward, Security, and UAT approvals are external gates and have not been claimed.
 - The business-approved full CSOP listed-fund CSV has not been supplied. The production catalog therefore contains only the confirmed 3033 baseline; test-only products are never seeded by migrations.
-- A rotated FMP key has not been injected into the development runtime, so live FMP coverage for Hong Kong tickers remains unverified. Automated provider tests use an HTTP mock and no real credential.
+- The FMP adapter was removed; DA-Report is the default provider and Marketaux is the only remaining remote vendor. Automated provider tests use an HTTP mock and no real credential.
 - Review v2 currently supports rich-text blocks, creation/deletion, drag and resize. Dedicated image/data-table block property editors, bilingual block editing, undo/redo history, and DOCX fidelity for complex staggered rows remain incomplete.
 - Production CDB views, the formal report-date 112-subindustry HSICS file, complete KPI/calendar/event feeds, and TOS credentials/object publication remain environment inputs. The code fails closed or marks QA blocked rather than copying facts from the PDF.
 

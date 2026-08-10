@@ -1,9 +1,9 @@
 """Provider-neutral news fetching.
 
-The report route used to import ``app.integrations.fmp`` directly, so FMP was the only source a report
-could ever draw from and its error class was the only failure the route knew how to render. Providers
-now register a spec here and the caller selects one by key; every adapter raises ``NewsProviderError``
-and returns the same normalized candidate shape, so nothing downstream knows which vendor answered.
+Providers register a spec here and the caller selects one by key; every adapter raises
+``NewsProviderError`` and returns the same normalized candidate shape, so nothing downstream knows
+which source answered. ``DA_REPORT`` reads the approved local snapshot and is the default; remote
+vendors are opt-in and only reachable when their credential is present.
 """
 
 from __future__ import annotations
@@ -42,24 +42,6 @@ class NewsProviderSpec:
 
 
 REGISTRY: dict[str, NewsProviderSpec] = {
-    "FMP": NewsProviderSpec(
-        key="FMP",
-        title="Financial Modeling Prep",
-        description="Stock and general market news, filtered by ticker and date window.",
-        module="app.integrations.fmp",
-        secret_setting="fmp_api_key",
-        auth_style="HEADER",
-    ),
-    "MARKETAUX": NewsProviderSpec(
-        key="MARKETAUX",
-        title="Marketaux",
-        description="Global equity news with per-article entity tagging, including Hong Kong listings.",
-        module="app.integrations.marketaux",
-        secret_setting="marketaux_api_key",
-        # Marketaux has no header auth: `api_token` is a query parameter or nothing. See
-        # docs/fmp-news-and-data-imports.md for the deviation and how the key is kept out of logs.
-        auth_style="QUERY",
-    ),
     "DA_REPORT": NewsProviderSpec(
         key="DA_REPORT",
         title="DA-Report",
@@ -69,9 +51,19 @@ REGISTRY: dict[str, NewsProviderSpec] = {
         auth_style="NONE",
         needs_constituent_context=True,
     ),
+    "MARKETAUX": NewsProviderSpec(
+        key="MARKETAUX",
+        title="Marketaux",
+        description="Global equity news with per-article entity tagging, including Hong Kong listings.",
+        module="app.integrations.marketaux",
+        secret_setting="marketaux_api_key",
+        # Marketaux has no header auth: `api_token` is a query parameter or nothing. See
+        # docs/news-sources-and-data-imports.md for the deviation and how the key is kept out of logs.
+        auth_style="QUERY",
+    ),
 }
 
-DEFAULT_PROVIDER = "FMP"
+DEFAULT_PROVIDER = "DA_REPORT"
 
 
 def get_spec(key: str | None) -> NewsProviderSpec:

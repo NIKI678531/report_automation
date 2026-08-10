@@ -47,7 +47,7 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
 - `app/core/config.py` — `Settings` (plain Pydantic `BaseModel` reading `os.getenv`, with
   `load_dotenv(backend/.env, override=False)` so the real process environment always wins).
   Key fields: `database_url`, `api_prefix`, `template_version`, `auth_mode`, `task_mode`,
-  `download_secret`, `fmp_*`. `output_root` resolves to `var/output`.
+  `download_secret`, `da_report_*`, `marketaux_*`. `output_root` resolves to `var/output`.
 - `app/core/database.py` — engine/session. `app/core/security.py` — `Principal` + `AuthorizationMiddleware`
   (role from `X-User-Role` in LOCAL mode; bearer required in `ENTRA` mode; VIEWER is read-only; finalize
   requires REVIEWER/ADMIN). `app/core/storage.py` — object-storage port with HMAC-signed, TTL-bound downloads.
@@ -55,8 +55,8 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   - `models.py` SQLAlchemy ORM · `schemas.py` Pydantic request/response · `service.py` orchestration ·
     `calculation.py` pure deterministic metric functions · `document.py` the `ReportDocument` content model ·
     `imports.py` CSV/XLSX parsing, validation and diff · `products.py` effective-dated product catalog.
-- `app/integrations/` — external adapters behind stable interfaces (currently `fmp.py`, header-only secrets,
-  fail-closed on provider error).
+- `app/integrations/` — external adapters behind stable interfaces (`da_report.py` reads the approved
+  read-only SQLite snapshot, `marketaux.py` is the optional remote vendor; both fail closed).
 - `app/rendering/` — `html.py` canonical HTML, `artifacts.py` PDF/DOCX products + checksum,
   `visual_qa.py` structural page checks, `templates/*.j2`, `tokens/3033-v*.json`, `static/`.
 - `app/worker.py` — Celery app and `dispatch_render`, which honours `TASK_MODE`.

@@ -109,18 +109,16 @@ def test_fetch_fails_closed_when_the_secret_is_not_configured(monkeypatch):
 
 
 def test_registry_reports_which_providers_hold_a_credential(client, monkeypatch):
-    monkeypatch.setattr(settings, "fmp_api_key", "fmp-secret")
-    monkeypatch.setattr(settings, "marketaux_api_key", None)
+    monkeypatch.setattr(settings, "marketaux_api_key", "marketaux-secret")
     monkeypatch.setattr(settings, "da_report_sqlite_path", None)
     response = client.get("/api/v1/news/providers")
     assert response.status_code == 200, response.text
     by_key = {item["key"]: item for item in response.json()}
-    assert set(by_key) == {"FMP", "MARKETAUX", "DA_REPORT"}
-    assert by_key["FMP"]["configured"] is True
-    assert by_key["MARKETAUX"]["configured"] is False
+    assert set(by_key) == {"MARKETAUX", "DA_REPORT"}
+    assert by_key["MARKETAUX"]["configured"] is True
     assert by_key["DA_REPORT"]["configured"] is False
     # Only the boolean is exposed; the credential itself never leaves the process.
-    assert "fmp-secret" not in response.text
+    assert "marketaux-secret" not in response.text
 
 
 def prepare(client):
@@ -154,20 +152,20 @@ def test_report_fetch_dispatches_to_the_named_provider(client, monkeypatch):
 
 
 def test_omitting_the_provider_keeps_the_configured_default(client, monkeypatch):
-    """Existing clients send no provider field and must keep reaching FMP."""
+    """Existing clients send no provider field and must keep reaching the configured default."""
     called = {}
 
     async def fake_fetch(scope, symbols, from_date, to_date, page, limit):
-        called["provider"] = "FMP"
+        called["provider"] = "MARKETAUX"
         return []
 
-    monkeypatch.setattr("app.integrations.fmp.fetch_news", fake_fetch)
-    monkeypatch.setattr(settings, "news_provider", "FMP")
+    monkeypatch.setattr("app.integrations.marketaux.fetch_news", fake_fetch)
+    monkeypatch.setattr(settings, "news_provider", "MARKETAUX")
     report = prepare(client)
     response = client.post(f"/api/v1/reports/{report['id']}/news/candidates/fetch", json={"scope": "CONSTITUENTS"})
     assert response.status_code == 200, response.text
-    assert response.json()["provider"] == "FMP"
-    assert called["provider"] == "FMP"
+    assert response.json()["provider"] == "MARKETAUX"
+    assert called["provider"] == "MARKETAUX"
 
 
 def test_an_unknown_provider_is_rejected_before_any_call_is_made(client):
@@ -179,4 +177,4 @@ def test_an_unknown_provider_is_rejected_before_any_call_is_made(client):
 
 def test_provider_key_selection_is_case_insensitive():
     assert news.get_spec("marketaux").key == "MARKETAUX"
-    assert news.get_spec(None).key == (settings.news_provider or "FMP").upper()
+    assert news.get_spec(None).key == (settings.news_provider or "DA_REPORT").upper()

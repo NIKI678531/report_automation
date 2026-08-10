@@ -12,15 +12,9 @@ type SortOrder = "newest" | "oldest";
 export interface Draft extends NewsSelectionDraft { title: string; summary: string; source: string; publishedAt: string; ticker: string | null; }
 
 const HKT = "Asia/Hong_Kong";
-export const FMP_SOURCE_FILTER = "provider:FMP";
-
-export function providerFromSourceFilter(value: string): string | undefined {
-  return value === FMP_SOURCE_FILTER ? "FMP" : undefined;
-}
 
 export function matchesNewsSource(item: NewsCandidate, sourceFilter: string): boolean {
-  const provider = providerFromSourceFilter(sourceFilter);
-  return !sourceFilter || (provider ? item.provider === provider : item.source_name === sourceFilter);
+  return !sourceFilter || item.source_name === sourceFilter;
 }
 
 interface AutoLoadState {
@@ -128,15 +122,9 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
   const [fromDate, setFromDate] = useState(initialWindow.fromDate);
   const [toDate, setToDate] = useState(initialWindow.toDate);
   const autoLoadKey = useRef<string | null>(null);
-  const frozenSnapshot = selectedSnapshot.filter((item) => !item.news_item_id);
-  const activeProvider = providers.find((item) => item.key === "DA_REPORT" && item.configured)
+  const refreshProvider = providers.find((item) => item.key === "DA_REPORT" && item.configured)
     ?? providers.find((item) => item.default && item.configured)
     ?? providers.find((item) => item.configured);
-  const fmpProvider = providers.find((item) => item.key === "FMP");
-  const sourceProvider = providerFromSourceFilter(source);
-  const refreshProvider = sourceProvider
-    ? providers.find((item) => item.key === sourceProvider && item.configured)
-    : activeProvider;
 
   const load = () => api.listReportNewsCandidates(report.id).then(setCandidates);
   useEffect(() => { setLoading(true); load().catch(() => setCandidates([])).finally(() => setLoading(false)); }, [report.id, version]);
@@ -175,11 +163,6 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
 
   const fetchFromProvider = (provider: string) => run(async () => { setLoading(true); try { await api.fetchNewsCandidates(report.id, "CONSTITUENTS", fromDate, toDate, provider); await load(); } finally { setLoading(false); } });
   const refresh = () => refreshProvider ? fetchFromProvider(refreshProvider.key) : Promise.resolve();
-  const changeSource = (nextSource: string) => {
-    setSource(nextSource);
-    const provider = providerFromSourceFilter(nextSource);
-    if (provider && !readOnly) void fetchFromProvider(provider);
-  };
   const addManual = (item: NewsCandidateInput) => run(async () => { await api.addNewsCandidate(report.id, item); setAdding(false); await load(); });
   const sources = useMemo(() => [...new Set(candidates.map((item) => item.source_name))].sort(), [candidates]);
   const sites = useMemo(() => [...new Set(candidates.map((item) => item.site).filter(Boolean) as string[])].sort(), [candidates]);
@@ -217,9 +200,8 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
 
       <div className="news-panel-filters">
         <button className="news-add-button" disabled={busy || readOnly} onClick={() => setAdding((open) => !open)}><Plus size={15} /> 添加新闻</button>
-        <select value={source} onChange={(event) => changeSource(event.target.value)} aria-label="Filter by source">
+        <select value={source} onChange={(event) => setSource(event.target.value)} aria-label="Filter by source">
           <option value="">全部来源 All sources</option>
-          <option value={FMP_SOURCE_FILTER} disabled={!fmpProvider?.configured || busy}>{fmpProvider?.configured ? "FMP" : "FMP（未配置）"}</option>
           {sources.map((item) => <option key={item}>{item}</option>)}
         </select>
         <select value={site} onChange={(event) => setSite(event.target.value)} aria-label="Filter by site"><option value="">全部站点 All sites</option>{sites.map((item) => <option key={item}>{item}</option>)}</select>
@@ -267,15 +249,14 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
     <section className="news-column">
       <header className="news-panel-head">
         <div className="news-panel-title"><h3>Selected for report</h3><span>已選新聞</span></div>
-        <div className="news-panel-count"><strong>{frozenSnapshot.length + selected.length}</strong></div>
+        <div className="news-panel-count"><strong>{selected.length}</strong></div>
         <button className="primary" disabled={busy || readOnly || !selected.length} onClick={save}><Save size={15} /> Save</button>
       </header>
       <DndContext collisionDetection={closestCenter} onDragEnd={dragEnd}>
         <SortableContext items={selected.map((item) => item.news_item_id)} strategy={verticalListSortingStrategy}>
           <div className="news-list">
-            {frozenSnapshot.map((item, index) => <article className="selected-news-card frozen" key={`${String(item.title)}-${index}`}><header><span>Existing report snapshot</span></header><strong>{String(item.title ?? "")}</strong><p>{String(item.summary ?? "")}</p></article>)}
             {selected.map((item) => <SortableSelected key={item.news_item_id} item={item} disabled={readOnly} onUpdate={(next) => setSelected((items) => items.map((value) => value.news_item_id === next.news_item_id ? next : value))} onRemove={() => setSelected((items) => items.filter((value) => value.news_item_id !== item.news_item_id))} />)}
-            {!frozenSnapshot.length && !selected.length && <div className="news-empty"><Check size={20} /><strong>No news selected</strong><span>Tick candidates on the left to build page 2.</span></div>}
+            {!selected.length && <div className="news-empty"><Check size={20} /><strong>No news selected</strong><span>Tick candidates on the left to build page 2.</span></div>}
           </div>
         </SortableContext>
       </DndContext>

@@ -16,10 +16,10 @@ describe("FastAPI client", () => {
     fetchMock.mockRestore();
   });
 
-  it("requests constituent news from FMP for the selected date window", async () => {
-    const payload = { provider: "FMP", fetched: 0, created: 0, items: [] };
+  it("requests constituent news from the named provider for the selected date window", async () => {
+    const payload = { provider: "DA_REPORT", fetched: 0, created: 0, items: [] };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
-    await api.fetchNewsCandidates("r1", "CONSTITUENTS", "2026-08-01", "2026-08-10", "FMP");
+    await api.fetchNewsCandidates("r1", "CONSTITUENTS", "2026-08-01", "2026-08-10", "DA_REPORT");
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/news/candidates/fetch", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({
@@ -28,7 +28,7 @@ describe("FastAPI client", () => {
         to_date: "2026-08-10",
         page: 0,
         limit: 100,
-        provider: "FMP",
+        provider: "DA_REPORT",
         ensure: false,
       }),
     }));
