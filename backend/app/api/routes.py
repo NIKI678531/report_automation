@@ -527,21 +527,33 @@ async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db:
         raise HTTPException(status_code=422, detail={"error_code": "NEWS_DATE_RANGE_INVALID", "message": "News dates must be ordered and cannot exceed the report date."})
     symbols: list[str] = []
     constituents: list[dict] = []
+    try:
+        provider_key = get_spec(command.provider).key
+    except NewsProviderError as error:
+        raise HTTPException(status_code=error.http_status, detail={"error_code": error.code, "message": error.message, "retryable": error.retryable}) from error
+    context_snapshot = service.resolve_news_constituent_snapshot(db, report)
+    if not context_snapshot and command.ensure:
+        return {
+            "provider": provider_key,
+            "fetched": 0,
+            "created": 0,
+            "ensured": False,
+            "skip_reason": "CONSTITUENT_SNAPSHOT_UNAVAILABLE" if command.scope == "CONSTITUENTS" else "SNAPSHOT_UNAVAILABLE",
+            "items": [],
+        }
     if command.scope == "CONSTITUENTS":
-        if not report.active_snapshot_id:
+        if not context_snapshot:
             raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED", "message": "Constituent news requires an active snapshot."})
-        snapshot = db.get(DataSnapshot, report.active_snapshot_id)
-        if not snapshot or snapshot.status.value != "VALID":
+        if context_snapshot.status.value != "VALID":
             raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_NOT_VALID", "message": "Constituent news requires a valid active snapshot."})
-        constituents = list(snapshot.payload.get("constituents", []))
+        constituents = list(context_snapshot.payload.get("constituents", []))
         symbols = sorted({str(row.get("ticker", "")).upper() for row in constituents if row.get("ticker")})
         if not symbols:
             raise HTTPException(status_code=422, detail={"error_code": "CONSTITUENT_TICKERS_REQUIRED"})
     fetch_run = None
     try:
-        provider_key = get_spec(command.provider).key
         if command.ensure:
-            existing_items = service.list_report_news_candidates(db, report.id)
+            existing_items = service.list_news_candidates_for_report_context(db, report)
             if existing_items:
                 return {
                     "provider": provider_key,
@@ -553,7 +565,7 @@ async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db:
                 }
             fetch_run = db.scalar(select(NewsFetchRun).where(
                 NewsFetchRun.report_id == report.id,
-                NewsFetchRun.snapshot_id == report.active_snapshot_id,
+                NewsFetchRun.snapshot_id == context_snapshot.id,
                 NewsFetchRun.provider == provider_key,
                 NewsFetchRun.scope == command.scope,
                 NewsFetchRun.from_date == from_date,
@@ -571,7 +583,7 @@ async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db:
             if fetch_run is None:
                 fetch_run = NewsFetchRun(
                     report_id=report.id,
-                    snapshot_id=report.active_snapshot_id or "",
+                    snapshot_id=context_snapshot.id,
                     provider=provider_key,
                     scope=command.scope,
                     from_date=from_date,
@@ -619,8 +631,8 @@ def report_news_candidates(
     symbol: str | None = None,
     importance: str | None = None,
 ) -> list[NewsItem]:
-    service.get_report(db, report_id)
-    items = service.list_report_news_candidates(db, report_id)
+    report = service.get_report(db, report_id)
+    items = service.list_news_candidates_for_report_context(db, report)
     if query:
         needle = query.casefold()
         items = [item for item in items if needle in f"{item.title} {item.summary} {item.ticker or ''}".casefold()]

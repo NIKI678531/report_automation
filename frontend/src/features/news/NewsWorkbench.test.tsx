@@ -9,7 +9,6 @@ import {
 import type { NewsCandidate } from "../../api";
 
 const ready = {
-  activeSnapshotId: "snapshot-1",
   busy: false,
   candidateCount: 0,
   daConfigured: true,
@@ -19,13 +18,12 @@ const ready = {
 };
 
 describe("DA-Report automatic news loading", () => {
-  it("loads once when a mutable report has a snapshot and no candidates", () => {
+  it("loads once when a mutable report has no candidates", () => {
     expect(shouldAutoLoadDaNews(ready)).toBe(true);
     expect(shouldAutoLoadDaNews({ ...ready, attempted: true })).toBe(false);
   });
 
-  it("does not load without a snapshot, provider, or empty candidate list", () => {
-    expect(shouldAutoLoadDaNews({ ...ready, activeSnapshotId: null })).toBe(false);
+  it("does not load without a provider or empty candidate list", () => {
     expect(shouldAutoLoadDaNews({ ...ready, daConfigured: false })).toBe(false);
     expect(shouldAutoLoadDaNews({ ...ready, candidateCount: 1 })).toBe(false);
     expect(shouldAutoLoadDaNews({ ...ready, readOnly: true })).toBe(false);

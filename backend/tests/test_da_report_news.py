@@ -124,6 +124,75 @@ def test_report_fetch_dispatches_da_report_with_active_constituents(client, tmp_
     assert repeated.json()["fetched"] == 0
 
 
+def test_draft_lists_candidates_from_same_product_and_report_month(client, tmp_path, monkeypatch):
+    database = tmp_path / "da-report.sqlite"
+    build_da_snapshot(database)
+    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
+    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
+    data_ready = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+    snapshot = client.post(
+        f"/api/v1/reports/{data_ready['id']}/snapshots",
+        json={"source_policy": "GOLDEN_FIXTURE"},
+    )
+    assert snapshot.status_code == 201, snapshot.text
+    fetched = client.post(
+        f"/api/v1/reports/{data_ready['id']}/news/candidates/fetch",
+        json={"scope": "CONSTITUENTS", "provider": "DA_REPORT", "ensure": True},
+    )
+    assert fetched.status_code == 200, fetched.text
+    draft = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+
+    candidates = client.get(f"/api/v1/reports/{draft['id']}/news/candidates")
+
+    assert candidates.status_code == 200, candidates.text
+    assert [item["title"] for item in candidates.json()] == ["Tencent raises its outlook"]
+
+
+def test_draft_ensures_candidates_with_same_context_valid_snapshot(client, tmp_path, monkeypatch):
+    database = tmp_path / "da-report.sqlite"
+    build_da_snapshot(database)
+    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
+    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
+    data_ready = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+    snapshot = client.post(
+        f"/api/v1/reports/{data_ready['id']}/snapshots",
+        json={"source_policy": "GOLDEN_FIXTURE"},
+    )
+    assert snapshot.status_code == 201, snapshot.text
+    draft = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+
+    fetched = client.post(
+        f"/api/v1/reports/{draft['id']}/news/candidates/fetch",
+        json={"scope": "CONSTITUENTS", "provider": "DA_REPORT", "ensure": True},
+    )
+
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["created"] == 1
+    assert fetched.json()["items"][0]["title"] == "Tencent raises its outlook"
+    unchanged = client.get(f"/api/v1/reports/{draft['id']}").json()
+    assert unchanged["status"] == "DRAFT"
+    assert unchanged["active_snapshot_id"] is None
+
+
+def test_draft_auto_ensure_without_context_is_quiet_but_manual_fetch_is_blocked(client):
+    draft = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+
+    ensured = client.post(
+        f"/api/v1/reports/{draft['id']}/news/candidates/fetch",
+        json={"scope": "CONSTITUENTS", "provider": "DA_REPORT", "ensure": True},
+    )
+    manual = client.post(
+        f"/api/v1/reports/{draft['id']}/news/candidates/fetch",
+        json={"scope": "CONSTITUENTS", "provider": "DA_REPORT"},
+    )
+
+    assert ensured.status_code == 200, ensured.text
+    assert ensured.json()["skip_reason"] == "CONSTITUENT_SNAPSHOT_UNAVAILABLE"
+    assert ensured.json()["items"] == []
+    assert manual.status_code == 422, manual.text
+    assert manual.json()["error_code"] == "SNAPSHOT_REQUIRED"
+
+
 def test_object_snapshot_is_downloaded_atomically_to_ephemeral_cache(tmp_path, monkeypatch):
     source = tmp_path / "source.sqlite"
     build_da_snapshot(source)
