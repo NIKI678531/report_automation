@@ -18,7 +18,6 @@ export function matchesNewsSource(item: NewsCandidate, sourceFilter: string): bo
 }
 
 interface AutoLoadState {
-  activeSnapshotId: string | null;
   busy: boolean;
   candidateCount: number;
   daConfigured: boolean;
@@ -28,8 +27,7 @@ interface AutoLoadState {
 }
 
 export function shouldAutoLoadDaNews(state: AutoLoadState): boolean {
-  return Boolean(state.activeSnapshotId)
-    && !state.busy
+  return !state.busy
     && !state.loading
     && !state.readOnly
     && state.daConfigured
@@ -140,7 +138,6 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
     const key = `${report.id}:${report.active_snapshot_id ?? "none"}`;
     const daConfigured = providers.some((item) => item.key === "DA_REPORT" && item.configured);
     if (!shouldAutoLoadDaNews({
-      activeSnapshotId: report.active_snapshot_id,
       busy,
       candidateCount: candidates.length,
       daConfigured,

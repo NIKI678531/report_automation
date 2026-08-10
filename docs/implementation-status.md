@@ -22,7 +22,7 @@ Last verified: 2026-08-10
 - `3033-v2` Review editor with editable month-derived report and block titles, 12-column drag/resize, controlled TipTap rich text, server overlap/bounds validation, HTML sanitization, responsive stacking, and shared HTML/PDF/DOCX rendering. `3033-v1` remains version-isolated.
 - Physical-page navigation aligned to the canonical four-page output (`01`, `01`, `02`, `03`, `04`, with cross-page Footnotes at `01/03/04`), plus synchronized fund/date/report revision selection.
 - Final Analytics period and Portfolio Analysis ticker are bound to server-owned report identity; out-of-month Final Analytics observations are rejected before snapshot application.
-- DA-Report SQLite adapter with read-only snapshot access, strict constituent-name matching, report-month date filters, provider normalization, URL/hash deduplication, report-scoped candidates, and fail-closed error handling. Marketaux remains available as an optional remote provider.
+- DA-Report SQLite adapter with read-only snapshot access, strict constituent-name matching, report-month date filters, provider normalization, URL/hash deduplication, product/report-date candidate sharing with report-specific manual items and selections, and fail-closed manual refresh handling. Marketaux remains available as an optional remote provider.
 - Historical Performance raw Total Return CSV and Final Analytics constituent/KPI CSV, including preview/diff/reasoned apply, explicit ratio scale, server calculations, and immutable input snapshots.
 - DA-Report-derived workbench tokens: local Inter/Roboto Mono, glass surfaces, restrained elevation, responsive filter bars, selected news states, and reduced-motion support.
 - Versioned MappingProfile persistence and administrator API; CSV/XLSX sheet/header scanning now reads field aliases, explicit units and approved unlabelled-column positions from the selected profile. Ambiguous or unknown formats stop in `NEEDS_MAPPING`, and duplicate Bloomberg return groups are recorded without double import.
@@ -30,7 +30,7 @@ Last verified: 2026-08-10
 - Effective-dated HSICS master CSV import with 2/4/6 digit code restoration, hierarchy/effective-range validation and report-date constituent mapping. Non-fixture finalization requires a bound HSICS dataset.
 - Final Analytics trading-calendar and index-event records, report-date AUM validation, 95% daily-turnover coverage gate, and authoritative next rebalancing selection.
 - Product configuration now separates the constituent index (`HSTECH`) from the official return benchmark instrument (`HSTECHN`).
-- DA-Report SQLite provider with strict current-constituent title matching, report candidate relations, persisted ensure idempotency, local read-only mode, and checksum-verified TOS presigned-object materialization to ephemeral disk. Company News automatically loads candidates once without auto-selecting them.
+- DA-Report SQLite provider with strict current-context constituent title matching, report candidate relations, persisted ensure idempotency, local read-only mode, and checksum-verified TOS presigned-object materialization to ephemeral disk. Company News automatically loads candidates once for every mutable draft, reusing an exact product/report-date candidate context without auto-selecting items.
 - V2.1 lifecycle states, calculation-before-finalize gating, QC-008 AI number binding, dynamic lineage footnotes, and canonical cross-format content manifests for QC-010 comparison.
 
 ## Incomplete or environment-dependent

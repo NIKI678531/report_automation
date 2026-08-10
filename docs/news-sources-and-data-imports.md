@@ -23,7 +23,7 @@ Each provider gets its own audit action, derived from the key: `news.da_report_f
 
 ## DA-Report configuration
 
-Company News automatically ensures DA-Report candidates once when a mutable report has a valid active snapshot and no candidates. The window is the report month. It never auto-selects items into the report.
+Company News automatically ensures DA-Report candidates once when a mutable report has no candidates. The window is the report month. Candidates are shared only across reports with the same product code and report date; manual candidates and saved selections remain report-specific. A draft without its own snapshot may use the newest valid snapshot from that exact context for constituent matching without changing the draft's status or `active_snapshot_id`. If no valid context snapshot exists, automatic ensure returns an empty result without raising; manual Refresh still reports the missing snapshot. Automatic loading never selects items into the report.
 
 DA-Report has no news-to-security or news-to-product relation. `category=Corporate` means an item passed a regional holding check somewhere upstream; it does **not** prove that the item belongs to the current fund. This adapter therefore requires a unique title match against the active snapshot's controlled English/Traditional Chinese constituent names. Summary-only, ambiguous and unmatched items are excluded from automatic candidates.
 
@@ -34,7 +34,7 @@ Endpoints used:
 - Constituent candidates: `GET /stable/news/stock`
 - General candidates: `GET /stable/news/general-latest`
 
-The report API derives constituent symbols from the active snapshot. General news is fetched only after the user selects the General scope. The default date range is the report month. Only title, snippet, source, URL, image URL, symbol, publication time, fetch evidence, and matching metadata are retained.
+The report API derives constituent symbols from the report's active snapshot, or for a snapshot-less draft from the newest valid snapshot with the same product code and report date. General news is fetched only after the user selects the General scope. The default date range is the report month. Only title, snippet, source, URL, image URL, symbol, publication time, fetch evidence, and matching metadata are retained.
 
 ## Marketaux configuration
 

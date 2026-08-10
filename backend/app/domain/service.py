@@ -641,6 +641,47 @@ def list_report_news_candidates(db: Session, report_id: str) -> list[NewsItem]:
     return sorted([*related, *legacy], key=lambda item: item.published_at, reverse=True)
 
 
+def list_news_candidates_for_report_context(db: Session, report: Report) -> list[NewsItem]:
+    context_report_ids = set(db.scalars(
+        select(Report.id).where(
+            Report.product_code == report.product_code,
+            Report.report_date == report.report_date,
+        )
+    ))
+    rows = db.execute(
+        select(NewsItem, ReportNewsCandidate.report_id, ReportNewsCandidate.provider)
+        .join(ReportNewsCandidate, ReportNewsCandidate.news_item_id == NewsItem.id)
+        .where(ReportNewsCandidate.report_id.in_(context_report_ids))
+        .order_by(NewsItem.published_at.desc())
+    )
+    items: dict[str, NewsItem] = {}
+    for item, candidate_report_id, provider in rows:
+        if candidate_report_id == report.id or provider != "MANUAL":
+            items[item.id] = item
+    for item in db.scalars(select(NewsItem).order_by(NewsItem.published_at.desc())):
+        metadata = item.metadata_json or {}
+        linked_report_ids = set(metadata.get("report_ids", []))
+        if item.id not in items and linked_report_ids.intersection(context_report_ids):
+            if linked_report_ids == {report.id} or metadata.get("provider") != "MANUAL":
+                items[item.id] = item
+    return sorted(items.values(), key=lambda item: item.published_at, reverse=True)
+
+
+def resolve_news_constituent_snapshot(db: Session, report: Report) -> DataSnapshot | None:
+    if report.active_snapshot_id:
+        return db.get(DataSnapshot, report.active_snapshot_id)
+    return db.scalar(
+        select(DataSnapshot)
+        .join(Report, Report.id == DataSnapshot.report_id)
+        .where(
+            Report.product_code == report.product_code,
+            Report.report_date == report.report_date,
+            DataSnapshot.status == SnapshotStatus.VALID,
+        )
+        .order_by(DataSnapshot.created_at.desc())
+    )
+
+
 def create_report(db: Session, command: ReportCreate, request_id: str) -> Report:
     product = resolve_product(db, command.product_code, command.report_date)
     report = Report(
