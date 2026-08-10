@@ -104,7 +104,7 @@
 </section>
 
 <section class="report-page" data-page="3" data-section-key="constituents">
-  {{ chrome(3) }}<main class="page-body"><h2 class="center constituent-title">The Performance of {{ report.benchmark_code }} Constituents</h2><p class="center">(*Next Rebalancing Date: {{ doc.next_rebalancing_date|default('N/A', true) }})</p>
+  {{ chrome(3) }}<main class="page-body"><h2 class="center constituent-title">The Performance of {{ report.constituent_index_code|default(report.benchmark_code, true) }} Constituents</h2><p class="center">(*Next Rebalancing Date: {{ doc.next_rebalancing_date|default('N/A', true) }})</p>
   <table class="constituents"><colgroup><col style="width:6%"><col style="width:17%"><col style="width:12%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:14%"></colgroup><thead><tr><th>Stock<br>Code</th><th>Stock Name</th><th>Closing Price<br>(HKD)</th><th>Weighting<br>(%)</th><th>1-month<br>return (%)</th><th>3-month<br>return (%)</th><th>6-month<br>return (%)</th><th>YTD return<br>(%)</th></tr></thead><tbody>{% for row in sections.constituents %}<tr><td class="code">{{ row.security_code }}</td><td class="name">{{ row.name_en }}</td><td>{{ row.close_price|price }}</td><td>{{ row.weight|pct }}</td><td>{{ row.return_1m|pct }}</td><td>{{ row.return_3m|pct }}</td><td>{{ row.return_6m|pct }}</td><td>{{ row.return_ytd|pct }}</td></tr>{% endfor %}</tbody></table></main><div class="footnote">{{ sections.footnotes.constituents|default('') }}</div>
 </section>
 

@@ -25,6 +25,10 @@ services:
       NEWS_PROVIDER: ${NEWS_PROVIDER:-FMP}
       MARKETAUX_API_KEY: ${MARKETAUX_API_KEY:-}
       MARKETAUX_BASE_URL: ${MARKETAUX_BASE_URL:-https://api.marketaux.com/v1}
+      DA_REPORT_SQLITE_PATH: ${DA_REPORT_SQLITE_PATH:-}
+      DA_REPORT_SQLITE_SHA256: ${DA_REPORT_SQLITE_SHA256:-}
+      DA_REPORT_OBJECT_URL: ${DA_REPORT_OBJECT_URL:-}
+      DA_REPORT_CACHE_DIR: /tmp/commentary-da
     volumes: ["./var/output:/app/var/output"]
     depends_on: { db: { condition: service_healthy }, redis: { condition: service_started } }
   worker:

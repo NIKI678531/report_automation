@@ -20,13 +20,15 @@ def stable_rank(rows: Iterable[dict], key: str, descending: bool = True) -> list
 
 
 def sector_breakdown(rows: Iterable[dict]) -> list[dict]:
-    totals: dict[str, Decimal] = {}
+    totals: dict[tuple[str, str], Decimal] = {}
     for row in rows:
-        sector = row.get("sector")
-        if not sector:
+        code = str(row.get("effective_industry_code") or row.get("sector") or "")
+        label = str(row.get("effective_industry_name") or row.get("sector") or "")
+        if not code or not label:
             raise ValueError(f"missing sector mapping for {row.get('security_code')}")
-        totals[sector] = totals.get(sector, Decimal("0")) + Decimal(str(row["weight"]))
-    return [{"sector": key, "weight": float(value)} for key, value in sorted(totals.items())]
+        key = (code, label)
+        totals[key] = totals.get(key, Decimal("0")) + Decimal(str(row["weight"]))
+    return [{"code": key[0], "sector": key[1], "weight": str(value)} for key, value in sorted(totals.items())]
 
 
 def quality_checks(payload: dict, expected_constituent_count: int | None = None) -> list[dict]:
@@ -34,30 +36,186 @@ def quality_checks(payload: dict, expected_constituent_count: int | None = None)
     results: list[dict] = []
     codes = [str(row.get("security_code", "")) for row in rows]
     weight = sum((Decimal(str(row.get("weight", 0))) for row in rows), Decimal("0"))
-    checks: list[tuple[str, bool, object, str]] = [
-        ("QC-001", len(codes) == len(set(codes)), len(codes), "Security codes must be unique."),
-        ("QC-002", abs(weight - Decimal("1")) <= Decimal("0.0001"), float(weight), "Weights must total 100% ± 0.01 percentage points."),
+    checks: list[dict] = [
+        {
+            "check_id": "QC-001",
+            "passed": bool(codes) and all(codes) and len(codes) == len(set(codes)),
+            "actual": len(codes),
+            "threshold": "index_code + as_of_date + security_code unique",
+            "fix_hint": "Security codes must be present and unique within the effective constituent snapshot.",
+        },
+        {
+            "check_id": "QC-002",
+            "passed": abs(weight - Decimal("1")) <= Decimal("0.0001"),
+            "actual": str(weight),
+            "threshold": "1.0000 ± 0.0001",
+            "fix_hint": "Weights must total 100% ± 0.01 percentage points before rounding.",
+        },
+        {
+            "check_id": "QC-003",
+            "passed": all(row.get("effective_industry_code") or row.get("sector") for row in rows),
+            "actual": sum(1 for row in rows if not (row.get("effective_industry_code") or row.get("sector"))),
+            "threshold": 0,
+            "fix_hint": "Every constituent requires a report-date-effective industry mapping.",
+        },
     ]
+
+    as_of_value = payload.get("as_of_date")
+    dated_rows = [str(row.get("as_of_date")) for row in rows if row.get("as_of_date")]
+    dates_consistent = not as_of_value or all(value <= str(as_of_value) for value in dated_rows)
+    checks.append({
+        "check_id": "QC-004",
+        "passed": dates_consistent,
+        "actual": {"snapshot_as_of": as_of_value, "row_dates": sorted(set(dated_rows))},
+        "threshold": "all business dates <= snapshot as_of date",
+        "fix_hint": "Use records whose business date is not later than the report snapshot date.",
+    })
+
+    series = payload.get("total_return_series", [])
+    history = payload.get("historical_performance", {}).get("rows", [])
+    if series or history:
+        series_types = {str(row.get("series_type", "")).replace("_", " ").upper() for row in series}
+        currencies = {str(row.get("currency", "")).upper() for row in series if row.get("currency")}
+        return_basis_valid = not series or (series_types == {"TOTAL RETURN"} and len(currencies) <= 1)
+        checks.append({
+            "check_id": "QC-005",
+            "passed": return_basis_valid,
+            "actual": {
+                "source": "TOTAL_RETURN_SERIES" if series else "APPROVED_PERIOD_RETURN",
+                "series_types": sorted(series_types),
+                "currencies": sorted(currencies),
+            },
+            "threshold": "Total Return with comparable currency definition",
+            "fix_hint": "Use official Total Return data, or an explicitly approved period-return dataset with lineage.",
+        })
+        period_fields = ("return_1m", "return_3m", "return_6m", "return_ytd")
+        complete = bool(history) and all(all(row.get(field) is not None for field in period_fields) for row in history)
+        checks.append({
+            "check_id": "QC-006",
+            "passed": complete,
+            "actual": {field: sum(1 for row in history if row.get(field) is not None) for field in period_fields},
+            "threshold": {field: len(history) for field in period_fields},
+            "fix_hint": "Each required period needs valid common endpoints; preserve N/A rather than substituting zero.",
+        })
+
+    footnotes = payload.get("footnotes")
+    if footnotes:
+        required_footnotes = {"historical", "constituents", "analytics"}
+        missing_footnotes = sorted(key for key in required_footnotes if not footnotes.get(key))
+        checks.append({
+            "check_id": "QC-007",
+            "passed": not missing_footnotes,
+            "actual": {"missing": missing_footnotes},
+            "threshold": {"required": sorted(required_footnotes)},
+            "fix_hint": "Generate each data footnote from the effective source, date, period and formula lineage.",
+        })
+
+    fund_kpis = payload.get("fund_kpis", [])
+    if fund_kpis:
+        as_of_date = str(payload.get("as_of_date") or "")
+        aum_rows = [
+            row for row in fund_kpis
+            if row.get("metric_code") == "AUM" and str(row.get("metric_date")) == as_of_date
+        ]
+        aum_valid = len(aum_rows) == 1 and bool(aum_rows[0].get("currency")) and bool(aum_rows[0].get("unit"))
+        checks.append({
+            "check_id": "KPI-001",
+            "passed": aum_valid,
+            "actual": {"matching_rows": len(aum_rows), "as_of_date": as_of_date},
+            "threshold": "exactly one report-date AUM row with currency and unit",
+            "fix_hint": "Provide one AUM observation on the report effective date with explicit currency and unit.",
+        })
+        calendar = payload.get("trading_calendar", [])
+        expected_days = {
+            str(row.get("date")) for row in calendar
+            if row.get("is_trading_day") is True
+        }
+        observed_days = {
+            str(row.get("metric_date")) for row in fund_kpis
+            if row.get("metric_code") == "DAILY_TURNOVER" and str(row.get("metric_date")) in expected_days
+        }
+        coverage = Decimal(len(observed_days)) / Decimal(len(expected_days)) if expected_days else Decimal("0")
+        checks.append({
+            "check_id": "KPI-002",
+            "passed": bool(expected_days) and coverage >= Decimal("0.95"),
+            "actual": {
+                "observed_days": len(observed_days),
+                "expected_days": len(expected_days),
+                "coverage": str(coverage),
+            },
+            "threshold": "coverage >= 0.95",
+            "fix_hint": "Load the authoritative trading calendar and unique daily turnover observations covering at least 95% of trading days.",
+        })
+
     if expected_constituent_count is not None:
-        checks.append((
-            "QC-003",
-            len(rows) == expected_constituent_count,
-            len(rows),
-            f"The selected product profile requires exactly {expected_constituent_count} constituents.",
-        ))
-    checks.append(("QC-004", all(row.get("sector") for row in rows), sum(1 for row in rows if not row.get("sector")), "Every constituent requires an effective sector mapping."))
-    for check_id, passed, actual, hint in checks:
+        checks.append({
+            "check_id": "QC-HOLDING-COUNT",
+            "passed": len(rows) == expected_constituent_count,
+            "actual": len(rows),
+            "threshold": expected_constituent_count,
+            "severity": "WARNING",
+            "fix_hint": "Compare the actual positive-weight holding count with the product profile expectation.",
+        })
+    for item in checks:
         results.append({
-            "check_id": check_id,
-            "severity": "BLOCKING",
-            "status": "PASSED" if passed else "FAILED",
-            "actual": actual,
-            "fix_hint": hint,
+            "check_id": item["check_id"],
+            "severity": item.get("severity", "BLOCKING"),
+            "status": "PASSED" if item["passed"] else "FAILED",
+            "actual": item["actual"],
+            "threshold": item.get("threshold"),
+            "fix_hint": item["fix_hint"],
         })
     return results
 
 
 FORMULA_VERSION = "total-return-v1"
+
+
+def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[str, str]:
+    footnotes = dict(payload.get("footnotes") or {})
+    as_of_date = str(payload.get("as_of_date") or "")
+    series = payload.get("total_return_series", [])
+    periods = payload.get("historical_performance", {}).get("periods", {})
+    if series and periods:
+        sources = ", ".join(sorted({str(row.get("source")) for row in series if row.get("source")}))
+        period_labels = []
+        for field, label in (("return_1m", "1M"), ("return_3m", "3M"), ("return_6m", "6M"), ("return_ytd", "YTD")):
+            period = periods.get(field, {})
+            if period.get("period_start") and period.get("period_end"):
+                period_labels.append(f"{label} {period['period_start']} to {period['period_end']}")
+        footnotes["historical"] = f"Source: {sources}; official Total Return series. {'; '.join(period_labels)}."
+
+    datasets = payload.get("datasets", {})
+    constituent_sources = []
+    for dataset_type in ("index_constituents", "constituents", "final_analytics"):
+        source = datasets.get(dataset_type)
+        if isinstance(source, dict):
+            constituent_sources.append(str(source.get("filename") or source.get("import_id") or dataset_type))
+    if constituent_sources:
+        taxonomy = payload.get("industry_master") or {}
+        taxonomy_text = (
+            f" HSICS {taxonomy.get('version')}." if taxonomy.get("version") else ""
+        )
+        footnotes["constituents"] = (
+            f"Source: {', '.join(sorted(set(constituent_sources)))}; as of {as_of_date}."
+            f"{taxonomy_text} Prices, weights and returns retain their source units and periods."
+        )
+
+    fund_kpis = payload.get("fund_kpis", [])
+    if fund_kpis:
+        sources = ", ".join(sorted({str(row.get("source")) for row in fund_kpis if row.get("source")}))
+        metric_values = metrics or {}
+        observed = metric_values.get("turnover_observation_count", 0)
+        expected = metric_values.get("turnover_expected_day_count", 0)
+        coverage = metric_values.get("turnover_coverage")
+        coverage_text = f" turnover coverage {observed}/{expected} ({Decimal(str(coverage)) * Decimal('100'):.2f}%)" if coverage is not None else ""
+        taxonomy = payload.get("industry_master") or {}
+        taxonomy_text = f" Industry aggregation uses HSICS {taxonomy.get('version')}." if taxonomy.get("version") else ""
+        footnotes["analytics"] = (
+            f"Source: {sources}; AUM as of {as_of_date};{coverage_text}."
+            f"{taxonomy_text} Number of holdings counts unique positive-weight securities."
+        )
+    return footnotes
 
 
 def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
@@ -67,18 +225,30 @@ def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
         (row for row in rows if row.get("return_1m") is not None),
         key=lambda row: (-Decimal(str(row["return_1m"])), -Decimal(str(row["weight"])), str(row["security_code"])),
     )
-    bottom = sorted(
+    bottom_selected = sorted(
         (row for row in rows if row.get("return_1m") is not None),
         key=lambda row: (Decimal(str(row["return_1m"])), -Decimal(str(row["weight"])), str(row["security_code"])),
+    )[:3]
+    bottom_display = sorted(
+        bottom_selected,
+        key=lambda row: (-Decimal(str(row["return_1m"])), -Decimal(str(row["weight"])), str(row["security_code"])),
     )
     sectors = sector_breakdown(rows)
     fund_kpis = payload.get("fund_kpis", [])
     if fund_kpis:
-        aum_rows = sorted((row for row in fund_kpis if row.get("metric_code") == "AUM"), key=lambda row: row["metric_date"])
-        turnover_rows = [row for row in fund_kpis if row.get("metric_code") == "DAILY_TURNOVER"]
+        as_of_date = str(payload.get("as_of_date") or "")
+        aum_rows = [row for row in fund_kpis if row.get("metric_code") == "AUM" and str(row.get("metric_date")) == as_of_date]
+        expected_days = {
+            str(row.get("date")) for row in payload.get("trading_calendar", [])
+            if row.get("is_trading_day") is True
+        }
+        turnover_rows = [
+            row for row in fund_kpis
+            if row.get("metric_code") == "DAILY_TURNOVER" and str(row.get("metric_date")) in expected_days
+        ]
         portfolio = []
         if aum_rows:
-            row = aum_rows[-1]
+            row = aum_rows[0]
             portfolio.append({"label": f"Asset Under Management ({row['currency']})^", "value": f"{Decimal(str(row['value'])):,.2f} {row['unit']}"})
         if turnover_rows:
             average = sum((Decimal(str(row["value"])) for row in turnover_rows), Decimal("0")) / Decimal(len(turnover_rows))
@@ -93,15 +263,33 @@ def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
         "top10": [{"issuer": row["name_en"], "weight": row["weight"], "security_code": row["security_code"]} for row in ranked_weight[:10]],
         "sectors": sectors,
         "top": [{"issuer": row["name_en"], "return": row["return_1m"], "security_code": row["security_code"]} for row in ranked_return[:3]],
-        "bottom": [{"issuer": row["name_en"], "return": row["return_1m"], "security_code": row["security_code"]} for row in bottom[:3]],
+        "bottom": [{"issuer": row["name_en"], "return": row["return_1m"], "security_code": row["security_code"]} for row in bottom_display],
         "portfolio": portfolio,
     }
+    turnover_average = None
+    if fund_kpis and turnover_rows:
+        turnover_average = sum((Decimal(str(row["value"])) for row in turnover_rows), Decimal("0")) / Decimal(len(turnover_rows))
+    expected_day_count = len({str(row.get("date")) for row in payload.get("trading_calendar", []) if row.get("is_trading_day") is True})
+    report_date = str(payload.get("as_of_date") or "")
+    constituent_index_code = str(payload.get("constituent_index_code") or "")
+    future_rebalances = sorted(
+        str(row["effective_date"])
+        for row in payload.get("index_events", [])
+        if row.get("event_type") == "REBALANCE"
+        and str(row.get("index_code") or "") == constituent_index_code
+        and str(row.get("effective_date") or "") > report_date
+    )
     metrics = {
         "constituent_count": len(rows),
-        "weight_total": float(sum((Decimal(str(row["weight"])) for row in rows), Decimal("0"))),
+        "weight_total": str(sum((Decimal(str(row["weight"])) for row in rows), Decimal("0"))),
         "sector_count": len(sectors),
         "top_security_code": ranked_return[0]["security_code"] if ranked_return else None,
-        "bottom_security_code": bottom[0]["security_code"] if bottom else None,
+        "bottom_security_code": bottom_selected[0]["security_code"] if bottom_selected else None,
         "turnover_observation_count": len([row for row in fund_kpis if row.get("metric_code") == "DAILY_TURNOVER"]),
+        "turnover_expected_day_count": expected_day_count,
+        "turnover_average": str(turnover_average) if turnover_average is not None else None,
+        "turnover_coverage": str(Decimal(len(turnover_rows)) / Decimal(expected_day_count)) if expected_day_count else None,
+        "aum_value": str(aum_rows[0]["value"]) if fund_kpis and aum_rows else None,
+        "next_rebalancing_date": future_rebalances[0] if future_rebalances else None,
     }
     return analytics, metrics

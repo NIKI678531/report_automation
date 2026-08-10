@@ -155,6 +155,37 @@ def checksum(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def render_content_manifest(content: dict[str, Any]) -> dict[str, Any]:
+    sections = content.get("sections", {})
+    facts = {
+        "historical_performance": sections.get("historical_performance", {}),
+        "company_news": [
+            {
+                "news_item_id": item.get("news_item_id"),
+                "title": item.get("title"),
+                "summary": item.get("summary"),
+                "source_url": item.get("source_url"),
+                "published_at": item.get("published_at"),
+            }
+            for item in sections.get("company_news", [])
+        ],
+        "constituents": sections.get("constituents", []),
+        "analytics": sections.get("analytics", {}),
+        "footnotes": sections.get("footnotes", {}),
+        "next_rebalancing_date": content.get("next_rebalancing_date"),
+    }
+    manifest = {
+        "document_checksum": checksum(content),
+        "module_bindings": content.get("module_bindings", {}),
+        "section_checksums": {key: checksum(value) for key, value in facts.items()},
+        "module_order": [
+            "month_in_review", "historical_performance", "company_news",
+            "constituents", "analytics", "footnotes",
+        ],
+    }
+    return {**manifest, "checksum": checksum(manifest)}
+
+
 def initial_document(
     report_id: str,
     report_date: date,

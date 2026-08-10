@@ -17,8 +17,12 @@ def test_report_golden_lifecycle_and_preview(client):
     assert all(item["status"] == "PASSED" for item in snapshot.json()["quality_results"])
 
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    assert detail["status"] == "DATA_READY"
+    calculated = client.post(f"/api/v1/reports/{report['id']}/calculations")
+    assert calculated.status_code == 200, calculated.text
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
     assert detail["active_snapshot_id"]
-    assert detail["latest_document"]["version"] == 2
+    assert detail["latest_document"]["version"] == calculated.json()["document_version"]
     content = detail["latest_document"]["content"]
     review = content["sections"]["month_in_review"]
     review["title"] = "June Technology Review"
@@ -65,6 +69,9 @@ def test_report_golden_lifecycle_and_preview(client):
             assert "June Technology Review" in first_page_text
             assert "Market Context" in first_page_text
             assert "Forward View" in first_page_text
+    artifacts = client.get(f"/api/v1/reports/{report['id']}").json()["artifacts"]
+    assert len({item["content_manifest_checksum"] for item in artifacts}) == 1
+    assert artifacts[0]["content_manifest_checksum"]
 
 
 def test_optimistic_lock_returns_conflict(client):
@@ -86,7 +93,8 @@ def test_finalize_requires_valid_snapshot(client):
 def test_finalized_report_creates_a_separate_revision(client):
     report = create_report(client)
     client.post(f"/api/v1/reports/{report['id']}/snapshots", json={"source_policy": "GOLDEN_FIXTURE"})
-    client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": 2})
+    calculated = client.post(f"/api/v1/reports/{report['id']}/calculations").json()
+    client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": calculated["document_version"]})
     response = client.post(f"/api/v1/reports/{report['id']}/revisions", json={"reason": "Correct approved commentary"})
     assert response.status_code == 201, response.text
     revision = response.json()
@@ -95,3 +103,12 @@ def test_finalized_report_creates_a_separate_revision(client):
     assert revision["revision"] == 2
     assert revision["status"] == "DRAFT"
     assert client.get(f"/api/v1/reports/{report['id']}").json()["status"] == "FINALIZED"
+
+
+def test_finalize_requires_calculation_module_snapshots(client):
+    report = create_report(client)
+    client.post(f"/api/v1/reports/{report['id']}/snapshots", json={"source_policy": "GOLDEN_FIXTURE"})
+    response = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": 2})
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "CALCULATION_REQUIRED"
+    assert client.get(f"/api/v1/reports/{report['id']}").json()["status"] == "QA_BLOCKED"

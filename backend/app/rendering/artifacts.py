@@ -13,11 +13,12 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt, RGBColor
 from playwright.sync_api import sync_playwright
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.storage import storage
-from app.domain.document import review_display_title
+from app.domain.document import render_content_manifest, review_display_title
 from app.domain.models import RenderArtifact, Report, ReportDocument
 from .html import pct, price, render_html
 
@@ -145,7 +146,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         paragraph.add_run("\n" + item["summary"])
 
     _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 3)
-    heading = document.add_heading(f"The Performance of {report.benchmark_code} Constituents", 1)
+    heading = document.add_heading(f"The Performance of {getattr(report, 'constituent_index_code', report.benchmark_code)} Constituents", 1)
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
     document.add_paragraph(f"(*Next Rebalancing Date: {content.get('next_rebalancing_date') or 'N/A'})").alignment = WD_ALIGN_PARAGRAPH.CENTER
     constituents = sections["constituents"]
@@ -191,6 +192,13 @@ def build_artifact(db: Session, report: Report, document: ReportDocument, format
                 browser.close()
     object_key = f"{format_name}/{destination.name}"
     stored = storage.put_file(destination, object_key)
+    content_manifest = render_content_manifest(document.content)
+    existing = list(db.scalars(select(RenderArtifact).where(
+        RenderArtifact.report_id == report.id,
+        RenderArtifact.document_version == document.version,
+    )))
+    if any(item.content_manifest.get("checksum") != content_manifest["checksum"] for item in existing):
+        raise ValueError("QC-010: canonical content manifest differs across output formats")
     artifact = RenderArtifact(
         report_id=report.id,
         document_version=document.version,
@@ -201,6 +209,7 @@ def build_artifact(db: Session, report: Report, document: ReportDocument, format
         checksum=stored.checksum,
         template_version=document.template_version,
         renderer_version=settings.renderer_version if format_name == "pdf" else f"{format_name}-v1",
+        content_manifest=content_manifest,
     )
     db.add(artifact)
     db.commit()

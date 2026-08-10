@@ -111,12 +111,14 @@ def test_fetch_fails_closed_when_the_secret_is_not_configured(monkeypatch):
 def test_registry_reports_which_providers_hold_a_credential(client, monkeypatch):
     monkeypatch.setattr(settings, "fmp_api_key", "fmp-secret")
     monkeypatch.setattr(settings, "marketaux_api_key", None)
+    monkeypatch.setattr(settings, "da_report_sqlite_path", None)
     response = client.get("/api/v1/news/providers")
     assert response.status_code == 200, response.text
     by_key = {item["key"]: item for item in response.json()}
-    assert set(by_key) == {"FMP", "MARKETAUX"}
+    assert set(by_key) == {"FMP", "MARKETAUX", "DA_REPORT"}
     assert by_key["FMP"]["configured"] is True
     assert by_key["MARKETAUX"]["configured"] is False
+    assert by_key["DA_REPORT"]["configured"] is False
     # Only the boolean is exposed; the credential itself never leaves the process.
     assert "fmp-secret" not in response.text
 

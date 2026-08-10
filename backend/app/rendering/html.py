@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -19,14 +20,14 @@ env = Environment(
 )
 
 
-def pct(value: float | None) -> str:
-    return "N/A" if value is None else f"{value * 100:.2f}"
+def pct(value: Decimal | float | int | str | None) -> str:
+    return "N/A" if value is None else f"{Decimal(str(value)) * Decimal('100'):.2f}"
 
 
-def price(value: float | None) -> str:
+def price(value: Decimal | float | int | str | None) -> str:
     if value is None:
         return "N/A"
-    return f"{value:.2f}".rstrip("0").rstrip(".")
+    return f"{Decimal(str(value)):.2f}".rstrip("0").rstrip(".")
 
 
 def long_date(value: date) -> str:

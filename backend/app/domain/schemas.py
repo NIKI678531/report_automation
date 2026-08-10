@@ -20,6 +20,10 @@ class ProductRead(BaseModel):
     ticker: str
     name_en: str
     name_zh_hant: str | None
+    constituent_index_code: str
+    constituent_index_name: str | None
+    benchmark_instrument_code: str
+    benchmark_instrument_name: str | None
     benchmark_code: str
     benchmark_name: str | None
     currency: str
@@ -41,11 +45,34 @@ class ProductImportRead(BaseModel):
     total: int
 
 
+class MappingProfileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    profile_id: str = Field(min_length=3, max_length=100, pattern=r"^[a-z0-9][a-z0-9_-]+$")
+    dataset_type: str = Field(min_length=3, max_length=64)
+    source_family: str = Field(min_length=3, max_length=100)
+    selector: dict[str, Any]
+    field_map: dict[str, Any]
+    unit_map: dict[str, Any] = Field(default_factory=dict)
+    transforms: dict[str, Any] = Field(default_factory=dict)
+    semantic_metadata: dict[str, Any] = Field(default_factory=dict)
+    version: int = Field(ge=1)
+    status: Literal["DRAFT", "APPROVED"] = "DRAFT"
+
+
+class MappingProfileRead(MappingProfileCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    approved_by: str | None
+    created_at: datetime
+
+
 class ReportRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     product_code: str
     product_name: str
+    constituent_index_code: str
+    benchmark_instrument_code: str
     benchmark_code: str
     report_date: date
     language_mode: str
@@ -95,6 +122,8 @@ class ImportRead(BaseModel):
     size_bytes: int
     checksum: str
     parser_version: str
+    mapping_profile_id: str | None
+    mapping_version: int | None
     status: str
     payload: dict[str, Any]
     validation_results: list[dict[str, Any]]
@@ -224,6 +253,7 @@ class NewsCandidateFetch(BaseModel):
     to_date: date | None = None
     page: int = Field(default=0, ge=0, le=100)
     limit: int = Field(default=20, ge=1, le=250)
+    ensure: bool = False
     #: A key from app.integrations.news.REGISTRY; None uses the environment's configured default.
     provider: str | None = None
 

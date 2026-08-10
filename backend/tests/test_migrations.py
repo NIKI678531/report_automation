@@ -11,7 +11,12 @@ def test_initial_migration_upgrade_and_downgrade(tmp_path):
     command.upgrade(config, "head")
     engine = create_engine(f"sqlite:///{database.as_posix()}")
     tables = set(inspect(engine).get_table_names())
-    assert {"reports", "report_documents", "data_snapshots", "data_imports", "render_jobs", "render_artifacts", "audit_events", "news_items", "report_news_selections"}.issubset(tables)
+    assert {
+        "reports", "report_documents", "data_snapshots", "snapshot_datasets", "data_imports",
+        "mapping_profiles", "metric_values", "module_snapshots", "quality_check_results", "render_jobs",
+        "industry_master", "render_artifacts", "audit_events", "news_items", "report_news_candidates",
+        "news_fetch_runs", "report_news_selections",
+    }.issubset(tables)
     with engine.connect() as connection:
         products = connection.execute(text("SELECT product_code, ticker, name_en FROM product_catalog ORDER BY display_order")).all()
     assert ("3037", "3037.HK", "CSOP Hang Seng Index ETF") in products

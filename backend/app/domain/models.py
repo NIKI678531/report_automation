@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import enum
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -21,8 +22,14 @@ def utcnow() -> datetime:
 
 class ReportStatus(str, enum.Enum):
     DRAFT = "DRAFT"
+    DATA_READY = "DATA_READY"
+    EDITING = "EDITING"
+    QA_BLOCKED = "QA_BLOCKED"
+    READY_TO_FINALIZE = "READY_TO_FINALIZE"
+    # Kept so pre-V2.1 rows can be read and revised after migration.
     REVIEW = "REVIEW"
     FINALIZED = "FINALIZED"
+    ARCHIVED = "ARCHIVED"
 
 
 class JobStatus(str, enum.Enum):
@@ -47,6 +54,10 @@ class ProductCatalog(Base):
     ticker: Mapped[str] = mapped_column(String(32), index=True)
     name_en: Mapped[str] = mapped_column(String(255))
     name_zh_hant: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    constituent_index_code: Mapped[str] = mapped_column(String(32))
+    constituent_index_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    benchmark_instrument_code: Mapped[str] = mapped_column(String(32))
+    benchmark_instrument_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     benchmark_code: Mapped[str] = mapped_column(String(32))
     benchmark_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="HKD")
@@ -70,6 +81,8 @@ class Report(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     product_code: Mapped[str] = mapped_column(String(32), index=True)
     product_name: Mapped[str] = mapped_column(String(255))
+    constituent_index_code: Mapped[str] = mapped_column(String(32))
+    benchmark_instrument_code: Mapped[str] = mapped_column(String(32))
     benchmark_code: Mapped[str] = mapped_column(String(32))
     report_date: Mapped[date] = mapped_column(Date)
     language_mode: Mapped[str] = mapped_column(String(20), default="EN")
@@ -100,6 +113,63 @@ class DataSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class SnapshotDataset(Base):
+    __tablename__ = "snapshot_datasets"
+    __table_args__ = (UniqueConstraint("snapshot_id", "dataset_type", name="uq_snapshot_dataset_type"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("data_snapshots.id"), index=True)
+    dataset_type: Mapped[str] = mapped_column(String(64))
+    source_type: Mapped[str] = mapped_column(String(32))
+    source_object: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    row_count: Mapped[int] = mapped_column(Integer)
+    coverage: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    checksum: Mapped[str] = mapped_column(String(64))
+    parser_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mapping_version: Mapped[str] = mapped_column(String(64))
+    validation_results: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    lineage: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class IndustryMasterRecord(Base):
+    __tablename__ = "industry_master"
+    __table_args__ = (
+        UniqueConstraint("taxonomy", "version", "level", "code", name="uq_industry_master_code"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    taxonomy: Mapped[str] = mapped_column(String(32), index=True)
+    version: Mapped[str] = mapped_column(String(64), index=True)
+    level: Mapped[str] = mapped_column(String(16))
+    code: Mapped[str] = mapped_column(String(6))
+    parent_code: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    name_en: Mapped[str] = mapped_column(String(255))
+    name_zh_hant: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    valid_from: Mapped[date] = mapped_column(Date)
+    valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    source: Mapped[str] = mapped_column(String(255))
+    source_record_key: Mapped[str] = mapped_column(String(255))
+    checksum: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MappingProfile(Base):
+    __tablename__ = "mapping_profiles"
+    __table_args__ = (UniqueConstraint("profile_id", "version", name="uq_mapping_profile_version"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    profile_id: Mapped[str] = mapped_column(String(100), index=True)
+    dataset_type: Mapped[str] = mapped_column(String(64), index=True)
+    source_family: Mapped[str] = mapped_column(String(100))
+    selector: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    field_map: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    unit_map: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    transforms: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    semantic_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="DRAFT")
+    approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class DataImport(Base):
     __tablename__ = "data_imports"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
@@ -110,6 +180,8 @@ class DataImport(Base):
     size_bytes: Mapped[int] = mapped_column(Integer)
     checksum: Mapped[str] = mapped_column(String(64))
     parser_version: Mapped[str] = mapped_column(String(30), default="upload-v1")
+    mapping_profile_id: Mapped[str | None] = mapped_column(ForeignKey("mapping_profiles.id"), nullable=True, index=True)
+    mapping_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="VALIDATED")
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     validation_results: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
@@ -132,6 +204,70 @@ class ReportDocument(Base):
     checksum: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     report: Mapped[Report] = relationship(back_populates="documents")
+
+
+class MetricValue(Base):
+    __tablename__ = "metric_values"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id", "metric_code", "dimension_key", "formula_version",
+            name="uq_metric_value_version",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("data_snapshots.id"), index=True)
+    metric_code: Mapped[str] = mapped_column(String(100), index=True)
+    dimension_key: Mapped[str] = mapped_column(String(255), default="")
+    value: Mapped[Decimal | None] = mapped_column(Numeric(38, 18), nullable=True)
+    raw_value: Mapped[str] = mapped_column(String(500))
+    unit: Mapped[str] = mapped_column(String(32))
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    formula_version: Mapped[str] = mapped_column(String(64))
+    lineage: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ModuleSnapshot(Base):
+    __tablename__ = "module_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id", "module_code", "formula_version", "template_version",
+            name="uq_module_snapshot_version",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("data_snapshots.id"), index=True)
+    module_code: Mapped[str] = mapped_column(String(64), index=True)
+    formula_version: Mapped[str] = mapped_column(String(64))
+    template_version: Mapped[str] = mapped_column(String(64))
+    source_dataset_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    metric_value_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    display_format: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    footnote_bindings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    checksum: Mapped[str] = mapped_column(String(64))
+    input_checksum: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class QualityCheckResult(Base):
+    __tablename__ = "quality_check_results"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "result_key", name="uq_snapshot_quality_result"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("data_snapshots.id"), index=True)
+    source_dataset_id: Mapped[str | None] = mapped_column(ForeignKey("snapshot_datasets.id"), nullable=True)
+    result_key: Mapped[str] = mapped_column(String(255))
+    check_id: Mapped[str] = mapped_column(String(32), index=True)
+    severity: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20))
+    entity_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    actual: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    threshold: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    fix_hint: Mapped[str] = mapped_column(String(1000), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class RenderJob(Base):
@@ -160,6 +296,7 @@ class RenderArtifact(Base):
     checksum: Mapped[str] = mapped_column(String(64))
     template_version: Mapped[str] = mapped_column(String(32))
     renderer_version: Mapped[str] = mapped_column(String(50))
+    content_manifest: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -189,6 +326,41 @@ class NewsItem(Base):
     match_confidence: Mapped[int] = mapped_column(Integer, default=100)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReportNewsCandidate(Base):
+    __tablename__ = "report_news_candidates"
+    __table_args__ = (UniqueConstraint("report_id", "news_item_id", name="uq_report_news_candidate"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    report_id: Mapped[str] = mapped_column(ForeignKey("reports.id"), index=True)
+    news_item_id: Mapped[str] = mapped_column(ForeignKey("news_items.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    match_status: Mapped[str] = mapped_column(String(20), default="CONFIRMED")
+    match_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class NewsFetchRun(Base):
+    __tablename__ = "news_fetch_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "report_id", "snapshot_id", "provider", "scope", "from_date", "to_date",
+            name="uq_news_fetch_window",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    report_id: Mapped[str] = mapped_column(ForeignKey("reports.id"), index=True)
+    snapshot_id: Mapped[str] = mapped_column(ForeignKey("data_snapshots.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    scope: Mapped[str] = mapped_column(String(20))
+    from_date: Mapped[date] = mapped_column(Date)
+    to_date: Mapped[date] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(20), default="RUNNING")
+    fetched_count: Mapped[int] = mapped_column(Integer, default=0)
+    matched_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ReportNewsSelection(Base):

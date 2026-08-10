@@ -74,24 +74,28 @@ def test_historical_performance_csv_calculates_common_period_returns():
     ).encode()
     parsed = parse_historical_performance("history.csv", data, date(2026, 6, 30))
     assert parsed["historical_performance"]["effective_as_of"] == "2026-06-30"
-    assert parsed["historical_performance"]["rows"][0]["return_1m"] == pytest.approx(0.0416666667)
-    assert parsed["historical_performance"]["rows"][0]["return_ytd"] == pytest.approx(0.25)
+    assert float(parsed["historical_performance"]["rows"][0]["return_1m"]) == pytest.approx(0.0416666667)
+    assert float(parsed["historical_performance"]["rows"][0]["return_ytd"]) == pytest.approx(0.25)
     assert parsed["historical_performance"]["periods"]["return_3m"]["period_start"] == "2026-03-30"
 
 
 def test_final_analytics_csv_normalizes_constituents_and_kpis():
     data = (
-        "record_type,as_of_date,security_code,ticker,name_en,name_zh_hant,close_price,currency,value_scale,weight,sector,return_1m,return_3m,return_6m,return_ytd,metric_code,metric_date,value,unit,source\n"
-        "CONSTITUENT,2026-06-30,1,0001.HK,Alpha,,10,HKD,PERCENT,60,Technology,10,11,12,13,,,,,,\n"
-        "CONSTITUENT,2026-06-30,2,0002.HK,Beta,,20,HKD,PERCENT,40,Financials,-5,-4,-3,-2,,,,,,\n"
-        "KPI,,,,,,,HKD,,,,,,,,AUM,2026-06-30,1000,million,Approved\n"
-        "KPI,,,,,,,HKD,,,,,,,,DAILY_TURNOVER,2026-06-29,50,million,Approved\n"
+        "record_type,as_of_date,security_code,ticker,name_en,name_zh_hant,close_price,currency,value_scale,weight,sector,return_1m,return_3m,return_6m,return_ytd,metric_code,metric_date,value,unit,source,market,calendar_date,is_trading_day,index_code,event_type,announcement_date,effective_date\n"
+        "CONSTITUENT,2026-06-30,1,0001.HK,Alpha,,10,HKD,PERCENT,60,Technology,10,11,12,13,,,,,,,,,,,,,,,\n"
+        "CONSTITUENT,2026-06-30,2,0002.HK,Beta,,20,HKD,PERCENT,40,Financials,-5,-4,-3,-2,,,,,,,,,,,,,,,\n"
+        "KPI,,,,,,,HKD,,,,,,,,AUM,2026-06-30,1000,million,Approved,,,,,,,\n"
+        "KPI,,,,,,,HKD,,,,,,,,DAILY_TURNOVER,2026-06-29,50,million,Approved,,,,,,,\n"
+        "CALENDAR,,,,,,,,,,,,,,,,,,,Approved,HK,2026-06-29,true,,,,\n"
+        "EVENT,,,,,,,,,,,,,,,,,,,Approved,,,,HSTECH,REBALANCE,2026-08-21,2026-09-04\n"
     ).encode()
     parsed = parse_final_analytics("analytics.csv", data, date(2026, 6, 30))
     assert [row["security_code"] for row in parsed["constituents"]] == ["1", "2"]
-    assert parsed["constituents"][0]["weight"] == pytest.approx(0.6)
-    assert parsed["constituents"][0]["return_1m"] == pytest.approx(0.1)
+    assert float(parsed["constituents"][0]["weight"]) == pytest.approx(0.6)
+    assert float(parsed["constituents"][0]["return_1m"]) == pytest.approx(0.1)
     assert {row["metric_code"] for row in parsed["fund_kpis"]} == {"AUM", "DAILY_TURNOVER"}
+    assert parsed["trading_calendar"] == [{"market": "HK", "date": "2026-06-29", "is_trading_day": True, "source": "Approved"}]
+    assert parsed["index_events"][0]["effective_date"] == "2026-09-04"
 
 
 @pytest.mark.parametrize(
@@ -121,11 +125,13 @@ def historical_csv() -> bytes:
 
 def final_analytics_csv() -> bytes:
     return (
-        "record_type,as_of_date,security_code,ticker,name_en,name_zh_hant,close_price,currency,value_scale,weight,sector,return_1m,return_3m,return_6m,return_ytd,metric_code,metric_date,value,unit,source\n"
-        "CONSTITUENT,2026-06-30,1,0001.HK,Alpha,,10,HKD,PERCENT,60,Technology,10,11,12,13,,,,,,\n"
-        "CONSTITUENT,2026-06-30,2,0002.HK,Beta,,20,HKD,PERCENT,40,Financials,-5,-4,-3,-2,,,,,,\n"
-        "KPI,,,,,,,HKD,,,,,,,,AUM,2026-06-30,1000,million,Approved\n"
-        "KPI,,,,,,,HKD,,,,,,,,DAILY_TURNOVER,2026-06-29,50,million,Approved\n"
+        "record_type,as_of_date,security_code,ticker,name_en,name_zh_hant,close_price,currency,value_scale,weight,sector,return_1m,return_3m,return_6m,return_ytd,metric_code,metric_date,value,unit,source,market,calendar_date,is_trading_day,index_code,event_type,announcement_date,effective_date\n"
+        "CONSTITUENT,2026-06-30,1,0001.HK,Alpha,,10,HKD,PERCENT,60,Technology,10,11,12,13,,,,,,,,,,,,,,,\n"
+        "CONSTITUENT,2026-06-30,2,0002.HK,Beta,,20,HKD,PERCENT,40,Financials,-5,-4,-3,-2,,,,,,,,,,,,,,,\n"
+        "KPI,,,,,,,HKD,,,,,,,,AUM,2026-06-30,1000,million,Approved,,,,,,,\n"
+        "KPI,,,,,,,HKD,,,,,,,,DAILY_TURNOVER,2026-06-29,50,million,Approved,,,,,,,\n"
+        "CALENDAR,,,,,,,,,,,,,,,,,,,Approved,HK,2026-06-29,true,,,,\n"
+        "EVENT,,,,,,,,,,,,,,,,,,,Approved,,,,TESTIDX,REBALANCE,2026-08-21,2026-09-04\n"
     ).encode()
 
 
@@ -141,7 +147,7 @@ def test_historical_import_creates_new_snapshot_without_mutating_base(client):
     applied = client.post(f"/api/v1/reports/{report['id']}/imports/{uploaded.json()['id']}/apply", json={"reason": "Approved total return update"})
     assert applied.status_code == 200, applied.text
     assert applied.json()["id"] != base["id"]
-    assert applied.json()["payload"]["historical_performance"]["rows"][0]["return_ytd"] == pytest.approx(0.25)
+    assert float(applied.json()["payload"]["historical_performance"]["rows"][0]["return_ytd"]) == pytest.approx(0.25)
     unchanged = client.get(f"/api/v1/reports/{report['id']}/snapshots/{base['id']}").json()
     assert unchanged["checksum"] == base["checksum"]
     assert unchanged["payload"] == base["payload"]
@@ -168,6 +174,7 @@ def test_final_analytics_import_calculates_portfolio_without_mutating_snapshot(c
     assert "conic-gradient(#5186bd 0.0000% 40.0000%,#223a8b 40.0000% 100.0000%)" in preview.text
     assert "Financials" in preview.text
     assert "Technology" in preview.text
+    assert "Next Rebalancing Date: 2026-09-04" in preview.text
     unchanged = client.get(f"/api/v1/reports/{report['id']}/snapshots/{applied.json()['id']}").json()
     assert unchanged["checksum"] == input_checksum
     assert "analytics" in unchanged["payload"] and unchanged["payload"]["analytics"]["top10"] == []

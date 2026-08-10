@@ -34,11 +34,11 @@ def _find(row: dict[str, Any], field: str) -> Any:
     return None
 
 
-def _decimal(value: Any, field: str, row_number: int) -> float | None:
+def _decimal(value: Any, field: str, row_number: int) -> Decimal | None:
     if value in (None, ""):
         return None
     try:
-        return float(Decimal(str(value).replace(",", "").replace("%", "")))
+        return Decimal(str(value).replace(",", "").replace("%", ""))
     except InvalidOperation as error:
         raise ValueError(f"Row {row_number}: {field} is not numeric") from error
 
@@ -63,14 +63,23 @@ def _date(value: Any, field: str, row_number: int) -> date:
     raise ValueError(f"Row {row_number}: {field} must use YYYY-MM-DD or YYYYMMDD")
 
 
-def _ratio(value: Any, field: str, row_number: int) -> float | None:
+def _boolean(value: Any, field: str, row_number: int) -> bool:
+    normalized = str(value or "").strip().upper()
+    if normalized in {"1", "TRUE", "Y", "YES"}:
+        return True
+    if normalized in {"0", "FALSE", "N", "NO"}:
+        return False
+    raise ValueError(f"Row {row_number}: {field} must be true/false, yes/no, or 1/0")
+
+
+def _ratio(value: Any, field: str, row_number: int) -> Decimal | None:
     parsed = _decimal(value, field, row_number)
     if parsed is None:
         return None
     return parsed / 100 if abs(parsed) > 1 else parsed
 
 
-def _scaled_ratio(value: Any, field: str, row_number: int, scale: str) -> float | None:
+def _scaled_ratio(value: Any, field: str, row_number: int, scale: str) -> Decimal | None:
     parsed = _decimal(value, field, row_number)
     if parsed is None:
         return None
@@ -122,17 +131,17 @@ def parse_constituents(filename: str, data: bytes) -> dict[str, Any]:
             "ticker": f"{code.zfill(4)}.HK",
             "name_en": str(_find(row, "name_en") or code),
             "name_zh_hant": str(_find(row, "name_zh_hant") or ""),
-            "close_price": _decimal(_find(row, "close_price"), "close_price", index),
+            "close_price": str(value) if (value := _decimal(_find(row, "close_price"), "close_price", index)) is not None else None,
             "currency": "HKD",
-            "weight": weight,
+            "weight": str(weight),
             "sector": _find(row, "sector"),
         }
         for field in ["return_1m", "return_3m", "return_6m", "return_ytd"]:
             value = _decimal(_find(row, field), field, index)
             # Upload columns explicitly carry percent units; canonical storage is 0-1.
-            item[field] = value / 100 if value is not None else None
+            item[field] = str(value / 100) if value is not None else None
         output.append(item)
-    output.sort(key=lambda item: (-item["weight"], item["security_code"]))
+    output.sort(key=lambda item: (-Decimal(item["weight"]), item["security_code"]))
     return {"constituents": output}
 
 
@@ -175,7 +184,7 @@ def _historical_performance(series: list[dict[str, Any]], report_date: date) -> 
         for key, start_date in start_dates.items():
             start = by_role[role][start_date]
             end = by_role[role][end_date]
-            item[key] = float(end / start - Decimal("1"))
+            item[key] = str(end / start - Decimal("1"))
         rows.append(item)
     return {"rows": rows, "periods": periods, "effective_as_of": end_date.isoformat(), "formula_version": "total-return-v1"}
 
@@ -209,7 +218,7 @@ def parse_historical_performance(filename: str, data: bytes, report_date: date) 
             "instrument_role": role,
             "instrument_code": _required(row, "instrument_code", index),
             "trade_date": trade_date.isoformat(),
-            "total_return_value": total_return_value,
+            "total_return_value": str(total_return_value),
             "series_type": "Total Return",
             "currency": _required(row, "currency", index).upper(),
             "source": _required(row, "source", index),
@@ -229,8 +238,12 @@ def parse_final_analytics(filename: str, data: bytes, report_date: date) -> dict
     records = _records_from_csv(data)
     constituents: list[dict[str, Any]] = []
     fund_kpis: list[dict[str, Any]] = []
+    trading_calendar: list[dict[str, Any]] = []
+    index_events: list[dict[str, Any]] = []
     constituent_codes: set[str] = set()
     kpi_keys: set[tuple[str, date]] = set()
+    calendar_dates: set[tuple[str, date]] = set()
+    event_keys: set[tuple[str, str, date]] = set()
     for index, row in enumerate(records, start=2):
         record_type = _required(row, "record_type", index).upper()
         if record_type == "CONSTITUENT":
@@ -253,14 +266,14 @@ def parse_final_analytics(filename: str, data: bytes, report_date: date) -> dict
                 "ticker": _required(row, "ticker", index).upper(),
                 "name_en": _required(row, "name_en", index),
                 "name_zh_hant": str(row.get("name_zh_hant") or "").strip(),
-                "close_price": _decimal(row.get("close_price"), "close_price", index),
+                "close_price": str(value) if (value := _decimal(row.get("close_price"), "close_price", index)) is not None else None,
                 "currency": _required(row, "currency", index).upper(),
-                "weight": weight,
+                "weight": str(weight),
                 "sector": _required(row, "sector", index),
-                "return_1m": _scaled_ratio(row.get("return_1m"), "return_1m", index, value_scale),
-                "return_3m": _scaled_ratio(row.get("return_3m"), "return_3m", index, value_scale),
-                "return_6m": _scaled_ratio(row.get("return_6m"), "return_6m", index, value_scale),
-                "return_ytd": _scaled_ratio(row.get("return_ytd"), "return_ytd", index, value_scale),
+                "return_1m": str(value) if (value := _scaled_ratio(row.get("return_1m"), "return_1m", index, value_scale)) is not None else None,
+                "return_3m": str(value) if (value := _scaled_ratio(row.get("return_3m"), "return_3m", index, value_scale)) is not None else None,
+                "return_6m": str(value) if (value := _scaled_ratio(row.get("return_6m"), "return_6m", index, value_scale)) is not None else None,
+                "return_ytd": str(value) if (value := _scaled_ratio(row.get("return_ytd"), "return_ytd", index, value_scale)) is not None else None,
             })
         elif record_type == "KPI":
             metric_code = _required(row, "metric_code", index).upper()
@@ -281,22 +294,65 @@ def parse_final_analytics(filename: str, data: bytes, report_date: date) -> dict
             fund_kpis.append({
                 "metric_code": metric_code,
                 "metric_date": metric_date.isoformat(),
-                "value": value,
+                "value": str(value),
                 "unit": _required(row, "unit", index),
                 "currency": _required(row, "currency", index).upper(),
                 "source": _required(row, "source", index),
             })
+        elif record_type == "CALENDAR":
+            market = _required(row, "market", index).upper()
+            calendar_date = _date(row.get("calendar_date"), "calendar_date", index)
+            if (calendar_date.year, calendar_date.month) != (report_date.year, report_date.month):
+                raise ValueError(f"Row {index}: calendar_date must be in the report month")
+            key = (market, calendar_date)
+            if key in calendar_dates:
+                raise ValueError(f"Row {index}: duplicate calendar date {market}/{calendar_date.isoformat()}")
+            calendar_dates.add(key)
+            trading_calendar.append({
+                "market": market,
+                "date": calendar_date.isoformat(),
+                "is_trading_day": _boolean(row.get("is_trading_day"), "is_trading_day", index),
+                "source": _required(row, "source", index),
+            })
+        elif record_type == "EVENT":
+            index_code = _required(row, "index_code", index).upper()
+            event_type = _required(row, "event_type", index).upper()
+            if event_type != "REBALANCE":
+                raise ValueError(f"Row {index}: event_type must be REBALANCE")
+            effective_date = _date(row.get("effective_date"), "effective_date", index)
+            announcement_text = str(row.get("announcement_date") or "").strip()
+            announcement_date = _date(announcement_text, "announcement_date", index) if announcement_text else None
+            key = (index_code, event_type, effective_date)
+            if key in event_keys:
+                raise ValueError(f"Row {index}: duplicate index event {index_code}/{event_type}/{effective_date.isoformat()}")
+            event_keys.add(key)
+            index_events.append({
+                "index_code": index_code,
+                "event_type": event_type,
+                "announcement_date": announcement_date.isoformat() if announcement_date else None,
+                "effective_date": effective_date.isoformat(),
+                "source": _required(row, "source", index),
+            })
         else:
-            raise ValueError(f"Row {index}: record_type must be CONSTITUENT or KPI")
+            raise ValueError(f"Row {index}: record_type must be CONSTITUENT, KPI, CALENDAR or EVENT")
     if not constituents:
         raise ValueError("Final Analytics requires at least one CONSTITUENT row")
     if not any(row["metric_code"] == "AUM" for row in fund_kpis):
         raise ValueError("Final Analytics requires an AUM KPI row")
     if not any(row["metric_code"] == "DAILY_TURNOVER" for row in fund_kpis):
         raise ValueError("Final Analytics requires at least one DAILY_TURNOVER KPI row")
+    if not trading_calendar or not any(row["is_trading_day"] for row in trading_calendar):
+        raise ValueError("Final Analytics requires the report-month trading calendar")
     constituents.sort(key=lambda row: (-Decimal(str(row["weight"])), row["security_code"]))
     fund_kpis.sort(key=lambda row: (row["metric_date"], row["metric_code"]))
-    return {"constituents": constituents, "fund_kpis": fund_kpis}
+    trading_calendar.sort(key=lambda row: (row["date"], row["market"]))
+    index_events.sort(key=lambda row: (row["effective_date"], row["index_code"], row["event_type"]))
+    return {
+        "constituents": constituents,
+        "fund_kpis": fund_kpis,
+        "trading_calendar": trading_calendar,
+        "index_events": index_events,
+    }
 
 
 def parse_dataset(dataset_type: str, filename: str, data: bytes, report_date: date) -> dict[str, Any]:
@@ -315,8 +371,19 @@ def diff_constituents(candidate: list[dict], active: list[dict]) -> dict[str, An
     added = sorted(set(new) - set(old))
     removed = sorted(set(old) - set(new))
     changed = []
+    numeric_fields = {"close_price", "weight", "return_1m", "return_3m", "return_6m", "return_ytd"}
     for code in sorted(set(new) & set(old)):
-        fields = {key: {"old": old[code].get(key), "new": new[code].get(key)} for key in ["name_en", "close_price", "weight", "sector", "return_1m", "return_3m", "return_6m", "return_ytd"] if old[code].get(key) != new[code].get(key)}
+        fields = {}
+        for key in ["name_en", "close_price", "weight", "sector", "return_1m", "return_3m", "return_6m", "return_ytd"]:
+            old_value = old[code].get(key)
+            new_value = new[code].get(key)
+            if key in numeric_fields and old_value is not None and new_value is not None:
+                difference = abs(Decimal(str(old_value)) - Decimal(str(new_value)))
+                equal = difference <= Decimal("1e-15") if isinstance(old_value, float) or isinstance(new_value, float) else difference == 0
+            else:
+                equal = old_value == new_value
+            if not equal:
+                fields[key] = {"old": old_value, "new": new_value}
         if fields:
             changed.append({"security_code": code, "fields": fields})
     return {"added": added, "removed": removed, "changed": changed, "summary": {"added": len(added), "removed": len(removed), "changed": len(changed)}}

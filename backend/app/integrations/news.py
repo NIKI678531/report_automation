@@ -36,8 +36,9 @@ class NewsProviderSpec:
     description: str
     #: Imported lazily, so a provider nobody selected never loads and never reads its secret.
     module: str
-    secret_setting: str
-    auth_style: Literal["HEADER", "QUERY"]
+    secret_setting: str | None
+    auth_style: Literal["HEADER", "QUERY", "NONE"]
+    needs_constituent_context: bool = False
 
 
 REGISTRY: dict[str, NewsProviderSpec] = {
@@ -59,6 +60,15 @@ REGISTRY: dict[str, NewsProviderSpec] = {
         # docs/fmp-news-and-data-imports.md for the deviation and how the key is kept out of logs.
         auth_style="QUERY",
     ),
+    "DA_REPORT": NewsProviderSpec(
+        key="DA_REPORT",
+        title="DA-Report",
+        description="Approved regional company news matched strictly to the active constituent snapshot.",
+        module="app.integrations.da_report",
+        secret_setting=None,
+        auth_style="NONE",
+        needs_constituent_context=True,
+    ),
 }
 
 DEFAULT_PROVIDER = "FMP"
@@ -76,7 +86,11 @@ def get_spec(key: str | None) -> NewsProviderSpec:
 
 
 def is_configured(spec: NewsProviderSpec) -> bool:
-    return bool(getattr(settings, spec.secret_setting, None))
+    if spec.secret_setting:
+        return bool(getattr(settings, spec.secret_setting, None))
+    adapter = import_module(spec.module)
+    checker = getattr(adapter, "is_configured", None)
+    return bool(checker and checker())
 
 
 def list_providers() -> list[dict[str, Any]]:
@@ -105,13 +119,24 @@ async def fetch_news(
     page: int,
     limit: int,
     client: httpx.AsyncClient | None = None,
+    constituents: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Dispatch to the selected adapter and return ``(provider_key, candidates)``."""
     spec = get_spec(provider)
     adapter = import_module(spec.module)
     # `client` stays out of the call unless a caller supplied one, so adapters (and the test doubles
     # that stand in for them) keep the six-argument signature they already have.
-    if client is None:
+    if spec.needs_constituent_context:
+        candidates = await adapter.fetch_news(
+            scope,
+            symbols,
+            from_date,
+            to_date,
+            page,
+            limit,
+            constituents=constituents,
+        )
+    elif client is None:
         candidates = await adapter.fetch_news(scope, symbols, from_date, to_date, page, limit)
     else:
         candidates = await adapter.fetch_news(scope, symbols, from_date, to_date, page, limit, client)

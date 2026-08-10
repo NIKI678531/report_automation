@@ -1,10 +1,12 @@
 from pathlib import Path
 import os
+import tempfile
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]  # backend/
 _WORKSPACE_ROOT = _SERVICE_ROOT.parent  # repository root
+_LOCAL_DA_REPORT = Path.home() / "Downloads" / "da_report.sqlite"
 
 # Load service-local secrets (FMP_API_KEY, DOWNLOAD_SECRET, ...) before any os.getenv default below.
 # Real process environment always wins, so container/CI settings are never overwritten by a stray .env.
@@ -38,6 +40,16 @@ class Settings(BaseModel):
     marketaux_max_results: int = int(os.getenv("MARKETAUX_MAX_RESULTS", "100"))
     marketaux_language: str = os.getenv("MARKETAUX_LANGUAGE", "en")
     marketaux_allowed_hosts: tuple[str, ...] = tuple(filter(None, (item.strip().lower() for item in os.getenv("MARKETAUX_ALLOWED_HOSTS", "api.marketaux.com").split(","))))
+    da_report_sqlite_path: Path | None = (
+        Path(os.environ["DA_REPORT_SQLITE_PATH"]).expanduser()
+        if os.getenv("DA_REPORT_SQLITE_PATH")
+        else (_LOCAL_DA_REPORT if _LOCAL_DA_REPORT.is_file() else None)
+    )
+    da_report_sqlite_sha256: str | None = os.getenv("DA_REPORT_SQLITE_SHA256")
+    da_report_object_url: str | None = os.getenv("DA_REPORT_OBJECT_URL")
+    da_report_cache_dir: Path = Path(os.getenv("DA_REPORT_CACHE_DIR", str(Path(tempfile.gettempdir()) / "commentary-da")))
+    da_report_max_bytes: int = int(os.getenv("DA_REPORT_MAX_BYTES", str(512 * 1024 * 1024)))
+    da_report_timeout_seconds: float = float(os.getenv("DA_REPORT_TIMEOUT_SECONDS", "10"))
     workspace_root: Path = _WORKSPACE_ROOT
     # backend/ itself: test fixtures and alembic live under the service, not the repository root.
     service_root: Path = _SERVICE_ROOT

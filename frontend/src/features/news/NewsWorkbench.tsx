@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DndContext, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, verticalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -9,9 +9,72 @@ type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 type SnapshotNews = Record<string, unknown>;
 type SortOrder = "newest" | "oldest";
 
-interface Draft extends NewsSelectionDraft { title: string; summary: string; source: string; publishedAt: string; ticker: string | null; }
+export interface Draft extends NewsSelectionDraft { title: string; summary: string; source: string; publishedAt: string; ticker: string | null; }
 
 const HKT = "Asia/Hong_Kong";
+export const FMP_SOURCE_FILTER = "provider:FMP";
+
+export function providerFromSourceFilter(value: string): string | undefined {
+  return value === FMP_SOURCE_FILTER ? "FMP" : undefined;
+}
+
+export function matchesNewsSource(item: NewsCandidate, sourceFilter: string): boolean {
+  const provider = providerFromSourceFilter(sourceFilter);
+  return !sourceFilter || (provider ? item.provider === provider : item.source_name === sourceFilter);
+}
+
+interface AutoLoadState {
+  activeSnapshotId: string | null;
+  busy: boolean;
+  candidateCount: number;
+  daConfigured: boolean;
+  loading: boolean;
+  readOnly: boolean;
+  attempted: boolean;
+}
+
+export function shouldAutoLoadDaNews(state: AutoLoadState): boolean {
+  return Boolean(state.activeSnapshotId)
+    && !state.busy
+    && !state.loading
+    && !state.readOnly
+    && state.daConfigured
+    && state.candidateCount === 0
+    && !state.attempted;
+}
+
+export function reportNewsWindow(reportDate: string): { fromDate: string; toDate: string } {
+  return { fromDate: `${reportDate.slice(0, 8)}01`, toDate: reportDate };
+}
+
+export function draftsFromSnapshot(selectedSnapshot: SnapshotNews[], reportDate: string): Draft[] {
+  return selectedSnapshot.filter((item) => item.news_item_id).map((item, index) => ({
+    news_item_id: String(item.news_item_id),
+    position: index,
+    title: String(item.title ?? ""),
+    summary: String(item.summary ?? ""),
+    source: String(item.source_name ?? ""),
+    publishedAt: String(item.published_at ?? reportDate),
+    ticker: String(item.ticker ?? "") || null,
+    title_override: String(item.title ?? ""),
+    summary_override: String(item.summary ?? ""),
+  }));
+}
+
+export function toggleNewsSelection(current: Draft[], item: NewsCandidate): Draft[] {
+  if (current.some((value) => value.news_item_id === item.id)) {
+    return current.filter((value) => value.news_item_id !== item.id);
+  }
+  return [...current, {
+    news_item_id: item.id,
+    position: current.length,
+    title: item.title,
+    summary: item.summary,
+    source: item.source_name,
+    publishedAt: item.published_at,
+    ticker: item.ticker,
+  }];
+}
 
 function publishedLabel(value: string): string {
   const parsed = new Date(value);
@@ -52,40 +115,71 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
   const version = report.latest_document?.version ?? 1;
   const readOnly = report.status === "FINALIZED";
   const [candidates, setCandidates] = useState<NewsCandidate[]>([]);
-  const [selected, setSelected] = useState<Draft[]>([]);
+  const [selected, setSelected] = useState<Draft[]>(() => draftsFromSnapshot(selectedSnapshot, report.report_date));
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("");
   const [site, setSite] = useState("");
   const [symbol, setSymbol] = useState("");
-  const [scope, setScope] = useState<"CONSTITUENTS" | "GENERAL">("CONSTITUENTS");
   const [providers, setProviders] = useState<NewsProvider[]>([]);
-  const [provider, setProvider] = useState("");
   const [sort, setSort] = useState<SortOrder>("newest");
   const [adding, setAdding] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [fromDate, setFromDate] = useState(`${report.report_date.slice(0, 8)}01`);
-  const [toDate, setToDate] = useState(report.report_date);
+  const initialWindow = reportNewsWindow(report.report_date);
+  const [fromDate, setFromDate] = useState(initialWindow.fromDate);
+  const [toDate, setToDate] = useState(initialWindow.toDate);
+  const autoLoadKey = useRef<string | null>(null);
   const frozenSnapshot = selectedSnapshot.filter((item) => !item.news_item_id);
+  const activeProvider = providers.find((item) => item.key === "DA_REPORT" && item.configured)
+    ?? providers.find((item) => item.default && item.configured)
+    ?? providers.find((item) => item.configured);
+  const fmpProvider = providers.find((item) => item.key === "FMP");
+  const sourceProvider = providerFromSourceFilter(source);
+  const refreshProvider = sourceProvider
+    ? providers.find((item) => item.key === sourceProvider && item.configured)
+    : activeProvider;
 
   const load = () => api.listReportNewsCandidates(report.id).then(setCandidates);
   useEffect(() => { setLoading(true); load().catch(() => setCandidates([])).finally(() => setLoading(false)); }, [report.id, version]);
   useEffect(() => {
     // A provider without a credential in this environment cannot answer, so it is listed but not offered.
-    api.listNewsProviders().then((items) => {
-      setProviders(items);
-      setProvider((current) => current || (items.find((item) => item.default && item.configured) ?? items.find((item) => item.configured))?.key || "");
-    }).catch(() => setProviders([]));
+    api.listNewsProviders().then(setProviders).catch(() => setProviders([]));
   }, []);
   useEffect(() => {
-    const fromDocument = selectedSnapshot.filter((item) => item.news_item_id).map((item, index) => ({
-      news_item_id: String(item.news_item_id), position: index, title: String(item.title ?? ""), summary: String(item.summary ?? ""),
-      source: String(item.source_name ?? ""), publishedAt: String(item.published_at ?? report.report_date), ticker: String(item.ticker ?? "") || null,
-      title_override: String(item.title ?? ""), summary_override: String(item.summary ?? ""),
-    }));
-    if (fromDocument.length) setSelected(fromDocument);
-  }, [version]);
+    setSelected(draftsFromSnapshot(selectedSnapshot, report.report_date));
+  }, [report.id, version]);
 
-  const refresh = () => run(async () => { setLoading(true); try { await api.fetchNewsCandidates(report.id, scope, fromDate, toDate, provider || undefined); await load(); } finally { setLoading(false); } });
+  useEffect(() => {
+    const key = `${report.id}:${report.active_snapshot_id ?? "none"}`;
+    const daConfigured = providers.some((item) => item.key === "DA_REPORT" && item.configured);
+    if (!shouldAutoLoadDaNews({
+      activeSnapshotId: report.active_snapshot_id,
+      busy,
+      candidateCount: candidates.length,
+      daConfigured,
+      loading,
+      readOnly,
+      attempted: autoLoadKey.current === key,
+    })) return;
+    autoLoadKey.current = key;
+    void run(async () => {
+      setLoading(true);
+      try {
+        const window = reportNewsWindow(report.report_date);
+        const result = await api.fetchNewsCandidates(report.id, "CONSTITUENTS", window.fromDate, window.toDate, "DA_REPORT", true);
+        setCandidates(result.items);
+      } finally {
+        setLoading(false);
+      }
+    });
+  }, [busy, candidates.length, loading, providers, readOnly, report.active_snapshot_id, report.id, report.report_date, run]);
+
+  const fetchFromProvider = (provider: string) => run(async () => { setLoading(true); try { await api.fetchNewsCandidates(report.id, "CONSTITUENTS", fromDate, toDate, provider); await load(); } finally { setLoading(false); } });
+  const refresh = () => refreshProvider ? fetchFromProvider(refreshProvider.key) : Promise.resolve();
+  const changeSource = (nextSource: string) => {
+    setSource(nextSource);
+    const provider = providerFromSourceFilter(nextSource);
+    if (provider && !readOnly) void fetchFromProvider(provider);
+  };
   const addManual = (item: NewsCandidateInput) => run(async () => { await api.addNewsCandidate(report.id, item); setAdding(false); await load(); });
   const sources = useMemo(() => [...new Set(candidates.map((item) => item.source_name))].sort(), [candidates]);
   const sites = useMemo(() => [...new Set(candidates.map((item) => item.site).filter(Boolean) as string[])].sort(), [candidates]);
@@ -99,7 +193,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
       const text = `${item.title} ${item.summary} ${item.ticker ?? ""} ${item.source_name} ${item.site ?? ""}`.toLowerCase();
       const publishedDate = item.published_at.slice(0, 10);
       return terms.every((term) => text.includes(term))
-        && (!source || item.source_name === source)
+        && matchesNewsSource(item, source)
         && (!site || item.site === site)
         && (!symbol || item.ticker === symbol)
         && publishedDate >= fromDate && publishedDate <= toDate;
@@ -107,9 +201,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
   }, [candidates, query, source, site, symbol, fromDate, toDate, sort]);
 
   const selectedIds = new Set(selected.map((item) => item.news_item_id));
-  const toggle = (item: NewsCandidate) => setSelected((current) => current.some((value) => value.news_item_id === item.id)
-    ? current.filter((value) => value.news_item_id !== item.id)
-    : [...current, { news_item_id: item.id, position: current.length, title: item.title, summary: item.summary, source: item.source_name, publishedAt: item.published_at, ticker: item.ticker }]);
+  const toggle = (item: NewsCandidate) => setSelected((current) => toggleNewsSelection(current, item));
   const dragEnd = ({ active, over }: DragEndEvent) => { if (over && active.id !== over.id) setSelected((items) => arrayMove(items, items.findIndex((item) => item.news_item_id === active.id), items.findIndex((item) => item.news_item_id === over.id))); };
   const save = () => run(() => api.selectNews(report.id, version, selected.map((item, position) => ({ news_item_id: item.news_item_id, position, title_override: item.title_override, summary_override: item.summary_override }))));
   const resetFilters = () => { setQuery(""); setSource(""); setSite(""); setSymbol(""); setSort("newest"); };
@@ -120,22 +212,19 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
       <header className="news-panel-head">
         <div className="news-panel-title"><h3>News &amp; Report</h3><span>新聞與報告</span></div>
         <div className="news-panel-count"><strong>{visible.length}</strong><small>of {candidates.length}</small></div>
-        <button disabled={busy || readOnly || !providers.some((item) => item.configured)} onClick={refresh} title={providers.some((item) => item.configured) ? `Fetch ${provider || "news"} for the selected scope and date range` : "No news provider holds a credential in this environment"}><RefreshCw size={15} className={busy ? "spin" : ""} /> Refresh</button>
+        <button disabled={busy || readOnly || !refreshProvider} onClick={refresh} title={refreshProvider ? `Fetch ${refreshProvider.title} news for the selected date range` : "No news provider holds a credential in this environment"}><RefreshCw size={15} className={busy ? "spin" : ""} /> Refresh</button>
       </header>
 
       <div className="news-panel-filters">
         <button className="news-add-button" disabled={busy || readOnly} onClick={() => setAdding((open) => !open)}><Plus size={15} /> 添加新闻</button>
-        <select value={source} onChange={(event) => setSource(event.target.value)} aria-label="Filter by publisher"><option value="">全部来源 All sources</option>{sources.map((item) => <option key={item}>{item}</option>)}</select>
-        <select value={site} onChange={(event) => setSite(event.target.value)} aria-label="Filter by site"><option value="">全部站点 All sites</option>{sites.map((item) => <option key={item}>{item}</option>)}</select>
-        <select value={symbol} onChange={(event) => setSymbol(event.target.value)} aria-label="Filter by company"><option value="">全部公司 All companies</option>{symbols.map((item) => <option key={item}>{item}</option>)}</select>
-        <label className="search-field"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="关键词 Keywords — headline, summary, ticker" aria-label="Search keywords" /></label>
-        <select value={provider} onChange={(event) => setProvider(event.target.value)} aria-label="News provider" title="Which provider Refresh queries">
-          {providers.map((item) => <option key={item.key} value={item.key} disabled={!item.configured}>{item.configured ? item.title : `${item.title} — 未配置`}</option>)}
+        <select value={source} onChange={(event) => changeSource(event.target.value)} aria-label="Filter by source">
+          <option value="">全部来源 All sources</option>
+          <option value={FMP_SOURCE_FILTER} disabled={!fmpProvider?.configured || busy}>{fmpProvider?.configured ? "FMP" : "FMP（未配置）"}</option>
+          {sources.map((item) => <option key={item}>{item}</option>)}
         </select>
-        <div className="scope-control" role="group" aria-label="News scope">
-          <button className={scope === "CONSTITUENTS" ? "active" : ""} onClick={() => setScope("CONSTITUENTS")}>成分股 Constituents</button>
-          <button className={scope === "GENERAL" ? "active" : ""} onClick={() => setScope("GENERAL")}>大市 General</button>
-        </div>
+        <select value={site} onChange={(event) => setSite(event.target.value)} aria-label="Filter by site"><option value="">全部站点 All sites</option>{sites.map((item) => <option key={item}>{item}</option>)}</select>
+        <select value={symbol} onChange={(event) => setSymbol(event.target.value)} aria-label="Filter product news"><option value="">对应产品新闻 Product news</option>{symbols.map((item) => <option key={item}>{item}</option>)}</select>
+        <label className="search-field"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="关键词 Keywords — headline, summary, ticker" aria-label="Search keywords" /></label>
         <div className="scope-control" role="group" aria-label="Sort order">
           <button className={sort === "newest" ? "active" : ""} onClick={() => setSort("newest")}>最新在前</button>
           <button className={sort === "oldest" ? "active" : ""} onClick={() => setSort("oldest")}>最舊在前</button>
@@ -171,7 +260,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
             </div>
           </article>;
         })}
-        {!loading && !visible.length && <div className="news-empty"><RefreshCw size={20} /><strong>{candidates.length ? "No news matches these filters" : "No candidates loaded"}</strong><span>{candidates.length ? "Clear the keyword or dropdown filters to see the rest." : "Pick a provider, scope and date range, then refresh news for this report."}</span></div>}
+        {!loading && !visible.length && <div className="news-empty"><RefreshCw size={20} /><strong>{candidates.length ? "No news matches these filters" : "No matched company news"}</strong><span>{candidates.length ? "Clear the keyword or dropdown filters to see the rest." : "DA-Report loads automatically when a valid constituent snapshot is available; Refresh can retry the selected source."}</span></div>}
       </div>
     </section>
 

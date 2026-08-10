@@ -16,7 +16,10 @@ function sectionsOf(report: Report): JsonRecord {
 }
 
 function rows(value: unknown): JsonRecord[] { return Array.isArray(value) ? value as JsonRecord[] : []; }
-function percent(value: unknown): string { return typeof value === "number" ? new Intl.NumberFormat("en-HK", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value) : "N/A"; }
+function percent(value: unknown): string {
+  const numeric = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
+  return Number.isFinite(numeric) ? new Intl.NumberFormat("en-HK", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(numeric) : "N/A";
+}
 
 function ModuleHeading({ eyebrow, title, description, actions }: { eyebrow: string; title: ReactNode; description: string; actions?: ReactNode }) {
   return <header className="module-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div>{actions && <div className="module-actions">{actions}</div>}</header>;
@@ -74,7 +77,7 @@ function PerformanceModule({ report, busy, run }: Omit<ModuleProps, "active">) {
 }
 
 function NewsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
-  return <><ModuleHeading eyebrow={reportPageEyebrow("news", "Curated sources")} title="Company News" description="Refresh FMP candidates for current holdings or the general market, then curate report order and wording." /><NewsWorkbench report={report} busy={busy} run={run} selectedSnapshot={rows(sectionsOf(report).company_news)} /></>;
+  return <><ModuleHeading eyebrow={reportPageEyebrow("news", "Curated sources")} title="Company News" description="DA-Report candidates load automatically for current holdings; review the matches, order and wording before saving." /><NewsWorkbench key={report.id} report={report} busy={busy} run={run} selectedSnapshot={rows(sectionsOf(report).company_news)} /></>;
 }
 
 function ConstituentsModule({ report, busy, run }: Omit<ModuleProps, "active">) {

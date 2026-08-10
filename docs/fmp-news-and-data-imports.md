@@ -12,6 +12,7 @@ answered.
 |---|---|---|---|
 | `FMP` | Financial Modeling Prep | `FMP_API_KEY` | `apikey` request header |
 | `MARKETAUX` | Marketaux | `MARKETAUX_API_KEY` | `api_token` query parameter |
+| `DA_REPORT` | Approved DA-Report SQLite snapshot | local read-only path or TOS presigned URL + SHA-256 | none |
 
 `POST /api/v1/reports/{id}/news/candidates/fetch` takes an optional `provider` field; omitting it uses
 `NEWS_PROVIDER` (default `FMP`). `GET /api/v1/news/providers` reports which providers hold a credential
@@ -19,7 +20,15 @@ in this environment — the boolean only, never the credential. An unknown key r
 `NEWS_PROVIDER_UNKNOWN` before any outbound call is made.
 
 Each provider gets its own audit action, derived from the key: `news.fmp_fetched`,
-`news.marketaux_fetched`. Manual entries stay `news.manually_added`.
+`news.marketaux_fetched`, `news.da_report_fetched`. Manual entries stay `news.manually_added`.
+
+## DA-Report configuration
+
+Company News automatically ensures DA-Report candidates once when a mutable report has a valid active snapshot and no candidates. The window is the report month. It never auto-selects items into the report.
+
+DA-Report has no news-to-security or news-to-product relation. `category=Corporate` means an item passed a regional holding check somewhere upstream; it does **not** prove that the item belongs to the current fund. This adapter therefore requires a unique title match against the active snapshot's controlled English/Traditional Chinese constituent names. Summary-only, ambiguous and unmatched items are excluded from automatic candidates.
+
+Development can set `DA_REPORT_SQLITE_PATH`. Production sets `DA_REPORT_OBJECT_URL` to a short-lived TOS/S3-compatible presigned URL and must set `DA_REPORT_SQLITE_SHA256`. The API downloads to `DA_REPORT_CACHE_DIR` on ephemeral disk, enforces the size limit, verifies SHA-256, atomically renames the completed file, and opens SQLite with both `mode=ro` and `PRAGMA query_only=ON`. The object URL is never included in provider errors.
 
 ## FMP configuration
 
@@ -83,7 +92,7 @@ The server selects common trading-date endpoints and calculates 1M, 3M, 6M, and 
 
 ## Final Analytics CSV
 
-Use `docs/final-analytics-template.csv`. The file is a mixed long-form dataset.
+Use `docs/templates/final-analytics-template.csv`. The file is a mixed long-form physical source that normalizes into separate logical datasets.
 
 `CONSTITUENT` rows require security identity, date, price, currency, weight, sector, and period returns.
 
@@ -91,6 +100,10 @@ Use `docs/final-analytics-template.csv`. The file is a mixed long-form dataset.
 
 - `AUM`
 - `DAILY_TURNOVER`
+
+`CALENDAR` rows require `market`, `calendar_date`, `is_trading_day`, and `source`. Average turnover uses only authoritative trading days; duplicate dates fail and coverage below 95% blocks the calculation quality gate.
+
+`EVENT` rows require `index_code`, `event_type=REBALANCE`, `effective_date`, and `source`; `announcement_date` is optional. The next rebalancing date is the earliest effective event after the report date for the configured constituent index. The server never guesses this date from a calendar rule.
 
 `value_scale` is required for unambiguous constituent ratios:
 
@@ -100,3 +113,9 @@ Use `docs/final-analytics-template.csv`. The file is a mixed long-form dataset.
 Never infer the scale from the magnitude. This preserves valid returns above 100% and weights below 1%.
 
 After validation and an approved reason, Apply creates a new immutable snapshot. Final Analytics then calculates Top 10, sector weights, Top/Bottom performers, AUM, average turnover, and holding count on the server. Existing snapshots are not changed.
+
+## Mapping profiles and HSICS
+
+CSV/XLSX ingestion selects exactly one approved `MappingProfile`. Profiles own header aliases, sheet/header scanning, explicit units, transforms and confirmed unlabelled columns. No unique profile results in `NEEDS_MAPPING`; the parser does not fall back to sheet names or fixed columns. Duplicate Bloomberg return groups are detected and only the group selected by the approved profile is imported.
+
+Import a formal report-date HSICS master through `POST /api/v1/industry-master/import` using `docs/templates/industry-master-template.csv`. Codes are text and restored to widths 2/4/6 for Industry/Sector/Subsector. Effective ranges cannot overlap. Uploaded production snapshots without a bound effective HSICS master cannot be finalized; the old Bloomberg GICS table remains reference-only.

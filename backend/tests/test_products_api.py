@@ -15,6 +15,8 @@ def test_products_are_effective_dated_and_drive_report_identity(client):
     assert created.status_code == 201, created.text
     assert created.json()["product_name"] == "CSOP Hang Seng TECH Index ETF (3033.HK)"
     assert created.json()["benchmark_code"] == "HSTECH"
+    assert created.json()["constituent_index_code"] == "HSTECH"
+    assert created.json()["benchmark_instrument_code"] == "HSTECHN"
     assert created.json()["template_version"] == "3033-v2"
 
 
@@ -88,7 +90,7 @@ def test_non_3033_product_uses_its_own_count_formula_and_never_golden_data(clien
     detail = client.get(f"/api/v1/reports/{report_id}").json()
     preview = client.post(f"/api/v1/reports/{report_id}/preview")
     assert preview.status_code == 200
-    assert "Historical Performance of 9999.HK and Synthetic Test Index" in preview.text
+    assert "Historical Performance of 9999.HK and Synthetic Test Total Return Index" in preview.text
     assert "The Performance of TESTIDX Constituents" in preview.text
     assert "9999.HK Portfolio Analysis" in preview.text
     assert "3033.HK" not in preview.text
@@ -104,7 +106,7 @@ def test_non_3033_product_uses_its_own_count_formula_and_never_golden_data(clien
         [paragraph.text for paragraph in docx.paragraphs]
         + [cell.text for table in docx.tables for row in table.rows for cell in row.cells]
     )
-    assert "Historical Performance of 9999.HK and Synthetic Test Index" in text
+    assert "Historical Performance of 9999.HK and Synthetic Test Total Return Index" in text
     assert "9999.HK Portfolio Analysis" in text
     assert "3033.HK" not in text
 
@@ -133,7 +135,7 @@ def test_document_update_rebinds_system_owned_report_identity(client):
     assert identity["report_date"] == "2026-06-30"
     assert identity["month_name"] == "June"
     assert identity["product_ticker"] == "9999.HK"
-    assert identity["benchmark_name"] == "Synthetic Test Index"
+    assert identity["benchmark_name"] == "Synthetic Test Total Return Index"
     assert identity["template_version"] == "test-v1"
     assert identity["design_token_version"] == "test-v1"
     assert identity["language_mode"] == "EN"
@@ -141,8 +143,8 @@ def test_document_update_rebinds_system_owned_report_identity(client):
 
 def test_admin_can_import_an_approved_product_catalog(client):
     catalog = (
-        "product_code,ticker,name_en,name_zh_hant,benchmark_code,benchmark_name,currency,timezone,valid_from,valid_to,is_active,display_order,template_version,design_token_version,expected_constituent_count,formula_profile\n"
-        "3067,3067.HK,CSOP Approved Test ETF,,APPROVEDIDX,Approved Index,HKD,Asia/Hong_Kong,2026-01-01,,true,20,monthly-v2,monthly-v2,50,approved-index-v1\n"
+        "product_code,ticker,name_en,name_zh_hant,constituent_index_code,constituent_index_name,benchmark_instrument_code,benchmark_instrument_name,currency,timezone,valid_from,valid_to,is_active,display_order,template_version,design_token_version,expected_constituent_count,formula_profile\n"
+        "3067,3067.HK,CSOP Approved Test ETF,,APPROVEDIDX,Approved Index,APPROVEDTR,Approved Total Return Index,HKD,Asia/Hong_Kong,2026-01-01,,true,20,monthly-v2,monthly-v2,50,approved-index-v1\n"
     )
     imported = client.post(
         "/api/v1/products/import",
@@ -158,6 +160,7 @@ def test_admin_can_import_an_approved_product_catalog(client):
     assert report.status_code == 201, report.text
     assert report.json()["product_name"] == "CSOP Approved Test ETF (3067.HK)"
     assert report.json()["benchmark_code"] == "APPROVEDIDX"
+    assert report.json()["benchmark_instrument_code"] == "APPROVEDTR"
 
 
 def test_product_catalog_import_is_admin_only_and_atomic(client):
@@ -170,9 +173,9 @@ def test_product_catalog_import_is_admin_only_and_atomic(client):
     assert denied.json()["error_code"] == "PRODUCT_ADMIN_REQUIRED"
 
     invalid = (
-        "product_code,ticker,name_en,benchmark_code,valid_from,template_version,design_token_version,formula_profile\n"
-        "3067,3067.HK,Fund A,IDX,2026-01-01,v1,v1,f1\n"
-        "3067,3067.HK,Fund B,IDX,2026-01-01,v1,v1,f1\n"
+        "product_code,ticker,name_en,constituent_index_code,benchmark_instrument_code,valid_from,template_version,design_token_version,formula_profile\n"
+        "3067,3067.HK,Fund A,IDX,IDXTR,2026-01-01,v1,v1,f1\n"
+        "3067,3067.HK,Fund B,IDX,IDXTR,2026-01-01,v1,v1,f1\n"
     )
     rejected = client.post(
         "/api/v1/products/import",

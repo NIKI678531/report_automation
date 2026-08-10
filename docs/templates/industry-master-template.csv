@@ -1,0 +1,4 @@
+taxonomy,version,level,code,parent_code,name_en,name_zh_hant,valid_from,valid_to,source,source_record_key
+HSICS,HSICS-YYYY-VERSION,INDUSTRY,00,,Example Industry,示例行業,YYYY-MM-DD,YYYY-MM-DD,Official source,industry-00
+HSICS,HSICS-YYYY-VERSION,SECTOR,0010,00,Example Sector,示例板塊,YYYY-MM-DD,YYYY-MM-DD,Official source,sector-0010
+HSICS,HSICS-YYYY-VERSION,SUBSECTOR,001010,0010,Example Subsector,示例子行業,YYYY-MM-DD,YYYY-MM-DD,Official source,subsector-001010

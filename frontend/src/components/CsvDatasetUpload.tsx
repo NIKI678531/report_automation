@@ -7,7 +7,7 @@ type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 const templates: Record<DatasetType, string> = {
   constituents: "security_code,ticker,name_en,name_zh_hant,close_price,currency,weight,sector,return_1m,return_3m,return_6m,return_ytd\n",
   historical_performance: "instrument_role,instrument_code,trade_date,total_return_value,series_type,currency,source\n",
-  final_analytics: "record_type,as_of_date,security_code,ticker,name_en,name_zh_hant,close_price,currency,value_scale,weight,sector,return_1m,return_3m,return_6m,return_ytd,metric_code,metric_date,value,unit,source\n",
+  final_analytics: "record_type,as_of_date,security_code,ticker,name_en,name_zh_hant,close_price,currency,value_scale,weight,sector,return_1m,return_3m,return_6m,return_ytd,metric_code,metric_date,value,unit,source,market,calendar_date,is_trading_day,index_code,event_type,announcement_date,effective_date\n",
 };
 
 export function CsvDatasetUpload({ report, datasetType, busy, run, recalculateAfterApply = false }: {

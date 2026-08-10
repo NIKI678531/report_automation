@@ -7,6 +7,7 @@ from docx import Document
 def prepared_report(client):
     report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
     client.post(f"/api/v1/reports/{report['id']}/snapshots", json={"source_policy": "GOLDEN_FIXTURE"})
+    client.post(f"/api/v1/reports/{report['id']}/calculations")
     return report["id"]
 
 
@@ -16,13 +17,58 @@ def test_calculation_and_ai_draft_are_versioned_and_bound(client):
     assert calculated.status_code == 200, calculated.text
     assert calculated.json()["metrics"]["constituent_count"] == 30
     assert calculated.json()["formula_version"] == "hstech-2026.1"
+    assert client.get(f"/api/v1/reports/{report_id}").json()["status"] == "EDITING"
     version = calculated.json()["document_version"]
+    metrics = client.get(f"/api/v1/reports/{report_id}/metrics").json()
+    modules = client.get(f"/api/v1/reports/{report_id}/modules").json()
+    quality = client.get(f"/api/v1/reports/{report_id}/quality-results").json()
+    assert {item["metric_code"] for item in metrics} >= {
+        "constituent_count", "weight_total", "historical.return_1m",
+        "constituent.close_price", "constituent.weight", "constituent.return_1m", "industry.weight",
+    }
+    assert len([item for item in metrics if item["metric_code"] == "constituent.weight"]) == 30
+    assert {item["module_code"] for item in modules} == {
+        "constituents_performance", "final_analytics", "footnotes", "historical_performance",
+    }
+    assert all(item["source_dataset_ids"] for item in modules)
+    assert {item["check_id"] for item in quality} >= {"QC-001", "QC-002", "QC-004"}
+    bound = client.get(f"/api/v1/reports/{report_id}").json()["latest_document"]["content"]["module_bindings"]
+    assert {value["module_snapshot_id"] for value in bound.values()} == {item["id"] for item in modules}
     drafted = client.post(f"/api/v1/reports/{report_id}/ai/in-review", json={"version": version, "user_prompt": "Approved outlook pending reviewer confirmation."})
     assert drafted.status_code == 200, drafted.text
     content = drafted.json()["content"]
     assert content["ai_provenance"]["provider"] == "deterministic-template"
     assert content["ai_provenance"]["metric_bindings"]
     assert "30 constituents" in content["sections"]["month_in_review"]["summary"]
+    review = client.get(f"/api/v1/reports/{report_id}/review")
+    assert next(item for item in review.json()["checks"] if item["check_id"] == "QC-008")["status"] == "PASSED"
+
+
+def test_ai_number_check_blocks_unbound_numbers(client):
+    report_id = prepared_report(client)
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    drafted = client.post(
+        f"/api/v1/reports/{report_id}/ai/in-review",
+        json={"version": detail["latest_document"]["version"], "user_prompt": "Approved outlook."},
+    ).json()
+    content = drafted["content"]
+    content["sections"]["month_in_review"]["outlook"] = "The fund is expected to return 99%."
+    saved = client.put(
+        f"/api/v1/reports/{report_id}/document",
+        json={"version": drafted["version"], "content": content},
+    )
+    assert saved.status_code == 200, saved.text
+    review = client.get(f"/api/v1/reports/{report_id}/review").json()
+    check = next(item for item in review["checks"] if item["check_id"] == "QC-008")
+    assert check["status"] == "FAILED"
+    assert "99%" in check["actual"]["unmatched"]
+    finalized = client.post(
+        f"/api/v1/reports/{report_id}/finalize",
+        json={"version": saved.json()["version"]},
+    )
+    assert finalized.status_code == 422
+    assert finalized.json()["error_code"] == "QC-008"
+    assert client.get(f"/api/v1/reports/{report_id}").json()["status"] == "QA_BLOCKED"
 
 
 def test_news_candidate_selection_and_order(client):

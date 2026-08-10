@@ -37,11 +37,46 @@ def test_misdirected_file_names_the_slot_it_belongs_to(client, report):
     response = upload(client, report["id"], "index_constituents", FIXTURES / "bloomberg_monthly.xlsx")
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["status"] == "REJECTED"
+    assert body["status"] == "NEEDS_MAPPING"
     finding = body["validation_results"][0]
-    assert finding["error_code"] == "DATASET_MISMATCH"
+    assert finding["error_code"] == "MAP-001"
     # The hint has to name where the file should go, not merely that it does not fit here.
     assert "constituent_returns" in finding["fix_hint"]
+
+
+def test_import_binds_the_exact_mapping_profile_and_reports_duplicate_return_group(client, report):
+    response = upload(client, report["id"], "constituent_returns", FIXTURES / "bloomberg_monthly.xlsx")
+    assert response.status_code == 201, response.text
+    body = response.json()
+    profiles = client.get("/api/v1/mapping-profiles?dataset_type=constituent_returns").json()
+    assert body["mapping_profile_id"] == profiles[0]["id"]
+    assert body["mapping_version"] == 1
+    assert any(item["error_code"] == "IGNORED_DUPLICATE_RETURN_GROUP" for item in body["validation_results"])
+
+
+def test_mapping_profile_versions_are_admin_only_and_immutable(client):
+    command = {
+        "profile_id": "new_vendor_constituents",
+        "dataset_type": "index_constituents",
+        "source_family": "NEW_VENDOR",
+        "selector": {"extensions": [".csv"], "required_fields": ["security_code", "weight", "close_price"]},
+        "field_map": {
+            "security_code": {"aliases": ["Security"]},
+            "weight": {"aliases": ["Weight"]},
+            "close_price": {"aliases": ["Close"]},
+        },
+        "unit_map": {"weight": "PERCENT"},
+        "version": 1,
+        "status": "APPROVED",
+    }
+    forbidden = client.post("/api/v1/mapping-profiles", json=command, headers={"X-User-Role": "EDITOR"})
+    assert forbidden.status_code == 403
+    created = client.post("/api/v1/mapping-profiles", json=command, headers={"X-User-Role": "ADMIN"})
+    assert created.status_code == 201, created.text
+    assert created.json()["approved_by"] == "local-user"
+    duplicate = client.post("/api/v1/mapping-profiles", json=command, headers={"X-User-Role": "ADMIN"})
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error_code"] == "MAPPING_PROFILE_IMMUTABLE"
 
 
 def test_every_uncovered_security_is_reported_at_once(client, report):

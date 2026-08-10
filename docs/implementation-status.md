@@ -1,6 +1,6 @@
 # Implementation status against V2.1
 
-Last verified: 2026-08-07
+Last verified: 2026-08-10
 
 ## Implemented and tested
 
@@ -25,12 +25,19 @@ Last verified: 2026-08-07
 - FMP Stable server adapter with header-only secret handling, constituent/general scopes, report-month date filters, provider normalization, URL/hash deduplication, report-scoped candidates, and fail-closed error handling.
 - Historical Performance raw Total Return CSV and Final Analytics constituent/KPI CSV, including preview/diff/reasoned apply, explicit ratio scale, server calculations, and immutable input snapshots.
 - DA-Report-derived workbench tokens: local Inter/Roboto Mono, glass surfaces, restrained elevation, responsive filter bars, selected news states, and reduced-motion support.
+- Versioned MappingProfile persistence and administrator API; CSV/XLSX sheet/header scanning now reads field aliases, explicit units and approved unlabelled-column positions from the selected profile. Ambiguous or unknown formats stop in `NEEDS_MAPPING`, and duplicate Bloomberg return groups are recorded without double import.
+- Normalized SnapshotDataset, MetricValue, ModuleSnapshot and QualityCheckResult persistence with Decimal database columns, lineage IDs/checksums, module bindings and read APIs. Existing document sections remain a compatibility projection.
+- Effective-dated HSICS master CSV import with 2/4/6 digit code restoration, hierarchy/effective-range validation and report-date constituent mapping. Non-fixture finalization requires a bound HSICS dataset.
+- Final Analytics trading-calendar and index-event records, report-date AUM validation, 95% daily-turnover coverage gate, and authoritative next rebalancing selection.
+- Product configuration now separates the constituent index (`HSTECH`) from the official return benchmark instrument (`HSTECHN`).
+- DA-Report SQLite provider with strict current-constituent title matching, report candidate relations, persisted ensure idempotency, local read-only mode, and checksum-verified TOS presigned-object materialization to ephemeral disk. Company News automatically loads candidates once without auto-selecting them.
+- V2.1 lifecycle states, calculation-before-finalize gating, QC-008 AI number binding, dynamic lineage footnotes, and canonical cross-format content manifests for QC-010 comparison.
 
 ## Incomplete or environment-dependent
 
 - Production CDB logical views and credentials are unavailable; `CDB_ONLY` intentionally fails closed. The adapter/configuration must be completed against approved physical views.
 - Microsoft Entra token signature, issuer, audience, and group validation requires tenant/application configuration. Local mode enforces roles using test headers; deployed `ENTRA` mode currently enforces bearer presence and must be connected to the company identity configuration before production.
-- Azure OpenAI deployment and DA-Report news connector are unavailable. The current assisted draft is deterministic and provenance-bound; manual approved news ingestion is implemented.
+- Azure OpenAI deployment is unavailable. The current assisted draft is deterministic and MetricValue-bound; DA-Report snapshot news and manual approved news ingestion are implemented.
 - Celery/Redis worker separation is represented in deployment topology, but the local implementation executes rendering inline while persisting the same job states. Production queue execution remains to be wired.
 - Object storage and short-lived signed URLs require the company storage endpoint; local artifacts use the workspace filesystem.
 - English golden output is implemented. Full Traditional Chinese and paired bilingual templates, terminology workflow, and language completeness rules remain incomplete.
@@ -39,5 +46,6 @@ Last verified: 2026-08-07
 - The business-approved full CSOP listed-fund CSV has not been supplied. The production catalog therefore contains only the confirmed 3033 baseline; test-only products are never seeded by migrations.
 - A rotated FMP key has not been injected into the development runtime, so live FMP coverage for Hong Kong tickers remains unverified. Automated provider tests use an HTTP mock and no real credential.
 - Review v2 currently supports rich-text blocks, creation/deletion, drag and resize. Dedicated image/data-table block property editors, bilingual block editing, undo/redo history, and DOCX fidelity for complex staggered rows remain incomplete.
+- Production CDB views, the formal report-date 112-subindustry HSICS file, complete KPI/calendar/event feeds, and TOS credentials/object publication remain environment inputs. The code fails closed or marks QA blocked rather than copying facts from the PDF.
 
 This file is an implementation ledger, not a waiver. Items above remain part of the active V2.1 objective.

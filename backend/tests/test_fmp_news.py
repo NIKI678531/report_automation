@@ -135,3 +135,30 @@ def test_manual_candidate_cannot_be_published_after_the_report_date(client):
     })
     assert response.status_code == 422
     assert response.json()["error_code"] == "NEWS_DATE_RANGE_INVALID"
+
+
+def test_same_article_can_be_related_to_two_reports_without_duplicate_news_rows(client, monkeypatch):
+    async def fake_fetch(scope, symbols, from_date, to_date, page, limit):
+        return [{
+            "source_name": "Approved Publisher",
+            "source_url": "https://example.test/shared-article",
+            "published_at": datetime(2026, 6, 12, 8, 30, tzinfo=timezone.utc),
+            "title": "Tencent shared report news",
+            "summary": "Approved snippet",
+            "ticker": "0700.HK",
+            "metadata_json": {"provider": "FMP", "scope": scope, "dedupe_hash": "shared"},
+        }]
+
+    monkeypatch.setattr("app.integrations.fmp.fetch_news", fake_fetch)
+    reports = []
+    for _ in range(2):
+        report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+        client.post(f"/api/v1/reports/{report['id']}/snapshots", json={"source_policy": "GOLDEN_FIXTURE"})
+        fetched = client.post(f"/api/v1/reports/{report['id']}/news/candidates/fetch", json={"scope": "CONSTITUENTS"})
+        assert fetched.status_code == 200, fetched.text
+        reports.append(report)
+
+    first = client.get(f"/api/v1/reports/{reports[0]['id']}/news/candidates").json()
+    second = client.get(f"/api/v1/reports/{reports[1]['id']}/news/candidates").json()
+    assert len(first) == len(second) == 1
+    assert first[0]["id"] == second[0]["id"]

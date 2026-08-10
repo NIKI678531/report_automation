@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.domain import service
-from app.domain.models import AuditEvent, DataImport, DataSnapshot, JobStatus, NewsItem, ProductCatalog, RenderArtifact, RenderJob, Report, ReportDocument, ReportNewsSelection, ReportStatus
+from app.domain.models import AuditEvent, DataImport, DataSnapshot, IndustryMasterRecord, JobStatus, MappingProfile, MetricValue, ModuleSnapshot, NewsFetchRun, NewsItem, ProductCatalog, QualityCheckResult, RenderArtifact, RenderJob, Report, ReportDocument, ReportNewsSelection, ReportStatus, utcnow
 from app.domain.schemas import (
     DocumentUpdate,
     FinalizeRequest,
@@ -23,6 +23,8 @@ from app.domain.schemas import (
     JobRead,
     ImportApply,
     ImportRead,
+    MappingProfileCreate,
+    MappingProfileRead,
     AiDraftRequest,
     CalculationRead,
     NewsCreate,
@@ -76,6 +78,127 @@ async def import_products(
     return service.import_products(db, rows, x_request_id)
 
 
+@router.post("/industry-master/import", status_code=status.HTTP_201_CREATED)
+async def import_industry_master(
+    request: Request,
+    db: Db,
+    x_request_id: Annotated[str, Depends(request_id)],
+    file: UploadFile = File(...),
+) -> dict:
+    from app.domain.industry import parse_industry_master_csv
+    if request.state.principal.role != "ADMIN":
+        raise HTTPException(status_code=403, detail={"error_code": "INDUSTRY_ADMIN_REQUIRED"})
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(status_code=422, detail={"error_code": "INDUSTRY_MASTER_FORMAT", "message": "Industry master must be a CSV file."})
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE"})
+    try:
+        rows = parse_industry_master_csv(data)
+    except (UnicodeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "INDUSTRY_MASTER_INVALID",
+            "message": str(error),
+            "severity": "BLOCKING",
+            "fix_hint": "Use the standard HSICS industry-master columns and correct all reported hierarchy errors.",
+        }) from error
+    return service.import_industry_master(db, rows, x_request_id)
+
+
+@router.get("/industry-master")
+def list_industry_master(db: Db, as_of_date: date | None = None) -> list[dict]:
+    query = select(IndustryMasterRecord)
+    if as_of_date:
+        from sqlalchemy import or_
+        query = query.where(
+            IndustryMasterRecord.valid_from <= as_of_date,
+            or_(IndustryMasterRecord.valid_to.is_(None), IndustryMasterRecord.valid_to >= as_of_date),
+        )
+    rows = db.scalars(query.order_by(IndustryMasterRecord.version, IndustryMasterRecord.level, IndustryMasterRecord.code))
+    return [{
+        "taxonomy": item.taxonomy,
+        "version": item.version,
+        "level": item.level,
+        "code": item.code,
+        "parent_code": item.parent_code,
+        "name_en": item.name_en,
+        "name_zh_hant": item.name_zh_hant,
+        "valid_from": item.valid_from,
+        "valid_to": item.valid_to,
+        "source": item.source,
+        "checksum": item.checksum,
+    } for item in rows]
+
+
+@router.get("/mapping-profiles", response_model=list[MappingProfileRead])
+def list_mapping_profiles(db: Db, dataset_type: str | None = None, include_drafts: bool = False) -> list[MappingProfile]:
+    query = select(MappingProfile)
+    if dataset_type:
+        query = query.where(MappingProfile.dataset_type == dataset_type)
+    if not include_drafts:
+        query = query.where(MappingProfile.status == "APPROVED")
+    return list(db.scalars(query.order_by(MappingProfile.dataset_type, MappingProfile.profile_id, MappingProfile.version.desc())))
+
+
+@router.post("/mapping-profiles", response_model=MappingProfileRead, status_code=status.HTTP_201_CREATED)
+def create_mapping_profile(
+    request: Request,
+    command: MappingProfileCreate,
+    db: Db,
+    x_request_id: Annotated[str, Depends(request_id)],
+) -> MappingProfile:
+    from app.domain import ingestion
+    if request.state.principal.role != "ADMIN":
+        raise HTTPException(status_code=403, detail={"error_code": "MAPPING_ADMIN_REQUIRED"})
+    if ingestion.get_spec(command.dataset_type) is None:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "UNSUPPORTED_DATASET",
+            "message": f"Unknown dataset type '{command.dataset_type}'.",
+        })
+    required_fields = command.selector.get("required_fields")
+    extensions = command.selector.get("extensions")
+    if not isinstance(required_fields, list) or not required_fields:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "MAPPING_SELECTOR_INVALID",
+            "message": "selector.required_fields must be a non-empty list.",
+        })
+    if not isinstance(extensions, list) or not extensions:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "MAPPING_SELECTOR_INVALID",
+            "message": "selector.extensions must be a non-empty list.",
+        })
+    missing_fields = sorted(set(required_fields) - set(command.field_map))
+    if missing_fields:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "MAPPING_FIELDS_MISSING",
+            "message": f"field_map is missing selector fields: {', '.join(missing_fields)}.",
+        })
+    existing = db.scalar(select(MappingProfile).where(
+        MappingProfile.profile_id == command.profile_id,
+        MappingProfile.version == command.version,
+    ))
+    if existing:
+        raise HTTPException(status_code=409, detail={
+            "error_code": "MAPPING_PROFILE_IMMUTABLE",
+            "message": "That mapping profile version already exists.",
+            "fix_hint": "Create a new version instead of overwriting an approved mapping.",
+        })
+    profile = MappingProfile(
+        **command.model_dump(),
+        approved_by=request.state.principal.subject if command.status == "APPROVED" else None,
+    )
+    db.add(profile)
+    db.flush()
+    service.audit(db, "mapping_profile.created", "mapping_profile", profile.id, x_request_id, {
+        "profile_id": profile.profile_id,
+        "version": profile.version,
+        "status": profile.status,
+    })
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
 @router.get("/reports", response_model=list[ReportRead])
 def list_reports(db: Db) -> list[Report]:
     return list(db.scalars(select(Report).order_by(Report.created_at.desc())))
@@ -104,6 +227,7 @@ def detail(db: Session, report: Report) -> ReportDetail:
             "mime_type": item.mime_type,
             "size_bytes": item.size_bytes,
             "checksum": item.checksum,
+            "content_manifest_checksum": item.content_manifest.get("checksum"),
         } for item in artifacts],
     )
 
@@ -207,8 +331,16 @@ async def create_import(
     if len(data) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE", "message": "Uploads are limited to 20 MB."})
     filename = file.filename or "upload"
+    profile = None
+    profile_matches: list[tuple[MappingProfile, object]] = []
+    if not spec.legacy:
+        approved_profiles = list(db.scalars(select(MappingProfile).where(MappingProfile.status == "APPROVED")))
+        profile_matches = ingestion.matching_profiles(approved_profiles, filename, data)
+        matching_dataset = [item for item in profile_matches if item[0].dataset_type == dataset_type]
+        if len(matching_dataset) == 1:
+            profile = matching_dataset[0][0]
     try:
-        payload, collector = ingestion.parse(dataset_type, filename, data, report.report_date)
+        payload, collector = ingestion.parse(dataset_type, filename, data, report.report_date, profile)
     except UnicodeError as error:
         raise HTTPException(status_code=422, detail={
             "error_code": "IMPORT_DECODE_FAILED", "message": "The file could not be decoded as UTF-8.",
@@ -216,6 +348,16 @@ async def create_import(
         }) from error
     # A file with bad rows is a first-class, inspectable resource rather than a 4xx: the user needs
     # to see every finding at once, and REJECTED imports stay queryable in the report's history.
+    if profile is None and profile_matches and not spec.legacy:
+        candidate_types = sorted({item[0].dataset_type for item in profile_matches})
+        collector = ingestion.FindingCollector()
+        collector.add(
+            "MAP-001",
+            f"'{filename}' does not uniquely match the requested {dataset_type} profile.",
+            fix_hint=f"This file matches: {', '.join(candidate_types)}. Select the corresponding dataset or approve a new profile.",
+            entity_id=candidate_types[0],
+        )
+        payload = {}
     rejected = collector.has_blocking() or not payload
     validations = collector.as_dicts()
     if not rejected and dataset_type in {"constituents", "final_analytics"}:
@@ -240,8 +382,9 @@ async def create_import(
     item = DataImport(
         report_id=report.id, dataset_type=dataset_type, original_filename=filename,
         mime_type=file.content_type or "application/octet-stream", size_bytes=len(data), checksum=hashlib.sha256(data).hexdigest(),
-        parser_version=f"{dataset_type}-v1", payload=payload, validation_results=validations,
-        status="REJECTED" if rejected else "VALIDATED",
+        parser_version=f"{dataset_type}-mapping-v2", mapping_profile_id=profile.id if profile else None,
+        mapping_version=profile.version if profile else None, payload=payload, validation_results=validations,
+        status=("NEEDS_MAPPING" if rejected and any(item.get("error_code", "").startswith("MAP-") for item in validations) else "REJECTED") if rejected else "VALIDATED",
         diff=diff,
     )
     db.add(item); db.flush()
@@ -281,6 +424,62 @@ def calculations(report_id: str, db: Db, x_request_id: Annotated[str, Depends(re
     return CalculationRead(snapshot_id=report.active_snapshot_id or "", formula_version=str(document.content["formula_version"]), metrics=metrics, quality_results=results, document_version=document.version)
 
 
+@router.get("/reports/{report_id}/metrics")
+def report_metrics(report_id: str, db: Db) -> list[dict]:
+    report = service.get_report(db, report_id)
+    if not report.active_snapshot_id:
+        return []
+    rows = db.scalars(select(MetricValue).where(MetricValue.snapshot_id == report.active_snapshot_id).order_by(MetricValue.metric_code))
+    return [{
+        "id": item.id,
+        "metric_code": item.metric_code,
+        "dimension_key": item.dimension_key,
+        "value": str(item.value) if item.value is not None else None,
+        "raw_value": item.raw_value,
+        "unit": item.unit,
+        "period_start": item.period_start,
+        "period_end": item.period_end,
+        "formula_version": item.formula_version,
+        "lineage": item.lineage,
+    } for item in rows]
+
+
+@router.get("/reports/{report_id}/modules")
+def report_modules(report_id: str, db: Db) -> list[dict]:
+    report = service.get_report(db, report_id)
+    if not report.active_snapshot_id:
+        return []
+    rows = db.scalars(select(ModuleSnapshot).where(ModuleSnapshot.snapshot_id == report.active_snapshot_id).order_by(ModuleSnapshot.module_code))
+    return [{
+        "id": item.id,
+        "module_code": item.module_code,
+        "formula_version": item.formula_version,
+        "template_version": item.template_version,
+        "source_dataset_ids": item.source_dataset_ids,
+        "metric_value_ids": item.metric_value_ids,
+        "checksum": item.checksum,
+        "input_checksum": item.input_checksum,
+    } for item in rows]
+
+
+@router.get("/reports/{report_id}/quality-results")
+def report_quality_results(report_id: str, db: Db) -> list[dict]:
+    report = service.get_report(db, report_id)
+    if not report.active_snapshot_id:
+        return []
+    rows = db.scalars(select(QualityCheckResult).where(QualityCheckResult.snapshot_id == report.active_snapshot_id).order_by(QualityCheckResult.check_id, QualityCheckResult.result_key))
+    return [{
+        "id": item.id,
+        "check_id": item.check_id,
+        "severity": item.severity,
+        "status": item.status,
+        "entity_id": item.entity_id,
+        "actual": item.actual,
+        "threshold": item.threshold,
+        "fix_hint": item.fix_hint,
+    } for item in rows]
+
+
 @router.post("/reports/{report_id}/ai/in-review")
 def generate_in_review(report_id: str, command: AiDraftRequest, db: Db, x_request_id: Annotated[str, Depends(request_id)]) -> dict:
     document = service.ai_assisted_draft(db, service.get_report(db, report_id), command.version, command.user_prompt, x_request_id)
@@ -317,7 +516,7 @@ def list_news_providers() -> list[dict]:
 
 @router.post("/reports/{report_id}/news/candidates/fetch")
 async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db: Db, x_request_id: Annotated[str, Depends(request_id)]) -> dict:
-    from app.integrations.news import NewsProviderError, fetch_news
+    from app.integrations.news import NewsProviderError, fetch_news, get_spec
     report = service.get_report(db, report_id)
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED"})
@@ -327,19 +526,88 @@ async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db:
     if from_date > to_date or to_date > report.report_date:
         raise HTTPException(status_code=422, detail={"error_code": "NEWS_DATE_RANGE_INVALID", "message": "News dates must be ordered and cannot exceed the report date."})
     symbols: list[str] = []
+    constituents: list[dict] = []
     if command.scope == "CONSTITUENTS":
         if not report.active_snapshot_id:
             raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED", "message": "Constituent news requires an active snapshot."})
         snapshot = db.get(DataSnapshot, report.active_snapshot_id)
-        symbols = sorted({str(row.get("ticker", "")).upper() for row in snapshot.payload.get("constituents", []) if row.get("ticker")})
+        if not snapshot or snapshot.status.value != "VALID":
+            raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_NOT_VALID", "message": "Constituent news requires a valid active snapshot."})
+        constituents = list(snapshot.payload.get("constituents", []))
+        symbols = sorted({str(row.get("ticker", "")).upper() for row in constituents if row.get("ticker")})
         if not symbols:
             raise HTTPException(status_code=422, detail={"error_code": "CONSTITUENT_TICKERS_REQUIRED"})
+    fetch_run = None
     try:
-        provider, candidates = await fetch_news(command.provider, command.scope, symbols, from_date, to_date, command.page, command.limit)
+        provider_key = get_spec(command.provider).key
+        if command.ensure:
+            existing_items = service.list_report_news_candidates(db, report.id)
+            if existing_items:
+                return {
+                    "provider": provider_key,
+                    "fetched": 0,
+                    "created": 0,
+                    "ensured": False,
+                    "skip_reason": "CANDIDATES_ALREADY_EXIST",
+                    "items": [NewsRead.model_validate(item).model_dump() for item in existing_items],
+                }
+            fetch_run = db.scalar(select(NewsFetchRun).where(
+                NewsFetchRun.report_id == report.id,
+                NewsFetchRun.snapshot_id == report.active_snapshot_id,
+                NewsFetchRun.provider == provider_key,
+                NewsFetchRun.scope == command.scope,
+                NewsFetchRun.from_date == from_date,
+                NewsFetchRun.to_date == to_date,
+            ))
+            if fetch_run and fetch_run.status == "SUCCEEDED":
+                return {
+                    "provider": provider_key,
+                    "fetched": 0,
+                    "created": 0,
+                    "ensured": False,
+                    "skip_reason": "WINDOW_ALREADY_ENSURED",
+                    "items": [],
+                }
+            if fetch_run is None:
+                fetch_run = NewsFetchRun(
+                    report_id=report.id,
+                    snapshot_id=report.active_snapshot_id or "",
+                    provider=provider_key,
+                    scope=command.scope,
+                    from_date=from_date,
+                    to_date=to_date,
+                    status="RUNNING",
+                )
+                db.add(fetch_run)
+            else:
+                fetch_run.status = "RUNNING"
+                fetch_run.error_code = None
+            db.commit()
+        provider, candidates = await fetch_news(
+            command.provider,
+            command.scope,
+            symbols,
+            from_date,
+            to_date,
+            command.page,
+            command.limit,
+            constituents=constituents,
+        )
     except NewsProviderError as error:
+        if fetch_run:
+            fetch_run.status = "FAILED"
+            fetch_run.error_code = error.code
+            fetch_run.completed_at = utcnow()
+            db.commit()
         raise HTTPException(status_code=error.http_status, detail={"error_code": error.code, "message": error.message, "retryable": error.retryable}) from error
     items, created = service.upsert_news_candidates(db, report, candidates, x_request_id, provider=provider)
-    return {"provider": provider, "fetched": len(candidates), "created": created, "items": [NewsRead.model_validate(item).model_dump() for item in items]}
+    if fetch_run:
+        fetch_run.status = "SUCCEEDED"
+        fetch_run.fetched_count = len(candidates)
+        fetch_run.matched_count = len(items)
+        fetch_run.completed_at = utcnow()
+        db.commit()
+    return {"provider": provider, "fetched": len(candidates), "created": created, "ensured": bool(command.ensure), "items": [NewsRead.model_validate(item).model_dump() for item in items]}
 
 
 @router.get("/reports/{report_id}/news/candidates", response_model=list[NewsRead])
@@ -352,8 +620,7 @@ def report_news_candidates(
     importance: str | None = None,
 ) -> list[NewsItem]:
     service.get_report(db, report_id)
-    items = list(db.scalars(select(NewsItem).order_by(NewsItem.published_at.desc())))
-    items = [item for item in items if report_id in (item.metadata_json or {}).get("report_ids", [])]
+    items = service.list_report_news_candidates(db, report_id)
     if query:
         needle = query.casefold()
         items = [item for item in items if needle in f"{item.title} {item.summary} {item.ticker or ''}".casefold()]
@@ -417,6 +684,7 @@ def review(report_id: str, db: Db) -> ReviewRead:
     sections = document.content.get("sections", {})
     placeholders = any("Add the approved" in str(value) for value in sections.values())
     checks.append({"check_id": "QC-009", "severity": "BLOCKING", "status": "FAILED" if placeholders else "PASSED", "fix_hint": "Replace all editorial placeholders."})
+    checks.append(service.ai_number_check(db, report, document))
     checks.append({"check_id": "LANGUAGE", "severity": "WARNING", "status": "PASSED" if report.language_mode == "EN" else "WARNING", "fix_hint": "Complete every configured language block."})
     blocking = [item for item in checks if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
     warnings = [item for item in checks if item["severity"] == "WARNING" and item["status"] != "PASSED"]
