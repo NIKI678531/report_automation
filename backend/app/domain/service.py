@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from decimal import InvalidOperation
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import or_, select
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from . import ingestion
-from .calculation import build_lineage_footnotes, calculate_snapshot, quality_checks
+from .calculation import build_lineage_footnotes, calculate_snapshot, historical_performance, quality_checks
 from .document import DocumentValidationError, bind_snapshot, checksum, initial_document, validate_document_content
 from .models import (
     AuditEvent,
@@ -414,17 +415,49 @@ def ai_number_check(db: Session, report: Report, document: ReportDocument) -> di
     }
 
 
+def dataset_present(payload: dict, dataset_type: str) -> bool:
+    if dataset_type in set(payload.get("datasets", {})):
+        return True
+    constituents = payload.get("constituents", [])
+    if dataset_type == "index_constituents":
+        return bool(constituents)
+    if dataset_type == "constituent_returns":
+        return bool(constituents) and any(
+            any(row.get(field) is not None for field in ingestion.RETURN_FIELDS)
+            for row in constituents
+        )
+    if dataset_type == "total_return_series":
+        return bool(payload.get("total_return_series"))
+    if dataset_type == "fund_kpi_daily":
+        return bool(payload.get("fund_kpis"))
+    if dataset_type == "trading_calendar":
+        return bool(payload.get("trading_calendar"))
+    if dataset_type == "index_events":
+        return bool(payload.get("index_events"))
+    if dataset_type == "industry_master":
+        return bool(payload.get("industry_master"))
+    return False
+
+
+def snapshot_dataset_type(dataset_type: str) -> str:
+    return {
+        "index_constituents": "constituent_snapshot",
+        "constituent_returns": "constituent_period_return",
+        "fund_kpi_daily": "fund_kpi_daily",
+        "index_events": "index_event",
+    }.get(dataset_type, dataset_type)
+
+
 def missing_required_slots(payload: dict) -> list[str]:
     """Required slots that have not been applied to this snapshot yet.
 
     A legacy combined upload satisfies everything it owns in one file, so a snapshot whose
     constituents already carry sector and returns is treated as complete.
     """
-    applied = set(payload.get("datasets", {}))
-    constituents = payload.get("constituents", [])
-    if constituents and all(row.get("sector") for row in constituents) and all(row.get("return_1m") is not None for row in constituents):
-        return []
-    return [key for key in ingestion.REQUIRED_SLOTS if key not in applied]
+    missing = [key for key in ingestion.REQUIRED_SLOTS if not dataset_present(payload, key)]
+    if not dataset_present(payload, "industry_master"):
+        missing.append("industry_master")
+    return missing
 
 
 def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> list[dict]:
@@ -434,6 +467,18 @@ def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> li
     constituent set is visible instead of silently dropped.
     """
     findings: list[dict] = []
+    direct_slots = {
+        "total_return_series": "total_return_series",
+        "fund_kpi_daily": "fund_kpis",
+        "trading_calendar": "trading_calendar",
+        "index_events": "index_events",
+    }
+    if spec.key in direct_slots:
+        target = direct_slots[spec.key]
+        base[target] = json.loads(json.dumps(payload.get(target, [])))
+        if spec.key == "total_return_series":
+            base["historical_performance"] = {"rows": []}
+        return findings
     if spec.key == "index_constituents":
         incoming = payload.get("constituents", [])
         existing = {row["security_code"]: row for row in base.get("constituents", [])}
@@ -455,7 +500,7 @@ def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> li
         base["as_of_date"] = incoming[0]["as_of_date"] if incoming else base.get("as_of_date")
         return findings
 
-    rows = payload.get("constituent_returns") or payload.get("sector_mapping") or payload.get("sector_overrides") or []
+    rows = payload.get("constituent_returns") or []
     by_code = {row["security_code"]: row for row in rows}
     constituents = base.get("constituents", [])
     if not constituents:
@@ -491,11 +536,6 @@ def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> li
             "message": f"{name} ({code}) has no value from {spec.title}.",
             "fix_hint": "Cover this security with an approved sector override, or refresh the vendor file." if "sector" in spec.owns else "Refresh the Bloomberg workbook so this security is included.",
         })
-    if spec.key == "sector_overrides":
-        base.setdefault("overrides", {})["sector"] = [
-            {"security_code": row["security_code"], "sector": row["sector"], "reason": row["reason"], "source": row["source"]}
-            for row in rows
-        ]
     return findings
 
 
@@ -664,7 +704,17 @@ def list_news_candidates_for_report_context(db: Session, report: Report) -> list
         if item.id not in items and linked_report_ids.intersection(context_report_ids):
             if linked_report_ids == {report.id} or metadata.get("provider") != "MANUAL":
                 items[item.id] = item
-    return sorted(items.values(), key=lambda item: item.published_at, reverse=True)
+    month_start = report.report_date.replace(day=1)
+    hkt = ZoneInfo("Asia/Hong_Kong")
+
+    def in_report_month(item: NewsItem) -> bool:
+        published_at = item.published_at
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+        published_date = published_at.astimezone(hkt).date()
+        return month_start <= published_date <= report.report_date
+
+    return sorted((item for item in items.values() if in_report_month(item)), key=lambda item: item.published_at, reverse=True)
 
 
 def resolve_news_constituent_snapshot(db: Session, report: Report) -> DataSnapshot | None:
@@ -782,7 +832,7 @@ def create_snapshot(db: Session, report: Report, source_policy: str, mapping_ver
         report.active_snapshot_id = snapshot.id
         report.status = ReportStatus.DATA_READY
         current = latest_document(db, report.id)
-        bound = bind_snapshot(current.content, payload)
+        bound = bind_snapshot(current.content, payload, include_editorial=True)
         bound["snapshot_id"] = snapshot.id
         next_document = ReportDocument(
             report_id=report.id,
@@ -801,7 +851,7 @@ def create_snapshot(db: Session, report: Report, source_policy: str, mapping_ver
     return snapshot
 
 
-def apply_import(db: Session, report: Report, data_import: DataImport, reason: str, request_id: str) -> DataSnapshot:
+def apply_import(db: Session, report: Report, data_import: DataImport, reason: str | None, request_id: str) -> DataSnapshot:
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED", "message": "Create a revision before applying an import."})
     if data_import.report_id != report.id:
@@ -810,28 +860,33 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         raise HTTPException(status_code=409, detail={"error_code": "IMPORT_NOT_APPLICABLE", "message": "Import is not in VALIDATED state."})
     product = resolve_product(db, report.product_code, report.report_date)
     active_snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
+    replacing_dataset = dataset_present(active_snapshot.payload or {}, data_import.dataset_type) if active_snapshot else False
+    previous_dataset = db.scalar(select(SnapshotDataset).where(
+        SnapshotDataset.snapshot_id == active_snapshot.id,
+        SnapshotDataset.dataset_type == snapshot_dataset_type(data_import.dataset_type),
+    )) if active_snapshot else None
+    if replacing_dataset and not reason:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "IMPORT_REASON_REQUIRED",
+            "message": "Replacing the active dataset requires a reason.",
+            "severity": "BLOCKING",
+            "fix_hint": "Describe why the current dataset is being replaced.",
+        })
     if active_snapshot:
         base = json.loads(json.dumps(active_snapshot.payload))
     else:
         base = empty_payload(report.report_date)
     spec = ingestion.get_spec(data_import.dataset_type)
+    if spec is None:
+        raise HTTPException(status_code=409, detail={
+            "error_code": "LEGACY_IMPORT_RETIRED",
+            "message": f"The {data_import.dataset_type} import path has been retired.",
+            "severity": "BLOCKING",
+            "fix_hint": "Upload the corresponding logical dataset slots instead.",
+        })
     findings: list[dict] = []
-    if data_import.dataset_type == "historical_performance":
-        if not active_snapshot:
-            raise HTTPException(status_code=422, detail={"error_code": "BASE_SNAPSHOT_REQUIRED", "message": "Historical Performance requires an active snapshot to preserve the remaining report datasets."})
-        base["total_return_series"] = data_import.payload["total_return_series"]
-        base["historical_performance"] = data_import.payload["historical_performance"]
-    elif data_import.dataset_type == "final_analytics":
-        base["constituents"] = data_import.payload["constituents"]
-        base["fund_kpis"] = data_import.payload["fund_kpis"]
-        base["trading_calendar"] = data_import.payload["trading_calendar"]
-        base["index_events"] = data_import.payload.get("index_events", [])
-        base["constituent_index_code"] = report.constituent_index_code
-        base["analytics"] = {"top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": []}
-    elif data_import.dataset_type == "constituents":
-        base["constituents"] = data_import.payload["constituents"]
-    else:
-        findings = overlay_slot(base, spec, data_import.payload)
+    findings = overlay_slot(base, spec, data_import.payload)
+    base["constituent_index_code"] = report.constituent_index_code
     from .industry import map_effective_hsics
     findings.extend(map_effective_hsics(db, base, report.report_date))
     base.setdefault("datasets", {})[data_import.dataset_type] = {
@@ -883,10 +938,23 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
     data_import.reason = reason
     data_import.applied_snapshot_id = snapshot.id
     audit(db, "import.applied", "import", data_import.id, request_id, {
+        "apply_mode": "OVERWRITE" if replacing_dataset else "FIRST_APPLY",
         "reason": reason, "snapshot_id": snapshot.id, "dataset_type": data_import.dataset_type,
+        "previous_snapshot_id": active_snapshot.id if active_snapshot else None,
+        "replaced_snapshot_dataset_id": previous_dataset.id if previous_dataset else None,
+        "replaced_checksum": previous_dataset.checksum if previous_dataset else None,
+        "diff": data_import.diff,
         "snapshot_status": status.value, "missing_slots": missing, "findings": len(findings),
     })
-    db.commit(); db.refresh(snapshot)
+    if status == SnapshotStatus.VALID:
+        try:
+            run_calculation(db, report, request_id)
+        except Exception:
+            db.rollback()
+            raise
+    else:
+        db.commit()
+    db.refresh(snapshot)
     return snapshot
 
 
@@ -959,67 +1027,33 @@ def finalize(db: Session, report: Report, expected_version: int, request_id: str
         raise HTTPException(status_code=409, detail={"error_code": "VERSION_CONFLICT", "current_version": document.version})
     if not report.active_snapshot_id:
         raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED", "message": "A valid active snapshot is required."})
-    snapshot = db.get(DataSnapshot, report.active_snapshot_id)
 
     def qa_block(detail: dict) -> None:
         report.status = ReportStatus.QA_BLOCKED
         db.commit()
         raise HTTPException(status_code=422, detail=detail)
 
-    try:
-        require_complete_snapshot(snapshot)
-    except HTTPException as error:
-        if isinstance(error.detail, dict):
-            qa_block(error.detail)
-        raise
-    module_codes = set(db.scalars(select(ModuleSnapshot.module_code).where(ModuleSnapshot.snapshot_id == snapshot.id)))
-    required_modules = {"historical_performance", "constituents_performance", "final_analytics", "footnotes"}
-    missing_modules = sorted(required_modules - module_codes)
-    if missing_modules:
+    gate_failures = [
+        item for item in release_gate_checks(db, report, document)
+        if item.get("severity") == "BLOCKING" and item.get("status") != "PASSED"
+    ]
+    if gate_failures:
+        first = gate_failures[0]
+        check_id = str(first.get("check_id") or "QUALITY_BLOCKED")
+        error_code = {
+            "QC-008": "QC-008",
+            "QC-009": "EDITORIAL_PLACEHOLDERS",
+            "CALCULATION_REQUIRED": "CALCULATION_REQUIRED",
+            "IND-001": "IND-001",
+            "SNAPSHOT_REQUIRED": "SNAPSHOT_REQUIRED",
+            "SNAPSHOT_INCOMPLETE": "SNAPSHOT_INCOMPLETE",
+        }.get(check_id, "QUALITY_BLOCKED")
         qa_block({
-            "error_code": "CALCULATION_REQUIRED",
-            "message": "The active snapshot has not produced every required module snapshot.",
-            "severity": "BLOCKING",
-            "fix_hint": "Run the server calculation for the active snapshot before finalization.",
-            "missing_modules": missing_modules,
+            "error_code": error_code,
+            "message": first.get("fix_hint") or "The report failed a release gate.",
+            "checks": gate_failures,
         })
-    if snapshot.source_policy != "GOLDEN_FIXTURE":
-        dataset_types = set(db.scalars(select(SnapshotDataset.dataset_type).where(SnapshotDataset.snapshot_id == snapshot.id)))
-        if "industry_master" not in dataset_types:
-            qa_block({
-                "error_code": "IND-001",
-                "message": "The active snapshot is not bound to one report-date-effective HSICS master.",
-                "severity": "BLOCKING",
-                "fix_hint": "Import the formal HSICS version and create a new complete snapshot.",
-            })
-    # quality_results mixes check results (which carry `status`) with overlay findings (which do
-    # not); an unresolved finding is a failure by default.
-    failures = [item for item in snapshot.quality_results if item["severity"] == "BLOCKING" and item.get("status", "FAILED") != "PASSED"]
-    if failures:
-        qa_block({"error_code": "QUALITY_BLOCKED", "checks": failures})
-    calculation_failures = list(db.scalars(select(QualityCheckResult).where(
-        QualityCheckResult.snapshot_id == snapshot.id,
-        QualityCheckResult.severity == "BLOCKING",
-        QualityCheckResult.status != "PASSED",
-    )))
-    if calculation_failures:
-        qa_block({
-            "error_code": "QUALITY_BLOCKED",
-            "checks": [{
-                "check_id": item.check_id,
-                "severity": item.severity,
-                "status": item.status,
-                "entity_id": item.entity_id,
-                "actual": item.actual,
-                "threshold": item.threshold,
-                "fix_hint": item.fix_hint,
-            } for item in calculation_failures],
-        })
-    number_check = ai_number_check(db, report, document)
-    if number_check["status"] != "PASSED":
-        qa_block({"error_code": "QC-008", "checks": [number_check]})
-    if "Add the approved" in json.dumps(document.content, ensure_ascii=False):
-        qa_block({"error_code": "EDITORIAL_PLACEHOLDERS", "message": "Replace all editorial placeholders before finalization."})
+
     report.status = ReportStatus.READY_TO_FINALIZE
     report.finalized_document_version = document.version
     report.status = ReportStatus.FINALIZED
@@ -1079,6 +1113,66 @@ def require_complete_snapshot(snapshot: DataSnapshot | None) -> None:
     })
 
 
+def release_gate_checks(db: Session, report: Report, document: ReportDocument) -> list[dict]:
+    checks: list[dict] = []
+    snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
+    try:
+        require_complete_snapshot(snapshot)
+    except HTTPException as error:
+        detail = error.detail if isinstance(error.detail, dict) else {}
+        checks.append({
+            "check_id": str(detail.get("error_code") or "SNAPSHOT_REQUIRED"),
+            "severity": "BLOCKING",
+            "status": "FAILED",
+            "fix_hint": str(detail.get("fix_hint") or "Create a complete valid snapshot."),
+        })
+        snapshot = None
+    if snapshot:
+        module_codes = set(db.scalars(select(ModuleSnapshot.module_code).where(ModuleSnapshot.snapshot_id == snapshot.id)))
+        missing_modules = sorted({"historical_performance", "constituents_performance", "final_analytics", "footnotes"} - module_codes)
+        checks.append({
+            "check_id": "CALCULATION_REQUIRED",
+            "severity": "BLOCKING",
+            "status": "FAILED" if missing_modules else "PASSED",
+            "actual": {"missing_modules": missing_modules},
+            "fix_hint": "Run the server calculation for the active snapshot." if missing_modules else "",
+        })
+        if snapshot.source_policy != "GOLDEN_FIXTURE":
+            dataset_types = set(db.scalars(select(SnapshotDataset.dataset_type).where(SnapshotDataset.snapshot_id == snapshot.id)))
+            checks.append({
+                "check_id": "IND-001",
+                "severity": "BLOCKING",
+                "status": "PASSED" if "industry_master" in dataset_types else "FAILED",
+                "fix_hint": "Import the formal report-date HSICS version and apply the constituent dataset again." if "industry_master" not in dataset_types else "",
+            })
+        for item in snapshot.quality_results or []:
+            checks.append({
+                "check_id": item.get("check_id") or item.get("error_code") or "SNAPSHOT_QUALITY",
+                "severity": item.get("severity", "BLOCKING"),
+                "status": item.get("status", "FAILED"),
+                "actual": item.get("actual"),
+                "fix_hint": item.get("fix_hint", ""),
+            })
+        for item in db.scalars(select(QualityCheckResult).where(QualityCheckResult.snapshot_id == snapshot.id)):
+            checks.append({
+                "check_id": item.check_id,
+                "severity": item.severity,
+                "status": item.status,
+                "actual": item.actual,
+                "fix_hint": item.fix_hint,
+            })
+    document_text = json.dumps(document.content, ensure_ascii=False)
+    placeholders = any(marker in document_text for marker in ("Add the approved", "Add monthly market review.", "Add outlook."))
+    checks.append({
+        "check_id": "QC-009",
+        "severity": "BLOCKING",
+        "status": "FAILED" if placeholders else "PASSED",
+        "fix_hint": "Replace all editorial placeholders." if placeholders else "",
+    })
+    checks.append(ai_number_check(db, report, document))
+    return checks
+
+
 def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict, ReportDocument, list[dict]]:
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED"})
@@ -1089,6 +1183,19 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
     product = resolve_product(db, report.product_code, report.report_date)
     formula_version = product.formula_profile
     derived_payload = json.loads(json.dumps(snapshot.payload))
+    if derived_payload.get("total_return_series"):
+        try:
+            derived_payload["historical_performance"] = historical_performance(
+                derived_payload["total_return_series"],
+                report.report_date,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail={
+                "error_code": "HISTORICAL_PERIODS_INCOMPLETE",
+                "message": str(error),
+                "severity": "BLOCKING",
+                "fix_hint": "Upload enough common FUND and BENCHMARK Total Return dates for every required period.",
+            }) from error
     analytics, metrics = calculate_snapshot(derived_payload)
     if metrics.get("next_rebalancing_date"):
         derived_payload["next_rebalancing_date"] = metrics["next_rebalancing_date"]
@@ -1141,7 +1248,7 @@ def ai_assisted_draft(db: Session, report: Report, expected_version: int, user_p
         f"{metrics['sector_count']} mapped sectors. Performance remained differentiated; the strongest one-month "
         f"constituent was security {metrics['top_security_code']}, while security {metrics['bottom_security_code']} was the weakest."
     )
-    content["sections"]["month_in_review"]["drivers"] = [{"title": "Differentiated constituent performance", "body": "Review the bound Top and Bottom Performers data and approved company news before publication."}]
+    content["sections"]["month_in_review"]["drivers"] = [{"title": "Differentiated constituent performance", "body": "Review the bound Top and Bottom Performers data and selected company news before publication."}]
     content["sections"]["month_in_review"]["monitor"] = [{"title": "Earnings delivery and liquidity", "body": "Monitor company guidance, external liquidity conditions, and evidence of sustainable earnings growth."}]
     content["sections"]["month_in_review"]["outlook"] = user_prompt or "Complete the outlook using approved investment commentary."
     content["ai_provenance"] = {

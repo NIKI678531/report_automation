@@ -53,7 +53,7 @@ def test_ai_number_check_blocks_unbound_numbers(client):
     ).json()
     content = drafted["content"]
     content["sections"]["month_in_review"]["outlook"] = "The fund is expected to return 99%."
-    saved = client.put(
+    saved = client.patch(
         f"/api/v1/reports/{report_id}/document",
         json={"version": drafted["version"], "content": content},
     )
@@ -75,7 +75,7 @@ def test_news_candidate_selection_and_order(client):
     report_id = prepared_report(client)
     created = []
     for index in range(2):
-        response = client.post("/api/v1/news", json={
+        response = client.post(f"/api/v1/reports/{report_id}/news/candidates", json={
             "source_name": "Approved source", "source_url": f"https://example.test/news-{index}",
             "published_at": datetime(2026, 6, index + 1, tzinfo=timezone.utc).isoformat(),
             "title": f"News {index}", "summary": f"Summary {index}", "security_code": "700", "ticker": "0700.HK", "importance": "HIGH",
@@ -92,6 +92,50 @@ def test_news_candidate_selection_and_order(client):
     assert [item["title"] for item in selected.json()["items"]] == ["News 1", "Reviewed title"]
     preview = client.post(f"/api/v1/reports/{report_id}/preview")
     assert preview.text.index("News 1") < preview.text.index("Reviewed title")
+
+
+def test_manual_news_must_be_inside_the_report_month(client):
+    report_id = prepared_report(client)
+    response = client.post(f"/api/v1/reports/{report_id}/news/candidates", json={
+        "source_name": "Source",
+        "source_url": "https://example.test/news-before-month",
+        "published_at": datetime(2026, 5, 31, tzinfo=timezone.utc).isoformat(),
+        "title": "Before the report month",
+        "summary": "Out of range",
+        "ticker": "0700.HK",
+    })
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error_code"] == "NEWS_DATE_RANGE_INVALID"
+
+
+def test_selected_news_survives_recalculation_and_renders_month_metadata(client):
+    report_id = prepared_report(client)
+    candidate = client.post(f"/api/v1/reports/{report_id}/news/candidates", json={
+        "source_name": "Reuters",
+        "source_url": "https://example.test/june-news",
+        "published_at": datetime(2026, 6, 12, 8, 30, tzinfo=timezone.utc).isoformat(),
+        "title": "June selected headline",
+        "summary": "Selected report-month summary",
+        "ticker": "0700.HK",
+    })
+    assert candidate.status_code == 201, candidate.text
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    selected = client.put(f"/api/v1/reports/{report_id}/news", json={
+        "version": detail["latest_document"]["version"],
+        "items": [{"news_item_id": candidate.json()["id"], "position": 0}],
+    })
+    assert selected.status_code == 200, selected.text
+
+    recalculated = client.post(f"/api/v1/reports/{report_id}/calculations")
+
+    assert recalculated.status_code == 200, recalculated.text
+    content = client.get(f"/api/v1/reports/{report_id}").json()["latest_document"]["content"]
+    assert [item["title"] for item in content["sections"]["company_news"]] == ["June selected headline"]
+    preview = client.post(f"/api/v1/reports/{report_id}/preview")
+    assert "Reuters" in preview.text
+    assert "2026-06-12" in preview.text
+    assert "https://example.test/june-news" in preview.text
 
 
 def test_review_accepts_complete_golden_editorial(client):
@@ -113,7 +157,7 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
         {"block_id": "summary", "type": "rich_text", "title": "Summary", "content": '<p>Approved</p><script>alert(1)</script><a href="javascript:bad">bad</a>', "x": 0, "y": 0, "w": 12, "h": 4},
         {"block_id": "outlook", "type": "outlook", "title": "Outlook", "content": "<p>Outlook</p>", "x": 0, "y": 4, "w": 6, "h": 4},
     ]
-    saved = client.put(f"/api/v1/reports/{report_id}/document", json={"version": version, "content": content})
+    saved = client.patch(f"/api/v1/reports/{report_id}/document", json={"version": version, "content": content})
     assert saved.status_code == 200, saved.text
     review = saved.json()["content"]["sections"]["month_in_review"]
     assert review["title"] == "June Market Reset"
@@ -128,7 +172,7 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
 
     invalid_content = saved.json()["content"]
     invalid_content["sections"]["month_in_review"]["blocks"][1].update({"x": 5, "y": 2})
-    rejected = client.put(f"/api/v1/reports/{report_id}/document", json={"version": saved.json()["version"], "content": invalid_content})
+    rejected = client.patch(f"/api/v1/reports/{report_id}/document", json={"version": saved.json()["version"], "content": invalid_content})
     assert rejected.status_code == 422
     assert rejected.json()["error_code"] == "REVIEW_LAYOUT_INVALID"
 
@@ -143,7 +187,7 @@ def test_review_blocks_render_to_html_and_editable_docx(client):
         {"block_id": "summary", "type": "rich_text", "title": "Summary", "content": "<p>Editable custom review content</p>", "x": 0, "y": 0, "w": 12, "h": 4},
         {"block_id": "outlook", "type": "outlook", "title": "Outlook", "content": "<p>Approved outlook</p>", "x": 0, "y": 4, "w": 6, "h": 4},
     ]
-    saved = client.put(f"/api/v1/reports/{report_id}/document", json={"version": detail["latest_document"]["version"], "content": content})
+    saved = client.patch(f"/api/v1/reports/{report_id}/document", json={"version": detail["latest_document"]["version"], "content": content})
     assert saved.status_code == 200, saved.text
     finalized = client.post(f"/api/v1/reports/{report_id}/finalize", json={"version": saved.json()["version"]})
     assert finalized.status_code == 200, finalized.text
@@ -177,7 +221,7 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
     assert content["sections"]["month_in_review"]["display_title"] == "June in Review"
     content["sections"]["month_in_review"]["display_title"] = "Editable Monthly Perspective"
     content["sections"]["month_in_review"]["title"] = "Editable Monthly Perspective"
-    saved = client.put(
+    saved = client.patch(
         f"/api/v1/reports/{report['id']}/document",
         json={"version": detail["latest_document"]["version"], "content": content},
     )
@@ -190,7 +234,7 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
     assert ">Editable Monthly Perspective</h2>" in client.post(f"/api/v1/reports/{report['id']}/preview").text
 
     refreshed["sections"]["month_in_review"]["display_title"] = "   "
-    rejected = client.put(
+    rejected = client.patch(
         f"/api/v1/reports/{report['id']}/document",
         json={"version": 3, "content": refreshed},
     )

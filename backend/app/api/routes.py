@@ -1,7 +1,8 @@
-from datetime import date
+from datetime import date, timezone
 from typing import Annotated
 from urllib.parse import urlparse
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
@@ -22,6 +23,7 @@ from app.domain.schemas import (
     RenderRequest,
     JobRead,
     ImportApply,
+    ImportCreateRead,
     ImportRead,
     MappingProfileCreate,
     MappingProfileRead,
@@ -271,20 +273,18 @@ def list_datasets(report_id: str, db: Db) -> list[dict]:
     for item in db.scalars(select(DataImport).where(DataImport.report_id == report_id).order_by(DataImport.created_at.asc())):
         imports_by_slot[item.dataset_type] = item
     snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
-    applied = set((snapshot.payload or {}).get("datasets", {})) if snapshot else set()
     slots = []
     for key, spec in ingestion.REGISTRY.items():
-        if spec.legacy:
-            continue
         item = imports_by_slot.get(key)
         findings = list(item.validation_results or []) if item else []
+        is_applied = bool(snapshot and service.dataset_present(snapshot.payload or {}, key))
         slots.append({
             "key": key,
             "title": spec.title,
             "description": spec.description,
             "required": spec.required,
             "accepts": list(spec.accepts),
-            "state": ("APPLIED" if key in applied else item.status) if item else "MISSING",
+            "state": "APPLIED" if is_applied else item.status if item else "MISSING",
             "latest_import_id": item.id if item else None,
             "filename": item.original_filename if item else None,
             "rows": _row_count(item.payload) if item else 0,
@@ -293,26 +293,45 @@ def list_datasets(report_id: str, db: Db) -> list[dict]:
             "warnings": len([finding for finding in findings if finding.get("severity") == "WARNING"]),
             "applied_snapshot_id": item.applied_snapshot_id if item else None,
         })
+    from app.domain.industry import effective_hsics_records
+    industry_rows = effective_hsics_records(db, report.report_date)
+    industry_versions = {row.version for row in industry_rows}
+    industry_applied = bool(snapshot and service.dataset_present(snapshot.payload or {}, "industry_master"))
+    slots.append({
+        "key": "industry_master",
+        "title": "HSICS industry master",
+        "description": "Centrally managed report-date-effective HSICS taxonomy used for every industry aggregation.",
+        "required": True,
+        "accepts": [".csv"],
+        "state": "APPLIED" if industry_applied else "AVAILABLE" if len(industry_versions) == 1 else "MISSING",
+        "latest_import_id": None,
+        "filename": None,
+        "rows": len(industry_rows),
+        "uploaded_at": None,
+        "blocking": 0 if len(industry_versions) == 1 else 1,
+        "warnings": 0,
+        "applied_snapshot_id": snapshot.id if industry_applied else None,
+    })
     return slots
 
 
 def _row_count(payload: dict | None) -> int:
     if not payload:
         return 0
-    for key in ("constituents", "constituent_returns", "sector_mapping", "sector_overrides", "total_return_series"):
+    for key in ("constituents", "constituent_returns", "total_return_series", "fund_kpis", "trading_calendar", "index_events"):
         if key in payload:
             return len(payload[key])
     return 0
 
 
-@router.post("/reports/{report_id}/imports", response_model=ImportRead, status_code=status.HTTP_201_CREATED)
+@router.post("/reports/{report_id}/imports", response_model=ImportCreateRead, status_code=status.HTTP_201_CREATED)
 async def create_import(
     report_id: str,
     db: Db,
     x_request_id: Annotated[str, Depends(request_id)],
     file: UploadFile = File(...),
     dataset_type: str = Form("constituents"),
-) -> DataImport:
+) -> ImportCreateRead:
     import hashlib
     from app.domain import ingestion
     from app.domain.calculation import quality_checks
@@ -333,12 +352,11 @@ async def create_import(
     filename = file.filename or "upload"
     profile = None
     profile_matches: list[tuple[MappingProfile, object]] = []
-    if not spec.legacy:
-        approved_profiles = list(db.scalars(select(MappingProfile).where(MappingProfile.status == "APPROVED")))
-        profile_matches = ingestion.matching_profiles(approved_profiles, filename, data)
-        matching_dataset = [item for item in profile_matches if item[0].dataset_type == dataset_type]
-        if len(matching_dataset) == 1:
-            profile = matching_dataset[0][0]
+    approved_profiles = list(db.scalars(select(MappingProfile).where(MappingProfile.status == "APPROVED")))
+    profile_matches = ingestion.matching_profiles(approved_profiles, filename, data)
+    matching_dataset = [item for item in profile_matches if item[0].dataset_type == dataset_type]
+    if len(matching_dataset) == 1:
+        profile = matching_dataset[0][0]
     try:
         payload, collector = ingestion.parse(dataset_type, filename, data, report.report_date, profile)
     except UnicodeError as error:
@@ -348,7 +366,7 @@ async def create_import(
         }) from error
     # A file with bad rows is a first-class, inspectable resource rather than a 4xx: the user needs
     # to see every finding at once, and REJECTED imports stay queryable in the report's history.
-    if profile is None and profile_matches and not spec.legacy:
+    if profile is None and profile_matches:
         candidate_types = sorted({item[0].dataset_type for item in profile_matches})
         collector = ingestion.FindingCollector()
         collector.add(
@@ -366,19 +384,19 @@ async def create_import(
     if report.active_snapshot_id:
         active_snapshot = db.get(DataSnapshot, report.active_snapshot_id)
         active_payload = active_snapshot.payload if active_snapshot else {}
+    replacing_dataset = service.dataset_present(active_payload, dataset_type)
     if rejected:
         diff = {"summary": {"added": 0, "removed": 0, "changed": 0}}
-    elif spec.legacy:
-        diff = diff_dataset(dataset_type, payload, active_payload)
     elif dataset_type == "index_constituents":
         diff = diff_dataset("constituents", payload, active_payload)
     else:
-        # Field-level slots do not change the constituent set; the meaningful figure is how many
-        # of the securities in the active snapshot this file actually covers.
-        rows = payload.get("constituent_returns") or payload.get("sector_mapping") or payload.get("sector_overrides") or []
-        active_codes = {row["security_code"] for row in active_payload.get("constituents", [])}
-        covered = len([row for row in rows if row["security_code"] in active_codes]) if active_codes else 0
-        diff = {"summary": {"added": 0, "removed": 0, "changed": len(rows)}, "rows": len(rows), "covered": covered, "uncovered": max(len(active_codes) - covered, 0)}
+        row_keys = ("constituent_returns", "total_return_series", "fund_kpis", "trading_calendar", "index_events")
+        rows = next((payload[key] for key in row_keys if payload.get(key)), [])
+        diff = {"summary": {"added": 0, "removed": 0, "changed": len(rows)}, "rows": len(rows)}
+        if dataset_type == "constituent_returns":
+            active_codes = {row["security_code"] for row in active_payload.get("constituents", [])}
+            covered = len([row for row in rows if row["security_code"] in active_codes]) if active_codes else 0
+            diff.update({"covered": covered, "uncovered": max(len(active_codes) - covered, 0)})
     item = DataImport(
         report_id=report.id, dataset_type=dataset_type, original_filename=filename,
         mime_type=file.content_type or "application/octet-stream", size_bytes=len(data), checksum=hashlib.sha256(data).hexdigest(),
@@ -392,7 +410,11 @@ async def create_import(
         "filename": item.original_filename, "dataset_type": dataset_type, **collector.summary(),
     })
     db.commit(); db.refresh(item)
-    return item
+    return ImportCreateRead(
+        **ImportRead.model_validate(item).model_dump(),
+        apply_mode="OVERWRITE" if replacing_dataset else "FIRST_APPLY",
+        requires_reason=replacing_dataset,
+    )
 
 
 @router.get("/reports/{report_id}/imports", response_model=list[ImportRead])
@@ -486,16 +508,6 @@ def generate_in_review(report_id: str, command: AiDraftRequest, db: Db, x_reques
     return {"version": document.version, "checksum": document.checksum, "content": document.content}
 
 
-@router.post("/news", response_model=NewsRead, status_code=status.HTTP_201_CREATED)
-def create_news(command: NewsCreate, db: Db, x_request_id: Annotated[str, Depends(request_id)]) -> NewsItem:
-    existing = db.scalar(select(NewsItem).where(NewsItem.source_url == command.source_url))
-    if existing:
-        return existing
-    item = NewsItem(**command.model_dump(), metadata_json={"ingest": "manual", "request_id": x_request_id})
-    db.add(item); db.flush(); service.audit(db, "news.created", "news", item.id, x_request_id); db.commit(); db.refresh(item)
-    return item
-
-
 @router.get("/news", response_model=list[NewsRead])
 def list_news(db: Db, security_code: str | None = None, importance: str | None = None) -> list[NewsItem]:
     query = select(NewsItem).order_by(NewsItem.published_at.desc())
@@ -545,6 +557,15 @@ async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db:
         if not context_snapshot:
             raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED", "message": "Constituent news requires an active snapshot."})
         if context_snapshot.status.value != "VALID":
+            if command.ensure:
+                return {
+                    "provider": provider_key,
+                    "fetched": 0,
+                    "created": 0,
+                    "ensured": False,
+                    "skip_reason": "SNAPSHOT_NOT_VALID",
+                    "items": [],
+                }
             raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_NOT_VALID", "message": "Constituent news requires a valid active snapshot."})
         constituents = list(context_snapshot.payload.get("constituents", []))
         symbols = sorted({str(row.get("ticker", "")).upper() for row in constituents if row.get("ticker")})
@@ -554,13 +575,21 @@ async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db:
     try:
         if command.ensure:
             existing_items = service.list_news_candidates_for_report_context(db, report)
-            if existing_items:
+            successful_run = db.scalar(select(NewsFetchRun).where(
+                NewsFetchRun.snapshot_id == context_snapshot.id,
+                NewsFetchRun.provider == provider_key,
+                NewsFetchRun.scope == command.scope,
+                NewsFetchRun.from_date == from_date,
+                NewsFetchRun.to_date == to_date,
+                NewsFetchRun.status == "SUCCEEDED",
+            ).order_by(NewsFetchRun.completed_at.desc()))
+            if successful_run:
                 return {
                     "provider": provider_key,
                     "fetched": 0,
                     "created": 0,
                     "ensured": False,
-                    "skip_reason": "CANDIDATES_ALREADY_EXIST",
+                    "skip_reason": "CANDIDATES_ALREADY_EXIST" if existing_items else "WINDOW_ALREADY_ENSURED",
                     "items": [NewsRead.model_validate(item).model_dump() for item in existing_items],
                 }
             fetch_run = db.scalar(select(NewsFetchRun).where(
@@ -571,15 +600,6 @@ async def fetch_news_candidates(report_id: str, command: NewsCandidateFetch, db:
                 NewsFetchRun.from_date == from_date,
                 NewsFetchRun.to_date == to_date,
             ))
-            if fetch_run and fetch_run.status == "SUCCEEDED":
-                return {
-                    "provider": provider_key,
-                    "fetched": 0,
-                    "created": 0,
-                    "ensured": False,
-                    "skip_reason": "WINDOW_ALREADY_ENSURED",
-                    "items": [],
-                }
             if fetch_run is None:
                 fetch_run = NewsFetchRun(
                     report_id=report.id,
@@ -652,8 +672,11 @@ def add_report_news_candidate(report_id: str, command: NewsCreate, db: Db, x_req
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED"})
     published_at = command.published_at
-    if published_at.date() > report.report_date:
-        raise HTTPException(status_code=422, detail={"error_code": "NEWS_DATE_RANGE_INVALID", "message": "News cannot be published after the report date."})
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=timezone.utc)
+    published_date = published_at.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
+    if not report.report_date.replace(day=1) <= published_date <= report.report_date:
+        raise HTTPException(status_code=422, detail={"error_code": "NEWS_DATE_RANGE_INVALID", "message": "News must be published inside the report month."})
     candidate = {
         "source_name": command.source_name, "source_url": command.source_url, "published_at": published_at,
         "title": command.title, "summary": command.summary, "ticker": command.ticker,
@@ -677,8 +700,14 @@ def select_news(report_id: str, command: NewsSelectionUpdate, db: Db, x_request_
         news = db.get(NewsItem, item.news_item_id)
         if not news:
             raise HTTPException(status_code=422, detail={"error_code": "NEWS_NOT_FOUND", "news_item_id": item.news_item_id})
+        news_published_at = news.published_at
+        if news_published_at.tzinfo is None:
+            news_published_at = news_published_at.replace(tzinfo=timezone.utc)
+        published_hkt = news_published_at.astimezone(ZoneInfo("Asia/Hong_Kong"))
+        if not report.report_date.replace(day=1) <= published_hkt.date() <= report.report_date:
+            raise HTTPException(status_code=422, detail={"error_code": "NEWS_DATE_RANGE_INVALID", "message": "Selected news must be published inside the report month.", "news_item_id": news.id})
         db.add(ReportNewsSelection(report_id=report_id, news_item_id=news.id, position=item.position, title_override=item.title_override, summary_override=item.summary_override))
-        selected.append({"news_item_id": news.id, "title": item.title_override or news.title, "summary": item.summary_override or news.summary, "source_name": news.source_name, "source_url": news.source_url, "published_at": news.published_at.isoformat()})
+        selected.append({"news_item_id": news.id, "title": item.title_override or news.title, "summary": item.summary_override or news.summary, "source_name": news.source_name, "source_url": news.source_url, "published_at": news.published_at.isoformat(), "published_at_hkt": published_hkt.strftime("%Y-%m-%d %H:%M HKT"), "ticker": news.ticker})
     content = dict(current.content); content["sections"] = dict(content["sections"]); content["sections"]["company_news"] = selected
     document = service.update_document(db, report, current.version, content, x_request_id)
     return {"version": document.version, "items": selected}
@@ -687,16 +716,7 @@ def select_news(report_id: str, command: NewsSelectionUpdate, db: Db, x_request_
 @router.get("/reports/{report_id}/review", response_model=ReviewRead)
 def review(report_id: str, db: Db) -> ReviewRead:
     report = service.get_report(db, report_id); document = service.latest_document(db, report_id)
-    checks = []
-    if report.active_snapshot_id:
-        snapshot = db.get(DataSnapshot, report.active_snapshot_id)
-        checks.extend(snapshot.quality_results if snapshot else [])
-    else:
-        checks.append({"check_id": "SNAPSHOT", "severity": "BLOCKING", "status": "FAILED", "fix_hint": "Create a valid snapshot."})
-    sections = document.content.get("sections", {})
-    placeholders = any("Add the approved" in str(value) for value in sections.values())
-    checks.append({"check_id": "QC-009", "severity": "BLOCKING", "status": "FAILED" if placeholders else "PASSED", "fix_hint": "Replace all editorial placeholders."})
-    checks.append(service.ai_number_check(db, report, document))
+    checks = service.release_gate_checks(db, report, document)
     checks.append({"check_id": "LANGUAGE", "severity": "WARNING", "status": "PASSED" if report.language_mode == "EN" else "WARNING", "fix_hint": "Complete every configured language block."})
     blocking = [item for item in checks if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
     warnings = [item for item in checks if item["severity"] == "WARNING" and item["status"] != "PASSED"]
@@ -713,7 +733,6 @@ def list_audit(db: Db, report_id: str | None = None, limit: int = 100) -> list[d
 
 
 @router.patch("/reports/{report_id}/document")
-@router.put("/reports/{report_id}/document", include_in_schema=False)
 def update_document(report_id: str, command: DocumentUpdate, db: Db, x_request_id: Annotated[str, Depends(request_id)]) -> dict:
     report = service.get_report(db, report_id)
     document = service.update_document(db, report, command.version, command.content, x_request_id)

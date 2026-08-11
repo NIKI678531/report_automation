@@ -1,10 +1,3 @@
-from types import SimpleNamespace
-
-from docx import Document
-
-from app.rendering.artifacts import render_docx
-
-
 def test_products_are_effective_dated_and_drive_report_identity(client):
     products = client.get("/api/v1/products", params={"as_of_date": "2026-06-30"})
     assert products.status_code == 200
@@ -63,52 +56,28 @@ def test_non_3033_product_uses_its_own_count_formula_and_never_golden_data(clien
     assert golden.json()["error_code"] == "FIXTURE_NOT_AVAILABLE"
 
     csv_data = (
-        "security_code,ticker,name_en,close_price,currency,weight,sector,return_1m\n"
-        "1,0001.HK,Alpha,10,HKD,0.5,Technology,0.1\n"
-        "2,0002.HK,Beta,20,HKD,0.5,Financials,-0.1\n"
+        "Prod Dt,Tradate,Idx Cde,Lcal Cde,Stk Name_E,Stk Name_TC,Cls Price,Lcal Ccy,Pct Idx Wgt,Industry,Sector\n"
+        "20260630,20260630,TESTIDX,1,Alpha,,10,HKD,50,70,7010\n"
+        "20260630,20260630,TESTIDX,2,Beta,,20,HKD,50,23,2350\n"
     )
     imported = client.post(
         f"/api/v1/reports/{report_id}/imports",
-        files={"file": ("constituents.csv", csv_data, "text/csv")},
-        data={"dataset_type": "constituents"},
+        files={"file": ("index-constituents.csv", csv_data, "text/csv")},
+        data={"dataset_type": "index_constituents"},
     )
     assert imported.status_code == 201, imported.text
-    assert all(item["status"] == "PASSED" for item in imported.json()["validation_results"])
+    assert imported.json()["status"] == "VALIDATED"
 
     applied = client.post(
         f"/api/v1/reports/{report_id}/imports/{imported.json()['id']}/apply",
-        json={"reason": "Approved synthetic test dataset"},
+        json={},
     )
     assert applied.status_code == 200, applied.text
+    assert applied.json()["status"] == "PENDING"
     assert len(applied.json()["payload"]["constituents"]) == 2
     assert applied.json()["payload"]["historical_performance"] == {"rows": []}
-
-    calculated = client.post(f"/api/v1/reports/{report_id}/calculations")
-    assert calculated.status_code == 200, calculated.text
-    assert calculated.json()["formula_version"] == "test-index-v1"
-    assert calculated.json()["metrics"]["constituent_count"] == 2
-    detail = client.get(f"/api/v1/reports/{report_id}").json()
-    preview = client.post(f"/api/v1/reports/{report_id}/preview")
-    assert preview.status_code == 200
-    assert "Historical Performance of 9999.HK and Synthetic Test Total Return Index" in preview.text
-    assert "The Performance of TESTIDX Constituents" in preview.text
-    assert "9999.HK Portfolio Analysis" in preview.text
-    assert "3033.HK" not in preview.text
-
-    destination = tmp_path / "test-fund.docx"
-    render_docx(
-        SimpleNamespace(product_name=report.json()["product_name"], benchmark_code=report.json()["benchmark_code"]),
-        detail["latest_document"]["content"],
-        destination,
-    )
-    docx = Document(destination)
-    text = "\n".join(
-        [paragraph.text for paragraph in docx.paragraphs]
-        + [cell.text for table in docx.tables for row in table.rows for cell in row.cells]
-    )
-    assert "Historical Performance of 9999.HK and Synthetic Test Total Return Index" in text
-    assert "9999.HK Portfolio Analysis" in text
-    assert "3033.HK" not in text
+    missing = set(client.post(f"/api/v1/reports/{report_id}/calculations").json()["missing_slots"])
+    assert {"constituent_returns", "total_return_series", "fund_kpi_daily", "trading_calendar", "industry_master"} == missing
 
 
 def test_document_update_rebinds_system_owned_report_identity(client):
@@ -125,7 +94,7 @@ def test_document_update_rebinds_system_owned_report_identity(client):
         "design_token_version": "spoof-v1",
         "language_mode": "SPOOF",
     })
-    saved = client.put(
+    saved = client.patch(
         f"/api/v1/reports/{report['id']}/document",
         json={"version": detail["latest_document"]["version"], "content": content},
     )

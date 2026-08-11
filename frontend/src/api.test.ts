@@ -34,4 +34,34 @@ describe("FastAPI client", () => {
     }));
     fetchMock.mockRestore();
   });
+
+  it("applies first-time data without an override reason", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    await api.applyImport("r1", "i1");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/imports/i1/apply", expect.objectContaining({
+      method: "POST",
+      body: "{}",
+    }));
+    fetchMock.mockRestore();
+  });
+
+  it("sends a reason when replacing current data", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    await api.applyImport("r1", "i2", "Corrected source file");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/imports/i2/apply", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ reason: "Corrected source file" }),
+    }));
+    fetchMock.mockRestore();
+  });
+
+  it("requests all canonical output formats", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 202 }));
+    await api.render("r1");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/renders", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ formats: ["html", "pdf", "docx"] }),
+    }));
+    fetchMock.mockRestore();
+  });
 });

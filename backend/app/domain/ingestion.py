@@ -41,7 +41,6 @@ class DatasetSpec:
     owns: tuple[str, ...]
     parse: Callable[..., dict[str, Any]]
     description: str = ""
-    legacy: bool = False
 
 
 @dataclass(frozen=True)
@@ -215,14 +214,6 @@ def _text(value: Any) -> str | None:
     return str(value).strip()
 
 
-def _number(row: dict[str, Any], field: str, index: int, collector: FindingCollector, entity_id: str | None = None) -> Decimal | None:
-    try:
-        return imports._decimal(imports._find(row, field), field, index)
-    except ValueError as error:
-        collector.add("IMPORT_ROW_INVALID", str(error), row=index, field=field, entity_id=entity_id, fix_hint="Remove thousands separators and any text from this cell.")
-        return None
-
-
 def _profile_number(row: dict[str, Any], field: str, index: int, collector: FindingCollector, profile: MappingProfile, entity_id: str | None = None) -> Decimal | None:
     try:
         return imports._decimal(_mapped_value(row, field, profile), field, index)
@@ -255,6 +246,68 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
     if profile is None:
         collector.add("MAP-001", "No approved mapping profile was selected.", fix_hint="Confirm the Bloomberg layout profile before parsing its unlabelled code column.")
         return {}
+    if Path(filename).suffix.lower() == ".csv":
+        records = imports._records_from_csv(data)
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        starts: dict[str, str] = {}
+        period_end: str | None = None
+        source: str | None = None
+        return_unit = str((profile.unit_map or {}).get("returns") or "").upper()
+        if return_unit not in {"PERCENT", "RATIO"}:
+            collector.add("MAP-003", "Return unit is not explicit in the mapping profile.", fix_hint="Set returns to PERCENT or RATIO in unit_map.")
+            return {}
+        period_fields = {
+            "return_1m": "period_start_1m",
+            "return_3m": "period_start_3m",
+            "return_6m": "period_start_6m",
+            "return_ytd": "period_start_ytd",
+        }
+        for index, record in enumerate(records, start=2):
+            raw_code = _mapped_value(record, "security_code", profile)
+            if raw_code in (None, ""):
+                collector.add("IMPORT_ROW_INVALID", "Security code is required.", row=index, field="security_code", fix_hint="Every return row requires a security code.")
+                continue
+            code = _normalize_code(raw_code)
+            if code in seen:
+                collector.add("DUPLICATE_CONSTITUENT", f"Security {code} appears more than once.", row=index, entity_id=code, fix_hint="Keep one return row per security.")
+                continue
+            seen.add(code)
+            item: dict[str, Any] = {"security_code": code}
+            name = _text(_mapped_value(record, "name_en", profile))
+            if name:
+                item["_source_name"] = name
+            for return_field, start_field in period_fields.items():
+                raw_value = _mapped_value(record, return_field, profile)
+                try:
+                    value = imports._decimal(raw_value, return_field, index)
+                except ValueError as error:
+                    collector.add("IMPORT_ROW_INVALID", str(error), row=index, field=return_field, entity_id=code, fix_hint="Use a numeric return value.")
+                    value = None
+                item[return_field] = str(value / 100 if return_unit == "PERCENT" and value is not None else value) if value is not None else None
+                parsed_start = _row_date(_mapped_value(record, start_field, profile), index, collector)
+                if parsed_start:
+                    existing_start = starts.get(return_field)
+                    if existing_start and existing_start != parsed_start.isoformat():
+                        collector.add("PERIOD_INCONSISTENT", f"{start_field} differs across rows.", row=index, field=start_field, entity_id=code, fix_hint="Use one common period boundary for the complete file.")
+                    starts[return_field] = parsed_start.isoformat()
+            parsed_end = _row_date(_mapped_value(record, "period_end", profile), index, collector)
+            if parsed_end:
+                if parsed_end > report_date:
+                    collector.add("AS_OF_AFTER_REPORT_DATE", f"Period end {parsed_end.isoformat()} is later than the report date.", row=index, field="period_end", entity_id=code, fix_hint="Use returns ending no later than the report date.")
+                if period_end and period_end != parsed_end.isoformat():
+                    collector.add("PERIOD_INCONSISTENT", "period_end differs across rows.", row=index, field="period_end", entity_id=code, fix_hint="Use one common period end for the complete file.")
+                period_end = parsed_end.isoformat()
+            row_source = _text(_mapped_value(record, "source", profile))
+            if row_source:
+                if source and source != row_source:
+                    collector.add("SOURCE_INCONSISTENT", "source differs across rows.", row=index, field="source", entity_id=code, fix_hint="Use one authoritative source per logical dataset.")
+                source = row_source
+            rows.append(item)
+        if not rows:
+            collector.add("DATASET_EMPTY", "No constituent return rows were found.", fix_hint="Use the standard constituent-return CSV template.")
+            return {}
+        return {"constituent_returns": rows, "return_periods": {"starts": starts, "end": period_end, "source": source}}
     candidates = mapping_candidates(profile, filename, data)
     if len(candidates) != 1:
         collector.add("MAP-001", f"Expected one return-table candidate; found {len(candidates)}.", fix_hint="Confirm the intended sheet/header row or create a new mapping profile.")
@@ -344,100 +397,12 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
     }
 
 
-# --------------------------------------------------------------------------------------
-# sector_mapping — Bloomberg workbook, "Sheet1"
-# --------------------------------------------------------------------------------------
-
-def parse_sector_mapping(filename: str, data: bytes, report_date: date, collector: FindingCollector, profile: MappingProfile | None = None) -> dict[str, Any]:
-    spec = REGISTRY["sector_mapping"]
-    suffix = Path(filename).suffix.lower()
-    if not _check_accepts(spec, filename, collector):
-        return {}
-    if profile is None:
-        collector.add("MAP-001", "No approved mapping profile was selected.", fix_hint="Confirm a mapping profile before parsing the reference taxonomy.")
-        return {}
-    candidates = mapping_candidates(profile, filename, data)
-    if len(candidates) != 1:
-        collector.add("MAP-001", f"Expected one sector-table candidate; found {len(candidates)}.", fix_hint="Confirm the intended sheet/header row.")
-        return {}
-    candidate = candidates[0]
-    if suffix == ".csv":
-        records = imports._records_from_csv(data)
-    else:
-        records = imports._records_from_xlsx(data, sheet_name=candidate.sheet, header_row=candidate.header_row)
-    rows: list[dict[str, Any]] = []
-    seen: dict[str, int] = {}
-    for index, row in enumerate(records, start=2):
-        raw_code = _mapped_value(row, "security_code", profile)
-        if raw_code in (None, ""):
-            continue
-        code = _normalize_code(raw_code)
-        sector = _text(_mapped_value(row, "sector", profile))
-        if not sector:
-            collector.add("SECTOR_MISSING", f"Security {code} has no GICS sector name.", severity=WARNING, row=index, field="GICS_SECTOR_NAME", entity_id=code, fix_hint="Refresh the Bloomberg GICS_SECTOR_NAME column for this security.")
-            continue
-        if code in seen:
-            collector.add("DUPLICATE_CONSTITUENT", f"Security {code} already appeared on row {seen[code]}.", severity=WARNING, row=index, entity_id=code, fix_hint="Remove the duplicate row from the mapping sheet.")
-            continue
-        seen[code] = index
-        rows.append({"security_code": code, "sector": sector, "source": "Bloomberg GICS_SECTOR_NAME"})
-    if not rows:
-        collector.add("DATASET_EMPTY", "No sector rows were found.", fix_hint="Check that the sheet has Code and GICS_SECTOR_NAME columns.")
-        return {}
-    return {"sector_mapping": rows}
-
-
-# --------------------------------------------------------------------------------------
-# sector_overrides — approved manual assignments
-# --------------------------------------------------------------------------------------
-
-def parse_sector_overrides(filename: str, data: bytes, report_date: date, collector: FindingCollector, profile: MappingProfile | None = None) -> dict[str, Any]:
-    if not _check_accepts(REGISTRY["sector_overrides"], filename, collector):
-        return {}
-    if profile is None:
-        collector.add("MAP-001", "No approved mapping profile was selected.", fix_hint="Confirm the override CSV mapping before parsing.")
-        return {}
-    records = imports._records_from_csv(data)
-    rows: list[dict[str, Any]] = []
-    seen: dict[str, int] = {}
-    for index, row in enumerate(records, start=2):
-        raw_code = _mapped_value(row, "security_code", profile)
-        if raw_code in (None, ""):
-            collector.add("IMPORT_ROW_INVALID", "security_code is required.", row=index, field="security_code", fix_hint="Every override row must name the security it applies to.")
-            continue
-        code = _normalize_code(raw_code)
-        sector = _text(_mapped_value(row, "sector", profile))
-        reason = _text(_mapped_value(row, "reason", profile))
-        source = _text(_mapped_value(row, "source", profile))
-        if not sector:
-            collector.add("IMPORT_ROW_INVALID", f"sector is required for security {code}.", row=index, field="sector", entity_id=code, fix_hint="State the approved sector name.")
-            continue
-        # An override replaces vendor data, so it is only auditable with a stated reason and source.
-        if not reason or not source:
-            collector.add("OVERRIDE_UNJUSTIFIED", f"Override for security {code} is missing a reason or source.", row=index, field="reason" if not reason else "source", entity_id=code, fix_hint="Record who approved this assignment and the document it came from.")
-            continue
-        if code in seen:
-            collector.add("DUPLICATE_CONSTITUENT", f"Security {code} already appeared on row {seen[code]}.", row=index, entity_id=code, fix_hint="Keep one override row per security.")
-            continue
-        seen[code] = index
-        rows.append({"security_code": code, "sector": sector, "reason": reason, "source": source})
-    if not rows:
-        collector.add("DATASET_EMPTY", "No override rows were found.", fix_hint="The file needs security_code, sector, reason and source columns.")
-        return {}
-    return {"sector_overrides": rows}
-
-
-# --------------------------------------------------------------------------------------
-# Legacy slots — kept so existing uploads and tests keep working unchanged.
-# --------------------------------------------------------------------------------------
-
-def _legacy(parser: Callable[..., dict[str, Any]], needs_report_date: bool) -> Callable[..., dict[str, Any]]:
+def _profiled_csv(parser: Callable[[str, bytes, date], dict[str, Any]]) -> Callable[..., dict[str, Any]]:
     def parse(filename: str, data: bytes, report_date: date, collector: FindingCollector, profile: MappingProfile | None = None) -> dict[str, Any]:
         del profile
         try:
-            return parser(filename, data, report_date) if needs_report_date else parser(filename, data)
+            return parser(filename, data, report_date)
         except (ValueError, UnicodeError) as error:
-            # Legacy parsers stop at the first bad row, so this is one finding by construction.
             collector.add("IMPORT_PARSE_FAILED", str(error), fix_hint="Correct the reported row and upload again.")
             return {}
     return parse
@@ -458,57 +423,45 @@ REGISTRY: dict[str, DatasetSpec] = {
         title="Constituent returns",
         description="Mapped monthly workbook: 1M / 3M / 6M / YTD total returns.",
         required=True,
-        accepts=(".xlsx", ".xlsm"),
+        accepts=(".csv", ".xlsx", ".xlsm"),
         owns=RETURN_FIELDS,
         parse=parse_constituent_returns,
     ),
-    "sector_mapping": DatasetSpec(
-        key="sector_mapping",
-        title="Sector mapping",
-        description="Mapped reference taxonomy per security; production HSICS comes from the effective industry master.",
+    "total_return_series": DatasetSpec(
+        key="total_return_series",
+        title="Total Return series",
+        description="Official FUND and BENCHMARK daily Total Return observations.",
         required=True,
-        accepts=(".xlsx", ".xlsm", ".csv"),
-        owns=("sector",),
-        parse=parse_sector_mapping,
+        accepts=(".csv",),
+        owns=("total_return_series",),
+        parse=_profiled_csv(imports.parse_total_return_series),
     ),
-    "sector_overrides": DatasetSpec(
-        key="sector_overrides",
-        title="Sector overrides",
-        description="Approved manual sector assignments for securities the vendor mapping does not cover.",
+    "fund_kpi_daily": DatasetSpec(
+        key="fund_kpi_daily",
+        title="Fund KPI daily",
+        description="Report-month AUM and daily turnover observations with explicit currency and units.",
+        required=True,
+        accepts=(".csv",),
+        owns=("fund_kpis",),
+        parse=_profiled_csv(imports.parse_fund_kpi_daily),
+    ),
+    "trading_calendar": DatasetSpec(
+        key="trading_calendar",
+        title="Trading calendar",
+        description="Authoritative report-month trading-day calendar used for turnover coverage.",
+        required=True,
+        accepts=(".csv",),
+        owns=("trading_calendar",),
+        parse=_profiled_csv(imports.parse_trading_calendar),
+    ),
+    "index_events": DatasetSpec(
+        key="index_events",
+        title="Index events",
+        description="Official future index events such as the next rebalancing date.",
         required=False,
         accepts=(".csv",),
-        owns=("sector",),
-        parse=parse_sector_overrides,
-    ),
-    "constituents": DatasetSpec(
-        key="constituents",
-        title="Constituents (legacy combined)",
-        description="Single-file constituent upload carrying identity, weight, sector and returns together.",
-        required=False,
-        accepts=(".csv", ".xlsx", ".xlsm"),
-        owns=(*IDENTITY_FIELDS, "sector", *RETURN_FIELDS),
-        parse=_legacy(imports.parse_constituents, needs_report_date=False),
-        legacy=True,
-    ),
-    "historical_performance": DatasetSpec(
-        key="historical_performance",
-        title="Historical performance",
-        description="FUND and BENCHMARK Total Return series used to derive period returns.",
-        required=False,
-        accepts=(".csv",),
-        owns=("historical_performance", "total_return_series"),
-        parse=_legacy(imports.parse_historical_performance, needs_report_date=True),
-        legacy=True,
-    ),
-    "final_analytics": DatasetSpec(
-        key="final_analytics",
-        title="Final analytics",
-        description="Mixed long-form dataset carrying constituents and fund KPIs.",
-        required=False,
-        accepts=(".csv",),
-        owns=(*IDENTITY_FIELDS, "sector", *RETURN_FIELDS, "fund_kpis"),
-        parse=_legacy(imports.parse_final_analytics, needs_report_date=True),
-        legacy=True,
+        owns=("index_events",),
+        parse=_profiled_csv(imports.parse_index_events),
     ),
 }
 
@@ -523,7 +476,7 @@ def parse(dataset_type: str, filename: str, data: bytes, report_date: date, prof
     """Parse an upload into a payload fragment plus every problem found along the way."""
     spec = REGISTRY[dataset_type]
     collector = FindingCollector()
-    if not spec.legacy and profile is None:
+    if profile is None:
         collector.add(
             "MAP-001",
             f"'{filename}' did not resolve to one approved {spec.title} mapping profile.",

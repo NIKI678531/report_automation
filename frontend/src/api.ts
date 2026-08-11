@@ -57,13 +57,32 @@ export interface NewsProvider {
   default: boolean;
 }
 
-export type DatasetType = "constituents" | "historical_performance" | "final_analytics";
+export type DatasetType = "index_constituents" | "constituent_returns" | "total_return_series" | "fund_kpi_daily" | "trading_calendar" | "index_events";
+
+export interface DatasetSlot {
+  key: DatasetType | "industry_master";
+  title: string;
+  description: string;
+  required: boolean;
+  accepts: string[];
+  state: "MISSING" | "AVAILABLE" | "VALIDATED" | "NEEDS_MAPPING" | "REJECTED" | "APPLIED";
+  latest_import_id: string | null;
+  filename: string | null;
+  rows: number;
+  blocking: number;
+  warnings: number;
+}
 
 export interface ImportResult {
   id: string;
   dataset_type: DatasetType;
+  status: "VALIDATED" | "NEEDS_MAPPING" | "REJECTED" | "APPLIED";
   diff: { summary: Record<string, number> };
-  validation_results: Array<{ check_id: string; status: string; severity: string; fix_hint: string }>;
+  validation_results: Array<{ check_id?: string; error_code?: string; status?: string; severity: string; message?: string; fix_hint: string; field?: string | null; entity_id?: string | null }>;
+  preview: { columns: string[]; rows: Array<Record<string, unknown>>; total: number };
+  summary: { rows_parsed: number; blocking: number; warnings: number };
+  apply_mode: "FIRST_APPLY" | "OVERWRITE";
+  requires_reason: boolean;
 }
 
 export interface NewsSelectionDraft {
@@ -88,7 +107,17 @@ export interface Report {
   finalized_document_version: number | null;
   latest_document?: { version: number; checksum: string; content: Record<string, unknown> } | null;
   quality_results?: Array<{ check_id: string; status: string; severity: string; fix_hint: string }>;
-  artifacts?: Array<{ id: string; format: string; size_bytes: number }>;
+  artifacts?: Array<{ id: string; format: string; size_bytes: number; checksum: string }>;
+}
+
+export interface RenderJob {
+  id: string;
+  format: string;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED";
+  progress: number;
+  stage: string;
+  error: { error_code?: string; message?: string } | null;
+  artifact_id: string | null;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -106,17 +135,14 @@ export const api = {
   listReports: () => request<Report[]>("/reports"),
   getReport: (id: string) => request<Report>(`/reports/${id}`),
   createReport: (report_date: string, product_code = "3033") => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date }) }),
-  createGoldenSnapshot: (id: string) => request(`/reports/${id}/snapshots`, { method: "POST", body: JSON.stringify({ source_policy: "GOLDEN_FIXTURE" }) }),
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
-  saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PUT", body: JSON.stringify({ version, content }) }),
-  render: (id: string) => request<Array<{ id: string; format: string; status: string; artifact_id: string | null }>>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats: ["html", "pdf", "docx"] }), headers: { "Idempotency-Key": crypto.randomUUID() } }),
+  saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PATCH", body: JSON.stringify({ version, content }) }),
+  render: (id: string) => request<RenderJob[]>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats: ["html", "pdf", "docx"] }), headers: { "Idempotency-Key": crypto.randomUUID() } }),
+  listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),
   uploadDataset: (id: string, datasetType: DatasetType, file: File) => { const body = new FormData(); body.append("dataset_type", datasetType); body.append("file", file); return request<ImportResult>(`/reports/${id}/imports`, { method: "POST", body }); },
-  uploadConstituents: (id: string, file: File) => { const body = new FormData(); body.append("dataset_type", "constituents"); body.append("file", file); return request<ImportResult>(`/reports/${id}/imports`, { method: "POST", body }); },
-  applyImport: (reportId: string, importId: string, reason: string) => request(`/reports/${reportId}/imports/${importId}/apply`, { method: "POST", body: JSON.stringify({ reason }) }),
-  calculate: (id: string) => request<{ document_version: number; metrics: Record<string, number | string> }>(`/reports/${id}/calculations`, { method: "POST", body: "{}" }),
+  applyImport: (reportId: string, importId: string, reason?: string) => request(`/reports/${reportId}/imports/${importId}/apply`, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   generateDraft: (id: string, version: number, user_prompt: string) => request<{ version: number }>(`/reports/${id}/ai/in-review`, { method: "POST", body: JSON.stringify({ version, user_prompt }) }),
   review: (id: string) => request<{ ready: boolean; blocking: Array<{ check_id: string; fix_hint: string }>; warnings: unknown[] }>(`/reports/${id}/review`),
-  listNews: () => request<NewsCandidate[]>("/news"),
   listNewsProviders: () => request<NewsProvider[]>("/news/providers"),
   listReportNewsCandidates: (id: string) => request<NewsCandidate[]>(`/reports/${id}/news/candidates`),
   fetchNewsCandidates: (id: string, scope: "CONSTITUENTS" | "GENERAL", from_date: string, to_date: string, provider?: string, ensure = false) => request<{ provider: string; fetched: number; created: number; items: NewsCandidate[] }>(`/reports/${id}/news/candidates/fetch`, { method: "POST", body: JSON.stringify({ scope, from_date, to_date, page: 0, limit: 100, provider, ensure }) }),

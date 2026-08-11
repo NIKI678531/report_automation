@@ -143,6 +143,9 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         paragraph = document.add_paragraph(style="List Bullet")
         run = paragraph.add_run(item["title"])
         run.bold = True; run.font.color.rgb = RGBColor(38, 96, 173)
+        metadata = " · ".join(value for value in (item.get("source_name"), item.get("published_at_hkt") or str(item.get("published_at", ""))[:10], item.get("source_url")) if value)
+        if metadata:
+            paragraph.add_run("\n" + metadata)
         paragraph.add_run("\n" + item["summary"])
 
     _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 3)

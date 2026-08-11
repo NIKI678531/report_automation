@@ -2,12 +2,16 @@ import asyncio
 import hashlib
 import sqlite3
 from datetime import date
+from pathlib import Path
 
 from app.core.config import settings
 import httpx
 import pytest
 
 from app.integrations.da_report import DaReportProviderError, _materialize_snapshot, fetch_news
+
+
+INGESTION_FIXTURE = Path(__file__).parent / "fixtures" / "ingestion" / "index_constituents.csv"
 
 
 def build_da_snapshot(path) -> None:
@@ -58,6 +62,26 @@ def build_da_snapshot(path) -> None:
     """)
     connection.commit()
     connection.close()
+
+
+def test_automatic_ensure_skips_a_pending_snapshot(client):
+    report = client.post("/api/v1/reports", json={"product_code": "SLOT", "report_date": "2026-06-30"}).json()
+    uploaded = client.post(
+        f"/api/v1/reports/{report['id']}/imports",
+        data={"dataset_type": "index_constituents"},
+        files={"file": (INGESTION_FIXTURE.name, INGESTION_FIXTURE.read_bytes(), "text/csv")},
+    ).json()
+    applied = client.post(f"/api/v1/reports/{report['id']}/imports/{uploaded['id']}/apply", json={})
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["status"] == "PENDING"
+
+    ensured = client.post(
+        f"/api/v1/reports/{report['id']}/news/candidates/fetch",
+        json={"scope": "CONSTITUENTS", "provider": "DA_REPORT", "ensure": True},
+    )
+
+    assert ensured.status_code == 200, ensured.text
+    assert ensured.json()["skip_reason"] == "SNAPSHOT_NOT_VALID"
 
 
 def test_da_report_returns_only_unique_title_matches_for_current_constituents(tmp_path, monkeypatch):

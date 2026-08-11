@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   draftsFromSnapshot,
   matchesNewsSource,
+  publishedDateHkt,
   reportNewsWindow,
   shouldAutoLoadDaNews,
   toggleNewsSelection,
@@ -23,9 +24,9 @@ describe("DA-Report automatic news loading", () => {
     expect(shouldAutoLoadDaNews({ ...ready, attempted: true })).toBe(false);
   });
 
-  it("does not load without a provider or empty candidate list", () => {
+  it("does not load without a provider and re-ensures when a snapshot changes", () => {
     expect(shouldAutoLoadDaNews({ ...ready, daConfigured: false })).toBe(false);
-    expect(shouldAutoLoadDaNews({ ...ready, candidateCount: 1 })).toBe(false);
+    expect(shouldAutoLoadDaNews({ ...ready, candidateCount: 1 })).toBe(true);
     expect(shouldAutoLoadDaNews({ ...ready, readOnly: true })).toBe(false);
   });
 });
@@ -33,6 +34,10 @@ describe("DA-Report automatic news loading", () => {
 describe("Company News report context", () => {
   it("uses the selected report month as the news window", () => {
     expect(reportNewsWindow("2026-08-31")).toEqual({ fromDate: "2026-08-01", toDate: "2026-08-31" });
+  });
+
+  it("uses the HKT publication date across a UTC month boundary", () => {
+    expect(publishedDateHkt("2026-05-31T16:30:00Z")).toBe("2026-06-01");
   });
 
   it("shows a candidate in the selected-news model immediately after selection", () => {

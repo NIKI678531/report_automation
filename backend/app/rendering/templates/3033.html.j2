@@ -90,8 +90,8 @@
     {% else %}
       <p>{{ sections.month_in_review.summary }}</p>
       <div class="columns-2">
-        <section><h2>Key Drivers of the Correction</h2><ol>{% for item in sections.month_in_review.drivers %}<li><strong>{{ item.title }}</strong><br>{{ item.body }}</li>{% else %}<li class="empty-note">Add approved key drivers.</li>{% endfor %}</ol></section>
-        <section><h2>Key Areas to Monitor</h2><ol>{% for item in sections.month_in_review.monitor %}<li><strong>{{ item.title }}</strong><br>{{ item.body }}</li>{% else %}<li class="empty-note">Add approved monitoring areas.</li>{% endfor %}</ol><h2>Outlook</h2><p>{{ sections.month_in_review.outlook }}</p></section>
+        <section><h2>Key Drivers of the Correction</h2><ol>{% for item in sections.month_in_review.drivers %}<li><strong>{{ item.title }}</strong><br>{{ item.body }}</li>{% else %}<li class="empty-note">Add key drivers.</li>{% endfor %}</ol></section>
+        <section><h2>Key Areas to Monitor</h2><ol>{% for item in sections.month_in_review.monitor %}<li><strong>{{ item.title }}</strong><br>{{ item.body }}</li>{% else %}<li class="empty-note">Add monitoring areas.</li>{% endfor %}</ol><h2>Outlook</h2><p>{{ sections.month_in_review.outlook }}</p></section>
       </div>
     {% endif %}
     <h2 class="center">Historical Performance of {{ doc.product_ticker|default(report.product_code ~ '.HK', true) }} and {{ doc.benchmark_name|default(report.benchmark_code, true) }}*</h2>
@@ -100,7 +100,7 @@
 </section>
 
 <section class="report-page" data-page="2" data-section-key="company_news">
-  {{ chrome(2) }}<main class="page-body"><h2>Company News</h2><ul class="news-list">{% for item in sections.company_news %}<li><div class="news-title">{{ item.title }}</div><div>{{ item.summary }}</div></li>{% else %}<li class="empty-note">No approved company news has been selected.</li>{% endfor %}</ul></main>
+  {{ chrome(2) }}<main class="page-body"><h2>Company News</h2><ul class="news-list">{% for item in sections.company_news %}{% set source = item.get('source_name', '') %}{% set published = item.get('published_at_hkt') or item.get('published_at', '')[:10] %}{% set source_url = item.get('source_url', '') %}<li><div class="news-title">{{ item.title }}</div>{% if source or published or source_url %}<div class="news-meta">{% if source %}{{ source }}{% endif %}{% if source and published %} · {% endif %}{{ published }}{% if source_url %}{% if source or published %} · {% endif %}<a href="{{ source_url }}">Source</a>{% endif %}</div>{% endif %}<div>{{ item.summary }}</div></li>{% else %}<li class="empty-note">No company news has been selected.</li>{% endfor %}</ul></main>
 </section>
 
 <section class="report-page" data-page="3" data-section-key="constituents">

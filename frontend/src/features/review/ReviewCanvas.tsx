@@ -20,7 +20,7 @@ export interface ReviewBlock {
 }
 
 function listHtml(rows: Array<Record<string, unknown>>): string {
-  if (!rows.length) return "<p>No approved content yet.</p>";
+  if (!rows.length) return "<p>No content yet.</p>";
   return `<ul>${rows.map((row) => `<li><strong>${String(row.title ?? "")}</strong><p>${String(row.body ?? "")}</p></li>`).join("")}</ul>`;
 }
 

@@ -1,13 +1,13 @@
 # Implementation status against V2.1
 
-Last verified: 2026-08-10
+Last verified: 2026-08-11
 
 ## Implemented and tested
 
 - React + TypeScript product frontend and Python FastAPI `/api/v1` backend.
 - SQLAlchemy domain persistence with Alembic upgrade/downgrade migrations.
 - Report creation, immutable document versions, optimistic locking, finalization, and separate revisions.
-- Golden fixture snapshot plus CSV/XLSX constituent import, alias mapping, validation, diff, reasoned dataset override, checksum, and audit event.
+- Golden fixture snapshots plus one-source-per-logical-dataset CSV/XLSX slots, mapping validation, preview/diff, immutable apply and replacement audit lineage.
 - Deterministic calculation of Top 10, sector totals, Top/Bottom performers, and core quality gates.
 - News candidate creation/filtering and ordered report selection with editable title/summary.
 - Metric-bound assisted draft with explicit provenance and no external AI data disclosure.
@@ -23,14 +23,16 @@ Last verified: 2026-08-10
 - Physical-page navigation aligned to the canonical four-page output (`01`, `01`, `02`, `03`, `04`, with cross-page Footnotes at `01/03/04`), plus synchronized fund/date/report revision selection.
 - Final Analytics period and Portfolio Analysis ticker are bound to server-owned report identity; out-of-month Final Analytics observations are rejected before snapshot application.
 - DA-Report SQLite adapter with read-only snapshot access, strict constituent-name matching, report-month date filters, provider normalization, URL/hash deduplication, product/report-date candidate sharing with report-specific manual items and selections, and fail-closed manual refresh handling. Marketaux remains available as an optional remote provider.
-- Historical Performance raw Total Return CSV and Final Analytics constituent/KPI CSV, including preview/diff/reasoned apply, explicit ratio scale, server calculations, and immutable input snapshots.
+- Separate Index Constituents, Constituent Returns, Total Return Series, Fund KPI Daily, Trading Calendar and Index Events slots. A first application needs no reason; replacing the active source for the same slot requires one.
 - DA-Report-derived workbench tokens: local Inter/Roboto Mono, glass surfaces, restrained elevation, responsive filter bars, selected news states, and reduced-motion support.
 - Versioned MappingProfile persistence and administrator API; CSV/XLSX sheet/header scanning now reads field aliases, explicit units and approved unlabelled-column positions from the selected profile. Ambiguous or unknown formats stop in `NEEDS_MAPPING`, and duplicate Bloomberg return groups are recorded without double import.
 - Normalized SnapshotDataset, MetricValue, ModuleSnapshot and QualityCheckResult persistence with Decimal database columns, lineage IDs/checksums, module bindings and read APIs. Existing document sections remain a compatibility projection.
 - Effective-dated HSICS master CSV import with 2/4/6 digit code restoration, hierarchy/effective-range validation and report-date constituent mapping. Non-fixture finalization requires a bound HSICS dataset.
+- A complete valid slot set automatically runs server calculations; Review and Finalize consume the same release gates, and Finalize triggers HTML/PDF/DOCX generation in the frontend with signed downloads.
 - Final Analytics trading-calendar and index-event records, report-date AUM validation, 95% daily-turnover coverage gate, and authoritative next rebalancing selection.
 - Product configuration now separates the constituent index (`HSTECH`) from the official return benchmark instrument (`HSTECHN`).
-- DA-Report SQLite provider with strict current-context constituent title matching, report candidate relations, persisted ensure idempotency, local read-only mode, and checksum-verified TOS presigned-object materialization to ephemeral disk. Company News automatically loads candidates once for every mutable draft, reusing an exact product/report-date candidate context without auto-selecting items.
+- DA-Report SQLite provider with strict current-context constituent title matching, report candidate relations, snapshot/provider/month-window ensure idempotency, local read-only mode, and checksum-verified TOS presigned-object materialization to ephemeral disk. Company News is HKT report-month scoped, survives data recalculation, and renders source/date/URL across formats.
+- Legacy combined imports, GICS/sector-override uploads, the old React report module, pnpm files and OneDrive `*-AZ-AI-WS-07*` source/configuration copies have been removed.
 - V2.1 lifecycle states, calculation-before-finalize gating, QC-008 AI number binding, dynamic lineage footnotes, and canonical cross-format content manifests for QC-010 comparison.
 
 ## Incomplete or environment-dependent

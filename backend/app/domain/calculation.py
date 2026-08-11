@@ -1,3 +1,5 @@
+from calendar import monthrange
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Iterable
 
@@ -6,6 +8,53 @@ def period_return(start: Decimal, end: Decimal) -> Decimal:
     if start <= 0:
         raise ValueError("start total-return value must be greater than zero")
     return end / start - Decimal("1")
+
+
+def _shift_months(value: date, months: int) -> date:
+    month_index = value.year * 12 + value.month - 1 - months
+    year, zero_based_month = divmod(month_index, 12)
+    month = zero_based_month + 1
+    source_month_end = value.day == monthrange(value.year, value.month)[1]
+    target_day = monthrange(year, month)[1] if source_month_end else min(value.day, monthrange(year, month)[1])
+    return date(year, month, target_day)
+
+
+def historical_performance(series: list[dict], report_date: date) -> dict:
+    by_role: dict[str, dict[date, Decimal]] = {"FUND": {}, "BENCHMARK": {}}
+    codes: dict[str, str] = {}
+    for row in series:
+        role = str(row["instrument_role"])
+        trade_date = date.fromisoformat(str(row["trade_date"]))
+        by_role[role][trade_date] = Decimal(str(row["total_return_value"]))
+        codes[role] = str(row["instrument_code"])
+    common_dates = sorted(
+        item for item in set(by_role["FUND"]) & set(by_role["BENCHMARK"])
+        if item <= report_date
+    )
+    if not common_dates:
+        raise ValueError("FUND and BENCHMARK require at least one common date not later than the report date")
+    targets = {
+        "return_1m": _shift_months(report_date, 1),
+        "return_3m": _shift_months(report_date, 3),
+        "return_6m": _shift_months(report_date, 6),
+        "return_ytd": date(report_date.year - 1, 12, 31),
+    }
+    end_date = common_dates[-1]
+    periods: dict[str, dict[str, str]] = {}
+    starts: dict[str, date] = {}
+    for key, target in targets.items():
+        candidates = [item for item in common_dates if item <= target]
+        if not candidates:
+            raise ValueError(f"Historical series has no common start point for {key}")
+        starts[key] = candidates[-1]
+        periods[key] = {"period_start": candidates[-1].isoformat(), "period_end": end_date.isoformat()}
+    rows = []
+    for role in ("FUND", "BENCHMARK"):
+        item: dict[str, str] = {"role": role, "name": codes[role]}
+        for key, start_date in starts.items():
+            item[key] = str(period_return(by_role[role][start_date], by_role[role][end_date]))
+        rows.append(item)
+    return {"rows": rows, "periods": periods, "effective_as_of": end_date.isoformat(), "formula_version": "total-return-v1"}
 
 
 def display_percent(value: Decimal | float | int | None, places: int = 2) -> str:
@@ -89,14 +138,15 @@ def quality_checks(payload: dict, expected_constituent_count: int | None = None)
             "fix_hint": "Use official Total Return data, or an explicitly approved period-return dataset with lineage.",
         })
         period_fields = ("return_1m", "return_3m", "return_6m", "return_ytd")
-        complete = bool(history) and all(all(row.get(field) is not None for field in period_fields) for row in history)
-        checks.append({
-            "check_id": "QC-006",
-            "passed": complete,
-            "actual": {field: sum(1 for row in history if row.get(field) is not None) for field in period_fields},
-            "threshold": {field: len(history) for field in period_fields},
-            "fix_hint": "Each required period needs valid common endpoints; preserve N/A rather than substituting zero.",
-        })
+        if history:
+            complete = all(all(row.get(field) is not None for field in period_fields) for row in history)
+            checks.append({
+                "check_id": "QC-006",
+                "passed": complete,
+                "actual": {field: sum(1 for row in history if row.get(field) is not None) for field in period_fields},
+                "threshold": {field: len(history) for field in period_fields},
+                "fix_hint": "Each required period needs valid common endpoints; preserve N/A rather than substituting zero.",
+            })
 
     footnotes = payload.get("footnotes")
     if footnotes:

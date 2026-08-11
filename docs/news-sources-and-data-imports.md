@@ -1,4 +1,4 @@
-# News providers and module CSV imports
+# News providers and logical dataset imports
 
 ## Provider selection
 
@@ -23,7 +23,7 @@ Each provider gets its own audit action, derived from the key: `news.da_report_f
 
 ## DA-Report configuration
 
-Company News automatically ensures DA-Report candidates once when a mutable report has no candidates. The window is the report month. Candidates are shared only across reports with the same product code and report date; manual candidates and saved selections remain report-specific. A draft without its own snapshot may use the newest valid snapshot from that exact context for constituent matching without changing the draft's status or `active_snapshot_id`. If no valid context snapshot exists, automatic ensure returns an empty result without raising; manual Refresh still reports the missing snapshot. Automatic loading never selects items into the report.
+Company News ensures DA-Report candidates for each active snapshot, provider and report-month window. Reopening the same window is idempotent; changing the snapshot runs constituent matching again. Candidates are shared only across reports with the same product code and report date; manual candidates and saved selections remain report-specific. Candidate listing, manual creation and selection all enforce the HKT business-date window from the first day of the report month through the report date. A draft without its own snapshot may use the newest valid snapshot from that exact context for constituent matching without changing the draft's status or `active_snapshot_id`. If no valid context snapshot exists, automatic ensure returns an empty result without raising; manual Refresh still reports the missing snapshot. Automatic loading never selects items into the report.
 
 DA-Report has no news-to-security or news-to-product relation. `category=Corporate` means an item passed a regional holding check somewhere upstream; it does **not** prove that the item belongs to the current fund. This adapter therefore requires a unique title match against the active snapshot's controlled English/Traditional Chinese constituent names. Summary-only, ambiguous and unmatched items are excluded from automatic candidates.
 
@@ -65,48 +65,26 @@ environment, treat the token as URL-exposed: it will reach the vendor's own acce
 intermediate proxy, so it must be rotated on the same schedule as any other transport-visible secret.
 
 
-## Historical Performance CSV
+## Logical dataset slots
 
-Use `docs/historical-performance-template.csv`.
+The upload workspace exposes one source per logical dataset. It no longer accepts the combined `constituents`, `historical_performance` or `final_analytics` dataset types.
 
-Required columns:
+| Slot | Template / accepted source | Required |
+|---|---|---|
+| `index_constituents` | mapped index-provider CSV | yes |
+| `constituent_returns` | `docs/templates/constituent-returns-template.csv` or mapped Bloomberg XLSX/XLSM | yes |
+| `total_return_series` | `docs/templates/total-return-series-template.csv` | yes |
+| `fund_kpi_daily` | `docs/templates/fund-kpi-daily-template.csv` | yes |
+| `trading_calendar` | `docs/templates/trading-calendar-template.csv` | yes |
+| `index_events` | `docs/templates/index-events-template.csv` | optional |
+| `industry_master` | centrally managed `docs/templates/industry-master-template.csv` | yes |
 
-- `instrument_role`: `FUND` or `BENCHMARK`
-- `instrument_code`
-- `trade_date`: `YYYY-MM-DD` or `YYYYMMDD`
-- `total_return_value`: positive official Total Return index level
-- `series_type`: `Total Return`
-- `currency`
-- `source`
+Total Return rows remain raw observations. Once all required slots and one report-date-effective HSICS master are present, the backend automatically creates the valid immutable snapshot, calculates Historical Performance and Final Analytics, and persists MetricValue and ModuleSnapshot lineage. The browser does not calculate authoritative values.
 
-The server selects common trading-date endpoints and calculates 1M, 3M, 6M, and YTD returns. The browser does not calculate authoritative returns.
-
-## Final Analytics CSV
-
-Use `docs/templates/final-analytics-template.csv`. The file is a mixed long-form physical source that normalizes into separate logical datasets.
-
-`CONSTITUENT` rows require security identity, date, price, currency, weight, sector, and period returns.
-
-`KPI` rows support:
-
-- `AUM`
-- `DAILY_TURNOVER`
-
-`CALENDAR` rows require `market`, `calendar_date`, `is_trading_day`, and `source`. Average turnover uses only authoritative trading days; duplicate dates fail and coverage below 95% blocks the calculation quality gate.
-
-`EVENT` rows require `index_code`, `event_type=REBALANCE`, `effective_date`, and `source`; `announcement_date` is optional. The next rebalancing date is the earliest effective event after the report date for the configured constituent index. The server never guesses this date from a calendar rule.
-
-`value_scale` is required for unambiguous constituent ratios:
-
-- `DECIMAL`: `0.1015` means 10.15%
-- `PERCENT`: `10.15` means 10.15%
-
-Never infer the scale from the magnitude. This preserves valid returns above 100% and weights below 1%.
-
-After validation and an approved reason, Apply creates a new immutable snapshot. Final Analytics then calculates Top 10, sector weights, Top/Bottom performers, AUM, average turnover, and holding count on the server. Existing snapshots are not changed.
+The first application of each logical dataset uses **Use this data** and requires no reason. Replacing the currently effective source for the same logical dataset requires a replacement reason. Both operations create a new snapshot; replacement audit details include the actor, diff, previous snapshot/dataset checksum and reason.
 
 ## Mapping profiles and HSICS
 
 CSV/XLSX ingestion selects exactly one approved `MappingProfile`. Profiles own header aliases, sheet/header scanning, explicit units, transforms and confirmed unlabelled columns. No unique profile results in `NEEDS_MAPPING`; the parser does not fall back to sheet names or fixed columns. Duplicate Bloomberg return groups are detected and only the group selected by the approved profile is imported.
 
-Import a formal report-date HSICS master through `POST /api/v1/industry-master/import` using `docs/templates/industry-master-template.csv`. Codes are text and restored to widths 2/4/6 for Industry/Sector/Subsector. Effective ranges cannot overlap. Uploaded production snapshots without a bound effective HSICS master cannot be finalized; the old Bloomberg GICS table remains reference-only.
+Import a formal report-date HSICS master through `POST /api/v1/industry-master/import` using `docs/templates/industry-master-template.csv`. Codes are text and restored to widths 2/4/6 for Industry/Sector/Subsector. Effective ranges cannot overlap. Uploaded production snapshots without a bound effective HSICS master cannot be calculated or finalized. The old Bloomberg GICS mapping and manual sector-override upload paths are retired.

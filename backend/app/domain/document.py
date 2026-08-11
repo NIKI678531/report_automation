@@ -209,10 +209,10 @@ def initial_document(
             "month_in_review": {
                 "title": f"{month} in Review",
                 "display_title": f"{month} in Review",
-                "summary": "Add the approved monthly market review.",
+                "summary": "Add monthly market review.",
                 "drivers": [],
                 "monitor": [],
-                "outlook": "Add the approved outlook.",
+                "outlook": "Add outlook.",
             },
             "historical_performance": {"rows": []},
             "company_news": [],
@@ -223,12 +223,13 @@ def initial_document(
     }
 
 
-def bind_snapshot(content: dict[str, Any], snapshot_payload: dict[str, Any]) -> dict[str, Any]:
+def bind_snapshot(content: dict[str, Any], snapshot_payload: dict[str, Any], include_editorial: bool = False) -> dict[str, Any]:
     result = deepcopy(content)
     result["sections"]["constituents"] = snapshot_payload.get("constituents", [])
     result["sections"]["historical_performance"] = snapshot_payload.get("historical_performance", {"rows": []})
-    result["sections"]["company_news"] = snapshot_payload.get("company_news", [])
-    if snapshot_payload.get("month_in_review"):
+    if include_editorial:
+        result["sections"]["company_news"] = snapshot_payload.get("company_news", [])
+    if include_editorial and snapshot_payload.get("month_in_review"):
         existing_review = result["sections"].get("month_in_review", {})
         incoming_review = deepcopy(snapshot_payload["month_in_review"])
         for field in ("title", "display_title", "blocks", "layout_schema_version"):

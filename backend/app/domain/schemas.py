@@ -139,7 +139,7 @@ class ImportRead(BaseModel):
     def _derive_summary_and_preview(self) -> "ImportRead":
         findings = self.validation_results or []
         rows: list[dict[str, Any]] = []
-        for key in ("constituents", "constituent_returns", "sector_mapping", "sector_overrides", "total_return_series"):
+        for key in ("constituents", "constituent_returns", "total_return_series", "fund_kpis", "trading_calendar", "index_events"):
             if key in (self.payload or {}):
                 rows = self.payload[key]
                 break
@@ -154,8 +154,13 @@ class ImportRead(BaseModel):
         return self
 
 
+class ImportCreateRead(ImportRead):
+    apply_mode: Literal["FIRST_APPLY", "OVERWRITE"]
+    requires_reason: bool
+
+
 class ImportApply(BaseModel):
-    reason: str = Field(min_length=5, max_length=500)
+    reason: str | None = Field(default=None, min_length=5, max_length=500)
 
 
 class DocumentUpdate(BaseModel):

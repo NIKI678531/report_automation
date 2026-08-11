@@ -31,7 +31,7 @@ def test_report_golden_lifecycle_and_preview(client):
         {"block_id": "summary", "type": "rich_text", "title": "Market Context", "content": "<p>Approved market context.</p>", "x": 0, "y": 0, "w": 12, "h": 4},
         {"block_id": "outlook", "type": "outlook", "title": "Forward View", "content": "<p>Approved forward view.</p>", "x": 0, "y": 4, "w": 12, "h": 4},
     ]
-    saved = client.put(
+    saved = client.patch(
         f"/api/v1/reports/{report['id']}/document",
         json={"version": detail["latest_document"]["version"], "content": content},
     )
@@ -78,7 +78,7 @@ def test_optimistic_lock_returns_conflict(client):
     report = create_report(client)
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     content = detail["latest_document"]["content"]
-    response = client.put(f"/api/v1/reports/{report['id']}/document", json={"version": 99, "content": content})
+    response = client.patch(f"/api/v1/reports/{report['id']}/document", json={"version": 99, "content": content})
     assert response.status_code == 409
     assert response.json()["error_code"] == "VERSION_CONFLICT"
 
@@ -112,3 +112,14 @@ def test_finalize_requires_calculation_module_snapshots(client):
     assert response.status_code == 422
     assert response.json()["error_code"] == "CALCULATION_REQUIRED"
     assert client.get(f"/api/v1/reports/{report['id']}").json()["status"] == "QA_BLOCKED"
+
+
+def test_review_uses_the_same_calculation_gate_as_finalize(client):
+    report = create_report(client)
+    client.post(f"/api/v1/reports/{report['id']}/snapshots", json={"source_policy": "GOLDEN_FIXTURE"})
+
+    review = client.get(f"/api/v1/reports/{report['id']}/review")
+
+    assert review.status_code == 200, review.text
+    assert review.json()["ready"] is False
+    assert any(item["check_id"] == "CALCULATION_REQUIRED" for item in review.json()["blocking"])

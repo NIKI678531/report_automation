@@ -31,7 +31,6 @@ export function shouldAutoLoadDaNews(state: AutoLoadState): boolean {
     && !state.loading
     && !state.readOnly
     && state.daConfigured
-    && state.candidateCount === 0
     && !state.attempted;
 }
 
@@ -72,6 +71,15 @@ function publishedLabel(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString("en-HK", { timeZone: HKT, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+export function publishedDateHkt(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value.slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: HKT, year: "numeric", month: "2-digit", day: "2-digit" })
+    .formatToParts(parsed);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 function SortableSelected({ item, disabled, onUpdate, onRemove }: { item: Draft; disabled: boolean; onUpdate: (item: Draft) => void; onRemove: () => void }) {
@@ -171,7 +179,7 @@ export function NewsWorkbench({ report, busy, run, selectedSnapshot }: { report:
     const terms = needle ? needle.split(/\s+/) : [];
     return candidates.filter((item) => {
       const text = `${item.title} ${item.summary} ${item.ticker ?? ""} ${item.source_name} ${item.site ?? ""}`.toLowerCase();
-      const publishedDate = item.published_at.slice(0, 10);
+      const publishedDate = publishedDateHkt(item.published_at);
       return terms.every((term) => text.includes(term))
         && matchesNewsSource(item, source)
         && (!site || item.site === site)
