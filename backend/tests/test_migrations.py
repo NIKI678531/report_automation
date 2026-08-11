@@ -19,9 +19,11 @@ def test_initial_migration_upgrade_and_downgrade(tmp_path):
     }.issubset(tables)
     with engine.connect() as connection:
         products = connection.execute(text("SELECT product_code, ticker, name_en FROM product_catalog ORDER BY display_order")).all()
+        bindings = connection.execute(text("SELECT fund_total_return_instrument_code, fund_kpi_product_code, trading_calendar_code FROM product_catalog WHERE product_code = '3033'")).one()
         profiles = dict(connection.execute(text("SELECT profile_id, status FROM mapping_profiles")).all())
     assert ("3037", "3037.HK", "CSOP Hang Seng Index ETF") in products
     assert ("3535", "3535.HK", "CSOP Nomura FTSE HK-Japan Equity Cash Flow ETF") in products
+    assert bindings == ("3033.HK", "3033", "HK")
     assert profiles["standard_constituent_returns_csv"] == "APPROVED"
     assert profiles["standard_total_return_series_csv"] == "APPROVED"
     assert profiles["standard_fund_kpi_daily_csv"] == "APPROVED"

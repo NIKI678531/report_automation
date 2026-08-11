@@ -11,6 +11,10 @@ def test_products_are_effective_dated_and_drive_report_identity(client):
     assert created.json()["constituent_index_code"] == "HSTECH"
     assert created.json()["benchmark_instrument_code"] == "HSTECHN"
     assert created.json()["template_version"] == "3033-v2"
+    product = next(item for item in products.json() if item["product_code"] == "3033")
+    assert product["fund_total_return_instrument_code"] == "3033.HK"
+    assert product["fund_kpi_product_code"] == "3033"
+    assert product["trading_calendar_code"] == "HK"
 
 
 def test_report_identity_changes_with_selected_etf(client):
@@ -77,7 +81,7 @@ def test_non_3033_product_uses_its_own_count_formula_and_never_golden_data(clien
     assert len(applied.json()["payload"]["constituents"]) == 2
     assert applied.json()["payload"]["historical_performance"] == {"rows": []}
     missing = set(client.post(f"/api/v1/reports/{report_id}/calculations").json()["missing_slots"])
-    assert {"constituent_returns", "total_return_series", "fund_kpi_daily", "trading_calendar", "industry_master"} == missing
+    assert {"constituent_performance", "total_return_series", "fund_kpi_daily", "trading_calendar", "industry_master"} == missing
 
 
 def test_document_update_rebinds_system_owned_report_identity(client):
@@ -112,8 +116,8 @@ def test_document_update_rebinds_system_owned_report_identity(client):
 
 def test_admin_can_import_an_approved_product_catalog(client):
     catalog = (
-        "product_code,ticker,name_en,name_zh_hant,constituent_index_code,constituent_index_name,benchmark_instrument_code,benchmark_instrument_name,currency,timezone,valid_from,valid_to,is_active,display_order,template_version,design_token_version,expected_constituent_count,formula_profile\n"
-        "3067,3067.HK,CSOP Approved Test ETF,,APPROVEDIDX,Approved Index,APPROVEDTR,Approved Total Return Index,HKD,Asia/Hong_Kong,2026-01-01,,true,20,monthly-v2,monthly-v2,50,approved-index-v1\n"
+        "product_code,ticker,name_en,name_zh_hant,constituent_index_code,constituent_index_name,benchmark_instrument_code,benchmark_instrument_name,fund_total_return_instrument_code,fund_kpi_product_code,trading_calendar_code,currency,timezone,valid_from,valid_to,is_active,display_order,template_version,design_token_version,expected_constituent_count,formula_profile\n"
+        "3067,3067.HK,CSOP Approved Test ETF,,APPROVEDIDX,Approved Index,APPROVEDTR,Approved Total Return Index,3067.HK,3067,HK,HKD,Asia/Hong_Kong,2026-01-01,,true,20,monthly-v2,monthly-v2,50,approved-index-v1\n"
     )
     imported = client.post(
         "/api/v1/products/import",
@@ -142,9 +146,9 @@ def test_product_catalog_import_is_admin_only_and_atomic(client):
     assert denied.json()["error_code"] == "PRODUCT_ADMIN_REQUIRED"
 
     invalid = (
-        "product_code,ticker,name_en,constituent_index_code,benchmark_instrument_code,valid_from,template_version,design_token_version,formula_profile\n"
-        "3067,3067.HK,Fund A,IDX,IDXTR,2026-01-01,v1,v1,f1\n"
-        "3067,3067.HK,Fund B,IDX,IDXTR,2026-01-01,v1,v1,f1\n"
+        "product_code,ticker,name_en,constituent_index_code,benchmark_instrument_code,fund_total_return_instrument_code,fund_kpi_product_code,trading_calendar_code,valid_from,template_version,design_token_version,formula_profile\n"
+        "3067,3067.HK,Fund A,IDX,IDXTR,3067.HK,3067,HK,2026-01-01,v1,v1,f1\n"
+        "3067,3067.HK,Fund B,IDX,IDXTR,3067.HK,3067,HK,2026-01-01,v1,v1,f1\n"
     )
     rejected = client.post(
         "/api/v1/products/import",

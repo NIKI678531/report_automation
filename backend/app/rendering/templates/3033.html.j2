@@ -47,8 +47,8 @@
     .analytics-grid { display:grid; grid-template-columns:1fr 1fr; gap:7mm; }
     .blue-title { background:var(--blue); color:#fff; font-weight:700; font-size:12pt; text-align:center; padding:2.2mm; margin-bottom:2mm; }
     .top10 td { padding:1.8mm .5mm; font-size:11pt; } .top10 td:last-child { text-align:right; }
-    .donut { width:52mm; height:52mm; margin:5mm auto 2mm; border-radius:50%; position:relative; }
-    .donut::after { content:""; position:absolute; inset:13mm; background:white; border-radius:50%; }
+    .donut { display:block; width:52mm; height:52mm; margin:5mm auto 2mm; }
+    .donut-slice { stroke:var(--paper); stroke-width:.6; }
     .legend { display:grid; grid-template-columns:1fr 1fr; gap:1mm; font-size:9pt; }
     .swatch { display:inline-block; width:2mm; height:2mm; margin-right:1mm; }
     .legend-value { color:#333; margin-left:.8mm; }
@@ -109,7 +109,7 @@
 </section>
 
 <section class="report-page" data-page="4" data-section-key="analytics">
-  {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title">Top 10 Index Constituents*　　(%)</div><table class="top10">{% for row in sections.analytics.top10 %}<tr><td>{{ row.issuer }}</td><td>{{ row.weight|pct }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">Index Sectors Breakdown*</div>{% if sector_chart.has_data %}<div class="donut" role="img" aria-label="Index sector breakdown" style="background:{{ sector_chart.gradient }}"></div><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}<b class="legend-value">{{ row.weight|pct }}%</b></span>{% endfor %}</div>{% else %}<div class="sector-empty">N/A</div>{% endif %}</section></div>
+  {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title">Top 10 Index Constituents*　　(%)</div><table class="top10">{% for row in sections.analytics.top10 %}<tr><td>{{ row.issuer }}</td><td>{{ row.weight|pct }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">Index Sectors Breakdown*</div>{% if sector_chart.has_data %}<svg class="donut" role="img" aria-label="{{ sector_chart.alt_text }}" viewBox="0 0 {{ sector_chart.view_box }} {{ sector_chart.view_box }}"><title>Index Sectors Breakdown</title><desc>{{ sector_chart.alt_text }}</desc>{% for row in sector_chart.rows %}<path class="donut-slice" data-sector-slice="{{ row.sector }}" d="{{ row.path }}" fill="{{ row.color }}" />{% endfor %}</svg><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}<b class="legend-value">{{ row.weight|pct }}%</b></span>{% endfor %}</div>{% else %}<div class="sector-empty">N/A</div>{% endif %}</section></div>
   <div class="analytics-grid performers"><section><h2>Top Performers in {{ doc.month_name }}**</h2><table class="simple"><thead><tr><th>Issuer</th><th>{{ doc.month_name }} Return (%)</th></tr></thead><tbody>{% for row in sections.analytics.top %}<tr><td>{{ row.issuer }}</td><td>{{ row.return|pct }}</td></tr>{% endfor %}</tbody></table></section><section><h2>Bottom Performers in {{ doc.month_name }}**</h2><table class="simple"><thead><tr><th>Issuer</th><th>{{ doc.month_name }} Return (%)</th></tr></thead><tbody>{% for row in sections.analytics.bottom %}<tr><td>{{ row.issuer }}</td><td>{{ row.return|pct }}</td></tr>{% endfor %}</tbody></table></section></div>
   <section class="portfolio"><h2>{{ doc.product_ticker|default(report.product_code ~ '.HK', true) }} Portfolio Analysis</h2><table>{% for row in sections.analytics.portfolio %}<tr><td>{{ row.label }}</td><td>{{ row.value }}</td></tr>{% endfor %}</table></section></main><div class="footnote">{{ sections.footnotes.analytics|default('') }}</div>
 </section>

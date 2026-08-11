@@ -47,6 +47,15 @@
 	--color-cat-pcs: #faad14;
 	--color-cat-data: #1890ff;
 	--color-cat-system: #6b7280;
+	--color-chart-sector-1: #2361ad;
+	--color-chart-sector-2: #2f8f83;
+	--color-chart-sector-3: #d49a2a;
+	--color-chart-sector-4: #8064a2;
+	--color-chart-sector-5: #c45f5f;
+	--color-chart-sector-6: #1890ff;
+	--color-chart-sector-7: #6b7280;
+	--color-chart-sector-8: #52c41a;
+	--color-chart-track: rgba(100, 116, 139, .16);
 	--color-cat-research-container: rgba(35, 97, 173, .24);
 	--color-cat-marketing-container: rgba(114, 46, 209, .24);
 	--color-cat-trading-container: rgba(82, 196, 26, .24);
@@ -129,6 +138,14 @@
 	--layout-max-width: 1440px;
 	--layout-hero-width: 720px;
 	--layout-grid-min: 300px;
+	--layout-news-list-height: 640px;
+	--layout-news-list-min-height: 420px;
+	--layout-news-sentinel-height: 2px;
+	--layout-sector-chart-size: 184px;
+	--layout-sector-chart-columns: minmax(0, 4fr) minmax(0, 6fr);
+	--layout-sector-legend-columns: var(--space-sm) minmax(0, 1fr) auto;
+	--layout-sector-chart-stroke: 22;
+	--opacity-chart-hover: .82;
 
 	/* ===== Elevation — glass + soft shadow + edge highlight, never multi-level hard shadows ===== */
 	--shadow-1: 0 2px 6px rgba(35, 97, 173, .10);

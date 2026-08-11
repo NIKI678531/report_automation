@@ -12,6 +12,7 @@ onto the active snapshot, so two sources can never silently write the same field
 
 from __future__ import annotations
 
+import csv
 import io
 import re
 import unicodedata
@@ -30,6 +31,15 @@ from app.domain.validation import BLOCKING, INFO, WARNING, FindingCollector
 # Fields the constituent-identity slot is authoritative for.
 IDENTITY_FIELDS = ("security_code", "ticker", "name_en", "name_zh_hant", "close_price", "currency", "weight", "as_of_date", "source_codes")
 RETURN_FIELDS = ("return_1m", "return_3m", "return_6m", "return_ytd")
+CONSTITUENT_PERFORMANCE_COLUMNS = (
+    "index_code", "as_of_date", "security_code", "ticker", "name_en", "name_zh_hant",
+    "close_price", "currency", "weight_pct", "source_industry_code", "period_end",
+    "period_start_1m", "return_1m_pct", "return_1m_missing_reason",
+    "period_start_3m", "return_3m_pct", "return_3m_missing_reason",
+    "period_start_6m", "return_6m_pct", "return_6m_missing_reason",
+    "period_start_ytd", "return_ytd_pct", "return_ytd_missing_reason",
+    "constituent_source", "return_source",
+)
 
 
 @dataclass(frozen=True)
@@ -40,7 +50,42 @@ class DatasetSpec:
     accepts: tuple[str, ...]
     owns: tuple[str, ...]
     parse: Callable[..., dict[str, Any]]
+    #: The snapshot payload key this slot writes its rows under. The slot key and the payload key
+    #: are deliberately allowed to differ (`fund_kpi_daily` writes `fund_kpis`); this field is the
+    #: only place that translation is declared.
+    payload_key: str = ""
+    #: Header row of the download template offered next to the upload control. Kept here so the
+    #: backend, the mapping profile selector and the UI cannot drift apart.
+    template_columns: tuple[str, ...] = ()
     description: str = ""
+    #: Slots whose parser reads a fixed standard layout validate their own columns and report
+    #: precisely which one is wrong, so they must not be gated behind a mapping profile first.
+    requires_profile: bool = True
+
+
+@dataclass(frozen=True)
+class ExternalSlot:
+    """A prerequisite dataset imported globally rather than uploaded onto one report.
+
+    The HSICS taxonomy is administered once for the whole system, but a report cannot be
+    calculated without it, so it is surfaced beside the upload slots and reported by
+    ``service.missing_required_slots`` in the same list.
+    """
+
+    key: str
+    title: str
+    description: str
+    required: bool
+    accepts: tuple[str, ...]
+
+
+INDUSTRY_MASTER = ExternalSlot(
+    key="industry_master",
+    title="HSICS industry master",
+    description="Centrally managed report-date-effective HSICS taxonomy used for every industry aggregation.",
+    required=True,
+    accepts=(".csv",),
+)
 
 
 @dataclass(frozen=True)
@@ -397,6 +442,154 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
     }
 
 
+def parse_constituent_performance(
+    filename: str,
+    data: bytes,
+    report_date: date,
+    collector: FindingCollector,
+    profile: MappingProfile | None = None,
+) -> dict[str, Any]:
+    del profile
+    spec = REGISTRY["constituent_performance"]
+    if not _check_accepts(spec, filename, collector):
+        return {}
+    reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig")))
+    actual_columns = tuple(reader.fieldnames or ())
+    missing_columns = [column for column in spec.template_columns if column not in actual_columns]
+    if missing_columns:
+        collector.add(
+            "DATASET_COLUMNS_MISSING",
+            f"Missing required columns: {', '.join(missing_columns)}.",
+            field=missing_columns[0],
+            fix_hint="Use the constituent-performance template without renaming or removing columns.",
+        )
+        return {}
+
+    period_columns = {
+        "return_1m": ("period_start_1m", "return_1m_pct", "return_1m_missing_reason"),
+        "return_3m": ("period_start_3m", "return_3m_pct", "return_3m_missing_reason"),
+        "return_6m": ("period_start_6m", "return_6m_pct", "return_6m_missing_reason"),
+        "return_ytd": ("period_start_ytd", "return_ytd_pct", "return_ytd_missing_reason"),
+    }
+    rows: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    index_code: str | None = None
+    as_of_date: date | None = None
+    period_end: date | None = None
+    period_starts: dict[str, str] = {}
+    constituent_sources: set[str] = set()
+    return_sources: set[str] = set()
+    for row_number, record in enumerate(reader, start=2):
+        try:
+            incoming_index = imports._required(record, "index_code", row_number).upper()
+            incoming_as_of = imports._date(record.get("as_of_date"), "as_of_date", row_number)
+            incoming_period_end = imports._date(record.get("period_end"), "period_end", row_number)
+            code = _normalize_code(imports._required(record, "security_code", row_number))
+            if code in seen:
+                raise ValueError(f"Row {row_number}: duplicate security_code {code}; first seen on row {seen[code]}")
+            if incoming_as_of > report_date or incoming_period_end > report_date:
+                raise ValueError(f"Row {row_number}: as_of_date and period_end cannot be later than report_date")
+            if index_code and incoming_index != index_code:
+                raise ValueError(f"Row {row_number}: index_code differs from {index_code}")
+            if as_of_date and incoming_as_of != as_of_date:
+                raise ValueError(f"Row {row_number}: as_of_date differs from {as_of_date.isoformat()}")
+            if period_end and incoming_period_end != period_end:
+                raise ValueError(f"Row {row_number}: period_end differs from {period_end.isoformat()}")
+            close_price = imports._decimal(record.get("close_price"), "close_price", row_number)
+            weight_pct = imports._decimal(record.get("weight_pct"), "weight_pct", row_number)
+            if close_price is None or close_price <= 0:
+                raise ValueError(f"Row {row_number}: close_price must be greater than zero")
+            if weight_pct is None or weight_pct < 0 or weight_pct > 100:
+                raise ValueError(f"Row {row_number}: weight_pct must be between 0 and 100")
+            item: dict[str, Any] = {
+                "security_code": code,
+                "ticker": imports._required(record, "ticker", row_number).upper(),
+                "name_en": imports._required(record, "name_en", row_number),
+                "name_zh_hant": _text(record.get("name_zh_hant")) or "",
+                "close_price": str(close_price),
+                "currency": imports._required(record, "currency", row_number).upper(),
+                "weight": str(weight_pct / Decimal("100")),
+                "as_of_date": incoming_as_of.isoformat(),
+                "source_codes": {
+                    "hsics_industry": imports._required(record, "source_industry_code", row_number),
+                },
+                "constituent_source": imports._required(record, "constituent_source", row_number),
+                "return_source": imports._required(record, "return_source", row_number),
+            }
+        except ValueError as error:
+            collector.add(
+                "IMPORT_ROW_INVALID",
+                str(error),
+                row=row_number,
+                fix_hint="Correct the row using the standard constituent-performance template.",
+            )
+            continue
+
+        seen[code] = row_number
+        index_code = incoming_index
+        as_of_date = incoming_as_of
+        period_end = incoming_period_end
+        constituent_sources.add(item["constituent_source"])
+        return_sources.add(item["return_source"])
+        for field, (start_column, value_column, reason_column) in period_columns.items():
+            try:
+                start = imports._date(record.get(start_column), start_column, row_number)
+                if start >= incoming_period_end:
+                    raise ValueError(f"Row {row_number}: {start_column} must be earlier than period_end")
+                existing_start = period_starts.get(field)
+                if existing_start and existing_start != start.isoformat():
+                    raise ValueError(f"Row {row_number}: {start_column} differs from {existing_start}")
+                period_starts[field] = start.isoformat()
+                value = imports._decimal(record.get(value_column), value_column, row_number)
+                missing_reason = _text(record.get(reason_column))
+                if value is None and not missing_reason:
+                    raise ValueError(f"Row {row_number}: {value_column} or {reason_column} is required")
+                if value is not None and missing_reason:
+                    raise ValueError(f"Row {row_number}: {value_column} and {reason_column} are mutually exclusive")
+                item[field] = str(value / Decimal("100")) if value is not None else None
+                if missing_reason:
+                    item[f"{field}_missing_reason"] = missing_reason
+            except ValueError as error:
+                collector.add(
+                    "IMPORT_ROW_INVALID",
+                    str(error),
+                    row=row_number,
+                    field=value_column,
+                    entity_id=code,
+                    fix_hint="Provide an explicit percent return or a missing reason for every period.",
+                )
+        rows.append(item)
+
+    if not rows:
+        collector.add("DATASET_EMPTY", "No usable constituent rows were found.", fix_hint="Populate the constituent-performance template and upload it again.")
+        return {}
+    if len(constituent_sources) != 1 or len(return_sources) != 1:
+        collector.add(
+            "SOURCE_INCONSISTENT",
+            "constituent_source and return_source must each name one authoritative source for the complete file.",
+            fix_hint="Split mixed sources into separately reviewed files and upload the one effective source.",
+        )
+    total = sum((Decimal(row["weight"]) for row in rows), Decimal("0"))
+    if abs(total - Decimal("1")) > Decimal("0.0001"):
+        collector.add(
+            "WEIGHT_SUM_OFF",
+            f"Weights total {total:.6f} instead of 1.000000.",
+            severity=WARNING,
+            field="weight_pct",
+            fix_hint="Confirm the file covers the full index and uses percent weights.",
+        )
+    rows.sort(key=lambda item: (-Decimal(item["weight"]), item["security_code"]))
+    return {
+        "constituents": rows,
+        "constituent_index_code": index_code,
+        "return_periods": {
+            "starts": period_starts,
+            "end": period_end.isoformat() if period_end else None,
+            "source": ", ".join(sorted(return_sources)),
+        },
+    }
+
+
 def _profiled_csv(parser: Callable[[str, bytes, date], dict[str, Any]]) -> Callable[..., dict[str, Any]]:
     def parse(filename: str, data: bytes, report_date: date, collector: FindingCollector, profile: MappingProfile | None = None) -> dict[str, Any]:
         del profile
@@ -409,11 +602,23 @@ def _profiled_csv(parser: Callable[[str, bytes, date], dict[str, Any]]) -> Calla
 
 
 REGISTRY: dict[str, DatasetSpec] = {
+    "constituent_performance": DatasetSpec(
+        key="constituent_performance",
+        title="Constituent performance",
+        description="One canonical CSV containing identity, price, weight, HSICS code and 1M / 3M / 6M / YTD returns.",
+        required=True,
+        accepts=(".csv",),
+        owns=IDENTITY_FIELDS + RETURN_FIELDS,
+        parse=parse_constituent_performance,
+        payload_key="constituents",
+        template_columns=CONSTITUENT_PERFORMANCE_COLUMNS,
+        requires_profile=False,
+    ),
     "index_constituents": DatasetSpec(
         key="index_constituents",
         title="Index constituents",
         description="HSTECH end-of-day constituent export: identity, closing price and index weight.",
-        required=True,
+        required=False,
         accepts=(".csv",),
         owns=IDENTITY_FIELDS,
         parse=parse_index_constituents,
@@ -422,7 +627,7 @@ REGISTRY: dict[str, DatasetSpec] = {
         key="constituent_returns",
         title="Constituent returns",
         description="Mapped monthly workbook: 1M / 3M / 6M / YTD total returns.",
-        required=True,
+        required=False,
         accepts=(".csv", ".xlsx", ".xlsm"),
         owns=RETURN_FIELDS,
         parse=parse_constituent_returns,
@@ -476,7 +681,7 @@ def parse(dataset_type: str, filename: str, data: bytes, report_date: date, prof
     """Parse an upload into a payload fragment plus every problem found along the way."""
     spec = REGISTRY[dataset_type]
     collector = FindingCollector()
-    if profile is None:
+    if profile is None and spec.requires_profile:
         collector.add(
             "MAP-001",
             f"'{filename}' did not resolve to one approved {spec.title} mapping profile.",

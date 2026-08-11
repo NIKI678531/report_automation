@@ -38,6 +38,19 @@ uv run python scripts/mysqldump_to_sqlite.py dump-da_report-202608071123-2.sql d
 
 > **`report_type` 是贯穿全库的核心维度**,取值 `da`(数字资产日报)或 `regional`(区域市场晨报)。`news_sources`、`market_instruments`、`csop_products`、`report_drafts` 都带这个字段,取数时务必先按它过滤。
 
+### 月度基金评论消费契约（待 DA-Report 上游产出）
+
+当前 2026-08-07 快照**尚不包含**月度基金评论所需的以下规范表。Report Automation 消费端已经按此契约实现只读校验、自动快照和失败关闭；在 DA-Report 仓库完成迁移、采集及 `mysqldump_to_sqlite.py` 导出前，自动月报快照会保持 `PENDING`，不得用 `market_snapshots.*_return_pct` 或 PDF 汇总值补数。
+
+| 表 | 主键/唯一键 | 最小字段与口径 |
+| --- | --- | --- |
+| `total_return_series` | `(instrument_code, trade_date, series_type, currency)` | `id, instrument_code, trade_date, total_return_value>0, series_type=TOTAL_RETURN, currency, source, updated_at` |
+| `fund_kpi_daily` | `(product_code, metric_code, metric_date)` | `id, product_code, metric_date, metric_code=AUM/DAILY_TURNOVER, value>=0, unit, currency, source, updated_at` |
+| `trading_calendar` | `(market_code, trade_date)` | `id, market_code, trade_date, is_trading_day, source, updated_at` |
+| `index_events` | `(index_code, event_type, effective_date)` | `id, index_code, event_type, announcement_date, effective_date, source, updated_at` |
+
+上游验收必须覆盖 MySQL→SQLite 行数与 checksum 对账、唯一键、ISO 日期、单位/币种，以及 3033 基金与 HSTECHN 基准的共同 1M/3M/6M/YTD Total Return 端点。
+
 ---
 
 ## 2. 表结构

@@ -57,7 +57,57 @@ export interface NewsProvider {
   default: boolean;
 }
 
-export type DatasetType = "index_constituents" | "constituent_returns" | "total_return_series" | "fund_kpi_daily" | "trading_calendar" | "index_events";
+export interface CompanyNewsCatalogItem {
+  provider: "DA_REPORT";
+  external_id: string;
+  source_url: string;
+  source_code: string;
+  source_name: string;
+  source_name_zh: string | null;
+  published_at: string;
+  published_at_source: "published_at" | "fetched_at";
+  fetched_at: string;
+  title: string;
+  title_en: string | null;
+  title_zh: string | null;
+  summary: string;
+  summary_en: string | null;
+  summary_zh: string | null;
+  category: "Corporate";
+  region: string | null;
+  sentiment: string | null;
+  importance_score: number | null;
+  model: string | null;
+}
+
+export interface CompanyNewsCatalogPage {
+  items: CompanyNewsCatalogItem[];
+  total: number;
+  has_more: boolean;
+  next_cursor: string | null;
+  facets: {
+    sources: Array<{ value: string; label: string; label_zh: string | null; count: number }>;
+    sentiments: Record<string, number>;
+    importance: Record<string, number>;
+    date_min: string | null;
+    date_max: string | null;
+  };
+}
+
+export interface CompanyNewsCatalogQuery {
+  query?: string;
+  source?: string;
+  sentiment?: string;
+  importance?: "LOW" | "MEDIUM" | "HIGH";
+  from_date?: string;
+  to_date?: string;
+  sort?: "newest" | "oldest";
+  cursor?: string;
+  limit?: number;
+}
+
+export type DatasetType = "constituent_performance" | "index_constituents" | "constituent_returns" | "total_return_series" | "fund_kpi_daily" | "trading_calendar" | "index_events";
+export type ClearableDatasetType = Extract<DatasetType, "constituent_performance" | "index_constituents" | "constituent_returns">;
 
 export interface DatasetSlot {
   key: DatasetType | "industry_master";
@@ -86,7 +136,9 @@ export interface ImportResult {
 }
 
 export interface NewsSelectionDraft {
-  news_item_id: string;
+  news_item_id?: string;
+  provider?: "DA_REPORT";
+  external_id?: string;
   position: number;
   title_override?: string;
   summary_override?: string;
@@ -141,9 +193,25 @@ export const api = {
   listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),
   uploadDataset: (id: string, datasetType: DatasetType, file: File) => { const body = new FormData(); body.append("dataset_type", datasetType); body.append("file", file); return request<ImportResult>(`/reports/${id}/imports`, { method: "POST", body }); },
   applyImport: (reportId: string, importId: string, reason?: string) => request(`/reports/${reportId}/imports/${importId}/apply`, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
+  discardImport: (reportId: string, importId: string) => request(`/reports/${reportId}/imports/${importId}/discard`, { method: "POST", body: JSON.stringify({}) }),
+  clearDataset: (reportId: string, datasetType: ClearableDatasetType, version: number) => request(`/reports/${reportId}/datasets/${datasetType}/clear`, { method: "POST", body: JSON.stringify({ version }) }),
   generateDraft: (id: string, version: number, user_prompt: string) => request<{ version: number }>(`/reports/${id}/ai/in-review`, { method: "POST", body: JSON.stringify({ version, user_prompt }) }),
   review: (id: string) => request<{ ready: boolean; blocking: Array<{ check_id: string; fix_hint: string }>; warnings: unknown[] }>(`/reports/${id}/review`),
   listNewsProviders: () => request<NewsProvider[]>("/news/providers"),
+  listCompanyNewsCatalog: (id: string, filters: CompanyNewsCatalogQuery = {}) => {
+    const parameters = new URLSearchParams();
+    if (filters.query) parameters.set("query", filters.query);
+    if (filters.source) parameters.set("source", filters.source);
+    if (filters.sentiment) parameters.set("sentiment", filters.sentiment);
+    if (filters.importance) parameters.set("importance", filters.importance);
+    if (filters.from_date) parameters.set("from_date", filters.from_date);
+    if (filters.to_date) parameters.set("to_date", filters.to_date);
+    if (filters.sort) parameters.set("sort", filters.sort);
+    if (filters.cursor) parameters.set("cursor", filters.cursor);
+    if (filters.limit) parameters.set("limit", String(filters.limit));
+    const query = parameters.toString();
+    return request<CompanyNewsCatalogPage>(`/reports/${id}/news/catalog${query ? `?${query}` : ""}`);
+  },
   listReportNewsCandidates: (id: string) => request<NewsCandidate[]>(`/reports/${id}/news/candidates`),
   fetchNewsCandidates: (id: string, scope: "CONSTITUENTS" | "GENERAL", from_date: string, to_date: string, provider?: string, ensure = false) => request<{ provider: string; fetched: number; created: number; items: NewsCandidate[] }>(`/reports/${id}/news/candidates/fetch`, { method: "POST", body: JSON.stringify({ scope, from_date, to_date, page: 0, limit: 100, provider, ensure }) }),
   addNewsCandidate: (id: string, item: NewsCandidateInput) => request<NewsCandidate>(`/reports/${id}/news/candidates`, { method: "POST", body: JSON.stringify(item) }),

@@ -43,10 +43,19 @@ def test_report_golden_lifecycle_and_preview(client):
     assert "The Performance of HSTECH Constituents" in preview.text
     assert "June Technology Review" in preview.text
     assert "Market Context" in preview.text
+    assert '<svg class="donut"' in preview.text
+    assert preview.text.count('data-sector-slice=') >= 3
+    assert "conic-gradient" not in preview.text
 
     finalized = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": saved.json()["version"]})
     assert finalized.status_code == 200, finalized.text
     assert finalized.json()["status"] == "FINALIZED"
+    clear_finalized = client.post(
+        f"/api/v1/reports/{report['id']}/datasets/constituent_returns/clear",
+        json={"version": finalized.json()["version"]},
+    )
+    assert clear_finalized.status_code == 409
+    assert clear_finalized.json()["error_code"] == "REPORT_FINALIZED"
 
     rendered = client.post(
         f"/api/v1/reports/{report['id']}/renders",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   REPORT_MODULES,
+  reportConstituentsTitle,
   reportMonthName,
   reportPageEyebrow,
   reportPageLabel,
@@ -9,19 +10,20 @@ import {
 } from "./reportModules";
 
 describe("report module page labels", () => {
-  it("matches the four-page canonical report", () => {
+  it("uses a continuous workspace sequence", () => {
     expect(REPORT_MODULES.map(({ pageLabel }) => pageLabel)).toEqual([
-      "01",
       "01",
       "02",
       "03",
       "04",
-      "01/03/04",
+      "05",
+      "06",
     ]);
-    expect(reportPageLabel("performance")).toBe("01");
-    expect(reportPageLabel("footnotes")).toBe("01/03/04");
-    expect(reportPageEyebrow("analytics", "Calculated outputs")).toBe("Page 04 · Calculated outputs");
-    expect(reportPageEyebrow("footnotes", "System-bound disclosures")).toBe("Pages 01/03/04 · System-bound disclosures");
+    expect(reportPageLabel("constituents")).toBe("04");
+    expect(reportPageLabel("footnotes")).toBe("06");
+    expect(reportPageEyebrow("constituents", "Snapshot data")).toBe("Page 04 · Snapshot data");
+    expect(reportPageEyebrow("analytics", "Calculated outputs")).toBe("Page 05 · Calculated outputs");
+    expect(reportPageEyebrow("footnotes", "System-bound disclosures")).toBe("Page 06 · System-bound disclosures");
   });
 
   it("prefers canonical document identity with safe legacy fallbacks", () => {
@@ -34,6 +36,11 @@ describe("report module page labels", () => {
     expect(reportProductTicker(canonical)).toBe("9999.HK");
     expect(reportMonthName({ product_code: "TEST", report_date: "2026-07-31" })).toBe("July");
     expect(reportProductTicker({ product_code: "TEST", report_date: "2026-07-31" })).toBe("TEST");
+  });
+
+  it("builds the constituent heading from the selected fund index", () => {
+    expect(reportConstituentsTitle({ constituent_index_code: "HSTECH" })).toBe("The Performance of HSTECH Constituents");
+    expect(reportConstituentsTitle({ constituent_index_code: "MSCI CHINA" })).toBe("The Performance of MSCI CHINA Constituents");
   });
 
   it("keeps report revisions inside the selected fund and report date", () => {

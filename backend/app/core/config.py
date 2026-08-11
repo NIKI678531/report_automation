@@ -46,6 +46,7 @@ class Settings(BaseModel):
     da_report_cache_dir: Path = Path(os.getenv("DA_REPORT_CACHE_DIR", str(Path(tempfile.gettempdir()) / "commentary-da")))
     da_report_max_bytes: int = int(os.getenv("DA_REPORT_MAX_BYTES", str(512 * 1024 * 1024)))
     da_report_timeout_seconds: float = float(os.getenv("DA_REPORT_TIMEOUT_SECONDS", "10"))
+    da_report_auto_load: bool = os.getenv("DA_REPORT_AUTO_LOAD", "true").strip().lower() in {"1", "true", "yes", "y"}
     workspace_root: Path = _WORKSPACE_ROOT
     # backend/ itself: test fixtures and alembic live under the service, not the repository root.
     service_root: Path = _SERVICE_ROOT

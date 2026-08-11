@@ -1,10 +1,10 @@
-from datetime import date, timezone
-from typing import Annotated
+from datetime import date, datetime, timezone
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from fastapi.responses import FileResponse
 from sqlalchemy import select
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.domain import service
-from app.domain.models import AuditEvent, DataImport, DataSnapshot, IndustryMasterRecord, JobStatus, MappingProfile, MetricValue, ModuleSnapshot, NewsFetchRun, NewsItem, ProductCatalog, QualityCheckResult, RenderArtifact, RenderJob, Report, ReportDocument, ReportNewsSelection, ReportStatus, utcnow
+from app.domain.models import AuditEvent, DataImport, DataSnapshot, IndustryMasterRecord, JobStatus, MappingProfile, MetricValue, ModuleSnapshot, NewsFetchRun, NewsItem, ProductCatalog, QualityCheckResult, RenderArtifact, RenderJob, Report, ReportDocument, ReportNewsSelection, ReportStatus, SnapshotDataset, utcnow
 from app.domain.schemas import (
     DocumentUpdate,
     FinalizeRequest,
@@ -29,6 +29,8 @@ from app.domain.schemas import (
     MappingProfileRead,
     AiDraftRequest,
     CalculationRead,
+    DatasetClear,
+    DaReportNewsCatalogPage,
     NewsCreate,
     NewsCandidateFetch,
     NewsRead,
@@ -269,15 +271,21 @@ def list_datasets(report_id: str, db: Db) -> list[dict]:
     """Per-slot ingestion state, so the UI can show what is loaded and what is still missing."""
     from app.domain import ingestion
     report = service.get_report(db, report_id)
-    imports_by_slot: dict[str, DataImport] = {}
+    latest_imports: dict[str, DataImport] = {}
     for item in db.scalars(select(DataImport).where(DataImport.report_id == report_id).order_by(DataImport.created_at.asc())):
-        imports_by_slot[item.dataset_type] = item
+        latest_imports[item.dataset_type] = item
     snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
+    applied_metadata = (snapshot.payload or {}).get("datasets", {}) if snapshot else {}
     slots = []
     for key, spec in ingestion.REGISTRY.items():
-        item = imports_by_slot.get(key)
-        findings = list(item.validation_results or []) if item else []
         is_applied = bool(snapshot and service.dataset_present(snapshot.payload or {}, key))
+        metadata = applied_metadata.get(key, {}) if isinstance(applied_metadata, dict) else {}
+        applied_import_id = metadata.get("import_id") if isinstance(metadata, dict) else None
+        applied_import = db.get(DataImport, applied_import_id) if applied_import_id else None
+        latest_import = latest_imports.get(key)
+        candidate = latest_import if latest_import and latest_import.status not in {"APPLIED", "DISCARDED"} else None
+        item = applied_import if is_applied else candidate
+        findings = list(item.validation_results or []) if item else []
         slots.append({
             "key": key,
             "title": spec.title,
@@ -287,11 +295,11 @@ def list_datasets(report_id: str, db: Db) -> list[dict]:
             "state": "APPLIED" if is_applied else item.status if item else "MISSING",
             "latest_import_id": item.id if item else None,
             "filename": item.original_filename if item else None,
-            "rows": _row_count(item.payload) if item else 0,
+            "rows": _snapshot_row_count(snapshot.payload or {}, key) if is_applied and snapshot else _row_count(item.payload) if item else 0,
             "uploaded_at": item.created_at.isoformat() if item else None,
-            "blocking": len([finding for finding in findings if finding.get("severity") == "BLOCKING"]),
-            "warnings": len([finding for finding in findings if finding.get("severity") == "WARNING"]),
-            "applied_snapshot_id": item.applied_snapshot_id if item else None,
+            "blocking": len([finding for finding in findings if finding.get("severity") == "BLOCKING" and finding.get("status") != "PASSED"]),
+            "warnings": len([finding for finding in findings if finding.get("severity") == "WARNING" and finding.get("status") != "PASSED"]),
+            "applied_snapshot_id": snapshot.id if is_applied and snapshot else None,
         })
     from app.domain.industry import effective_hsics_records
     industry_rows = effective_hsics_records(db, report.report_date)
@@ -324,6 +332,39 @@ def _row_count(payload: dict | None) -> int:
     return 0
 
 
+def _snapshot_row_count(payload: dict, dataset_type: str) -> int:
+    from app.domain.ingestion import RETURN_FIELDS
+
+    if dataset_type == "constituent_performance":
+        return len(payload.get("constituents", [])) if service.dataset_present(payload, dataset_type) else 0
+    if dataset_type == "index_constituents":
+        return len(payload.get("constituents", []))
+    if dataset_type == "constituent_returns":
+        return len([
+            row for row in payload.get("constituents", [])
+            if any(row.get(field) is not None for field in RETURN_FIELDS)
+        ])
+    payload_keys = {
+        "total_return_series": "total_return_series",
+        "fund_kpi_daily": "fund_kpis",
+        "trading_calendar": "trading_calendar",
+        "index_events": "index_events",
+    }
+    return len(payload.get(payload_keys.get(dataset_type, dataset_type), []))
+
+
+@router.post("/reports/{report_id}/datasets/{dataset_type}/clear", response_model=SnapshotRead)
+def clear_dataset(
+    report_id: str,
+    dataset_type: str,
+    command: DatasetClear,
+    db: Db,
+    x_request_id: Annotated[str, Depends(request_id)],
+) -> DataSnapshot:
+    report = service.get_report(db, report_id)
+    return service.clear_dataset(db, report, dataset_type, command.version, x_request_id)
+
+
 @router.post("/reports/{report_id}/imports", response_model=ImportCreateRead, status_code=status.HTTP_201_CREATED)
 async def create_import(
     report_id: str,
@@ -352,11 +393,12 @@ async def create_import(
     filename = file.filename or "upload"
     profile = None
     profile_matches: list[tuple[MappingProfile, object]] = []
-    approved_profiles = list(db.scalars(select(MappingProfile).where(MappingProfile.status == "APPROVED")))
-    profile_matches = ingestion.matching_profiles(approved_profiles, filename, data)
-    matching_dataset = [item for item in profile_matches if item[0].dataset_type == dataset_type]
-    if len(matching_dataset) == 1:
-        profile = matching_dataset[0][0]
+    if spec.requires_profile:
+        approved_profiles = list(db.scalars(select(MappingProfile).where(MappingProfile.status == "APPROVED")))
+        profile_matches = ingestion.matching_profiles(approved_profiles, filename, data)
+        matching_dataset = [item for item in profile_matches if item[0].dataset_type == dataset_type]
+        if len(matching_dataset) == 1:
+            profile = matching_dataset[0][0]
     try:
         payload, collector = ingestion.parse(dataset_type, filename, data, report.report_date, profile)
     except UnicodeError as error:
@@ -366,7 +408,7 @@ async def create_import(
         }) from error
     # A file with bad rows is a first-class, inspectable resource rather than a 4xx: the user needs
     # to see every finding at once, and REJECTED imports stay queryable in the report's history.
-    if profile is None and profile_matches:
+    if spec.requires_profile and profile is None and profile_matches:
         candidate_types = sorted({item[0].dataset_type for item in profile_matches})
         collector = ingestion.FindingCollector()
         collector.add(
@@ -387,7 +429,7 @@ async def create_import(
     replacing_dataset = service.dataset_present(active_payload, dataset_type)
     if rejected:
         diff = {"summary": {"added": 0, "removed": 0, "changed": 0}}
-    elif dataset_type == "index_constituents":
+    elif dataset_type in {"constituent_performance", "index_constituents"}:
         diff = diff_dataset("constituents", payload, active_payload)
     else:
         row_keys = ("constituent_returns", "total_return_series", "fund_kpis", "trading_calendar", "index_events")
@@ -402,7 +444,7 @@ async def create_import(
         mime_type=file.content_type or "application/octet-stream", size_bytes=len(data), checksum=hashlib.sha256(data).hexdigest(),
         parser_version=f"{dataset_type}-mapping-v2", mapping_profile_id=profile.id if profile else None,
         mapping_version=profile.version if profile else None, payload=payload, validation_results=validations,
-        status=("NEEDS_MAPPING" if rejected and any(item.get("error_code", "").startswith("MAP-") for item in validations) else "REJECTED") if rejected else "VALIDATED",
+        status=("NEEDS_MAPPING" if rejected and any(str(item.get("check_id") or item.get("error_code") or "").startswith("MAP-") for item in validations) else "REJECTED") if rejected else "VALIDATED",
         diff=diff,
     )
     db.add(item); db.flush()
@@ -421,6 +463,12 @@ async def create_import(
 def list_imports(report_id: str, db: Db) -> list[DataImport]:
     service.get_report(db, report_id)
     return list(db.scalars(select(DataImport).where(DataImport.report_id == report_id).order_by(DataImport.created_at.desc())))
+
+
+@router.post("/reports/{report_id}/imports/{import_id}/discard", response_model=ImportRead)
+def discard_import(report_id: str, import_id: str, db: Db, x_request_id: Annotated[str, Depends(request_id)]) -> DataImport:
+    report = service.get_report(db, report_id)
+    return service.discard_import(db, report, import_id, x_request_id)
 
 
 @router.get("/reports/{report_id}/data-diff")
@@ -472,12 +520,17 @@ def report_modules(report_id: str, db: Db) -> list[dict]:
     if not report.active_snapshot_id:
         return []
     rows = db.scalars(select(ModuleSnapshot).where(ModuleSnapshot.snapshot_id == report.active_snapshot_id).order_by(ModuleSnapshot.module_code))
+    datasets = {
+        item.id: item.dataset_type
+        for item in db.scalars(select(SnapshotDataset).where(SnapshotDataset.snapshot_id == report.active_snapshot_id))
+    }
     return [{
         "id": item.id,
         "module_code": item.module_code,
         "formula_version": item.formula_version,
         "template_version": item.template_version,
         "source_dataset_ids": item.source_dataset_ids,
+        "source_dataset_types": [datasets[dataset_id] for dataset_id in item.source_dataset_ids],
         "metric_value_ids": item.metric_value_ids,
         "checksum": item.checksum,
         "input_checksum": item.input_checksum,
@@ -524,6 +577,42 @@ def list_news_providers() -> list[dict]:
     from app.integrations import news
 
     return news.list_providers()
+
+
+@router.get("/reports/{report_id}/news/catalog", response_model=DaReportNewsCatalogPage)
+async def report_company_news_catalog(
+    report_id: str,
+    db: Db,
+    query: str | None = None,
+    source: str | None = None,
+    sentiment: str | None = None,
+    importance: str | None = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    sort: Literal["newest", "oldest"] = "newest",
+    cursor: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict:
+    from app.integrations.da_report import DaReportProviderError, list_company_news_catalog
+
+    service.get_report(db, report_id)
+    try:
+        return await list_company_news_catalog(
+            query=query,
+            source=source,
+            sentiment=sentiment,
+            importance=importance,
+            from_date=from_date,
+            to_date=to_date,
+            sort=sort,
+            cursor=cursor,
+            limit=limit,
+        )
+    except DaReportProviderError as error:
+        raise HTTPException(
+            status_code=error.http_status,
+            detail={"error_code": error.code, "message": error.message, "retryable": error.retryable},
+        ) from error
 
 
 @router.post("/reports/{report_id}/news/candidates/fetch")
@@ -674,9 +763,6 @@ def add_report_news_candidate(report_id: str, command: NewsCreate, db: Db, x_req
     published_at = command.published_at
     if published_at.tzinfo is None:
         published_at = published_at.replace(tzinfo=timezone.utc)
-    published_date = published_at.astimezone(ZoneInfo("Asia/Hong_Kong")).date()
-    if not report.report_date.replace(day=1) <= published_date <= report.report_date:
-        raise HTTPException(status_code=422, detail={"error_code": "NEWS_DATE_RANGE_INVALID", "message": "News must be published inside the report month."})
     candidate = {
         "source_name": command.source_name, "source_url": command.source_url, "published_at": published_at,
         "title": command.title, "summary": command.summary, "ticker": command.ticker,
@@ -687,27 +773,102 @@ def add_report_news_candidate(report_id: str, command: NewsCreate, db: Db, x_req
 
 
 @router.put("/reports/{report_id}/news")
-def select_news(report_id: str, command: NewsSelectionUpdate, db: Db, x_request_id: Annotated[str, Depends(request_id)]) -> dict:
+async def select_news(report_id: str, command: NewsSelectionUpdate, db: Db, x_request_id: Annotated[str, Depends(request_id)]) -> dict:
+    from app.integrations.da_report import DaReportProviderError, get_company_news_catalog_item
+
     report = service.get_report(db, report_id)
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED"})
     current = service.latest_document(db, report_id)
     if current.version != command.version:
         raise HTTPException(status_code=409, detail={"error_code": "VERSION_CONFLICT", "current_version": current.version})
+    ordered = sorted(command.items, key=lambda value: value.position)
+    references = [
+        f"LOCAL:{item.news_item_id}" if item.news_item_id else f"DA_REPORT:{item.external_id}"
+        for item in ordered
+    ]
+    if len(references) != len(set(references)):
+        raise HTTPException(status_code=422, detail={"error_code": "NEWS_SELECTION_DUPLICATE"})
+    resolved: list[tuple[object, NewsItem]] = []
+    external: list[tuple[object, dict]] = []
+    for item in ordered:
+        if item.news_item_id:
+            news = db.get(NewsItem, item.news_item_id)
+            if not news:
+                raise HTTPException(status_code=422, detail={"error_code": "NEWS_NOT_FOUND", "news_item_id": item.news_item_id})
+            resolved.append((item, news))
+            continue
+        try:
+            catalog_item = await get_company_news_catalog_item(str(item.external_id))
+        except DaReportProviderError as error:
+            raise HTTPException(
+                status_code=error.http_status,
+                detail={"error_code": error.code, "message": error.message, "retryable": error.retryable},
+            ) from error
+        external.append((item, catalog_item))
+    if external:
+        candidates = []
+        for _, catalog_item in external:
+            published_at = datetime.fromisoformat(str(catalog_item["published_at"]).replace("Z", "+00:00"))
+            if published_at.tzinfo is None:
+                published_at = published_at.replace(tzinfo=timezone.utc)
+            candidates.append({
+                "source_name": catalog_item["source_name"],
+                "source_url": catalog_item["source_url"],
+                "published_at": published_at,
+                "title": catalog_item["title"],
+                "summary": catalog_item["summary"],
+                "ticker": None,
+                "metadata_json": {
+                    "provider": "DA_REPORT",
+                    "scope": "CATALOG",
+                    "site": urlparse(catalog_item["source_url"]).hostname,
+                    "external_id": catalog_item["external_id"],
+                    "source_code": catalog_item["source_code"],
+                    "category": catalog_item["category"],
+                    "region": catalog_item["region"],
+                    "sentiment": catalog_item["sentiment"],
+                    "importance_score": catalog_item["importance_score"],
+                    "model": catalog_item["model"],
+                    "fetched_at": catalog_item["fetched_at"],
+                    "published_at_source": catalog_item["published_at_source"],
+                    "match_method": "DA_REPORT_CORPORATE_ENRICHMENT",
+                    "catalog_verified": True,
+                },
+            })
+        materialized, _ = service.upsert_news_candidates(db, report, candidates, x_request_id, provider="DA_REPORT")
+        resolved.extend((item, news) for (item, _), news in zip(external, materialized, strict=True))
+    resolved.sort(key=lambda value: value[0].position)
+    resolved_ids = [news.id for _, news in resolved]
+    if len(resolved_ids) != len(set(resolved_ids)):
+        raise HTTPException(status_code=422, detail={"error_code": "NEWS_SELECTION_DUPLICATE"})
     db.query(ReportNewsSelection).filter(ReportNewsSelection.report_id == report_id).delete()
     selected = []
-    for item in sorted(command.items, key=lambda value: value.position):
-        news = db.get(NewsItem, item.news_item_id)
-        if not news:
-            raise HTTPException(status_code=422, detail={"error_code": "NEWS_NOT_FOUND", "news_item_id": item.news_item_id})
+    for item, news in resolved:
         news_published_at = news.published_at
         if news_published_at.tzinfo is None:
             news_published_at = news_published_at.replace(tzinfo=timezone.utc)
         published_hkt = news_published_at.astimezone(ZoneInfo("Asia/Hong_Kong"))
-        if not report.report_date.replace(day=1) <= published_hkt.date() <= report.report_date:
-            raise HTTPException(status_code=422, detail={"error_code": "NEWS_DATE_RANGE_INVALID", "message": "Selected news must be published inside the report month.", "news_item_id": news.id})
         db.add(ReportNewsSelection(report_id=report_id, news_item_id=news.id, position=item.position, title_override=item.title_override, summary_override=item.summary_override))
-        selected.append({"news_item_id": news.id, "title": item.title_override or news.title, "summary": item.summary_override or news.summary, "source_name": news.source_name, "source_url": news.source_url, "published_at": news.published_at.isoformat(), "published_at_hkt": published_hkt.strftime("%Y-%m-%d %H:%M HKT"), "ticker": news.ticker})
+        metadata = news.metadata_json or {}
+        selected.append({
+            "news_item_id": news.id,
+            "provider": metadata.get("provider"),
+            "external_id": metadata.get("external_id"),
+            "title": item.title_override or news.title,
+            "summary": item.summary_override or news.summary,
+            "source_name": news.source_name,
+            "source_url": news.source_url,
+            "published_at": news.published_at.isoformat(),
+            "published_at_hkt": published_hkt.strftime("%Y-%m-%d %H:%M HKT"),
+            "published_at_source": metadata.get("published_at_source"),
+            "fetched_at": metadata.get("fetched_at"),
+            "ticker": news.ticker,
+            "region": metadata.get("region"),
+            "sentiment": metadata.get("sentiment"),
+            "importance_score": metadata.get("importance_score"),
+            "model": metadata.get("model"),
+        })
     content = dict(current.content); content["sections"] = dict(content["sections"]); content["sections"]["company_news"] = selected
     document = service.update_document(db, report, current.version, content, x_request_id)
     return {"version": document.version, "items": selected}

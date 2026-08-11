@@ -1,10 +1,10 @@
 export const REPORT_MODULES = [
 	{ id: "review", label: "Review", pageLabel: "01" },
-	{ id: "performance", label: "Historical Performance", pageLabel: "01" },
-	{ id: "news", label: "Company News", pageLabel: "02" },
-	{ id: "constituents", label: "Constituent Performance", pageLabel: "03" },
-	{ id: "analytics", label: "Final Analytics", pageLabel: "04" },
-	{ id: "footnotes", label: "Footnotes & Disclosures", pageLabel: "01/03/04" },
+	{ id: "performance", label: "Historical Performance", pageLabel: "02" },
+	{ id: "news", label: "Company News", pageLabel: "03" },
+	{ id: "constituents", label: "Constituent Performance", pageLabel: "04" },
+	{ id: "analytics", label: "Final Analytics", pageLabel: "05" },
+	{ id: "footnotes", label: "Footnotes & Disclosures", pageLabel: "06" },
 ] as const;
 
 export type ModuleId = (typeof REPORT_MODULES)[number]["id"];
@@ -20,14 +20,21 @@ interface ReportContextItem {
 	report_date: string;
 }
 
+interface ConstituentIndexIdentity {
+	constituent_index_code: string;
+}
+
 export function reportPageLabel(moduleId: ModuleId): string {
 	return REPORT_MODULES.find(({ id }) => id === moduleId)?.pageLabel ?? "";
 }
 
 export function reportPageEyebrow(moduleId: ModuleId, detail: string): string {
 	const pageLabel = reportPageLabel(moduleId);
-	const prefix = pageLabel.includes("/") ? "Pages" : "Page";
-	return `${prefix} ${pageLabel} · ${detail}`;
+	return `Page ${pageLabel} · ${detail}`;
+}
+
+export function reportConstituentsTitle(report: ConstituentIndexIdentity): string {
+	return `The Performance of ${report.constituent_index_code} Constituents`;
 }
 
 export function reportMonthName(report: ReportIdentity): string {

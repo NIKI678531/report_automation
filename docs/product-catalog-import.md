@@ -7,6 +7,9 @@ The fund selector reads effective-dated records from `GET /api/v1/products`. Pro
 - `product_code`, `ticker`, `name_en`
 - `constituent_index_code`: defines the constituent universe, for example `HSTECH`
 - `benchmark_instrument_code`: official Total Return instrument, for example `HSTECHN`
+- `fund_total_return_instrument_code`: DA-Report Total Return instrument for the fund, for example `3033.HK`
+- `fund_kpi_product_code`: DA-Report product key for AUM and daily turnover, for example `3033`
+- `trading_calendar_code`: authoritative market calendar key, for example `HK`
 - `valid_from` in `YYYY-MM-DD` format
 - `template_version`, `design_token_version`, `formula_profile`
 
@@ -27,4 +30,4 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/products/import `
 
 Imports upsert supplied effective versions and do not silently deactivate omitted products. A separate approved row with `is_active=false` or an applicable `valid_to` is required to remove a product from the current selector.
 
-Reports snapshot the resolved product name, constituent index, return benchmark, template, and formula profile at creation time. Later catalog changes do not rewrite old reports.
+Reports resolve these effective-dated bindings when creating or refreshing `DA_REPORT_AUTO` snapshots. Missing bindings fail closed and are recorded as a blocking snapshot finding. Later catalog changes do not rewrite old reports or snapshots.

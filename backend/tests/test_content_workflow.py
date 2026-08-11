@@ -94,7 +94,7 @@ def test_news_candidate_selection_and_order(client):
     assert preview.text.index("News 1") < preview.text.index("Reviewed title")
 
 
-def test_manual_news_must_be_inside_the_report_month(client):
+def test_manual_news_can_be_outside_the_report_month(client):
     report_id = prepared_report(client)
     response = client.post(f"/api/v1/reports/{report_id}/news/candidates", json={
         "source_name": "Source",
@@ -105,8 +105,8 @@ def test_manual_news_must_be_inside_the_report_month(client):
         "ticker": "0700.HK",
     })
 
-    assert response.status_code == 422, response.text
-    assert response.json()["error_code"] == "NEWS_DATE_RANGE_INVALID"
+    assert response.status_code == 201, response.text
+    assert response.json()["title"] == "Before the report month"
 
 
 def test_selected_news_survives_recalculation_and_renders_month_metadata(client):

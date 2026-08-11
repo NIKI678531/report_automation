@@ -8,7 +8,10 @@ from app.rendering.visual_qa import verify_pdf
 
 
 if __name__ == "__main__":
-    actual = Path(sys.argv[1]) if len(sys.argv) > 1 else next((ROOT / "var" / "output" / "pdf").glob("*.pdf"))
+    actual = Path(sys.argv[1]) if len(sys.argv) > 1 else max(
+        (ROOT / "var" / "output" / "pdf").glob("*.pdf"),
+        key=lambda path: path.stat().st_mtime,
+    )
     reference = ROOT / "backend" / "tests" / "fixtures" / "3033_202606" / "reference.pdf"
     evidence = ROOT / "var" / "artifacts" / "visual" / "latest"
     result = verify_pdf(actual, reference, evidence)

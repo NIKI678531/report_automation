@@ -40,8 +40,10 @@ The presigned URL is never returned by the API or included in provider errors. T
 - Missing required SQLite columns: `DA_REPORT_SCHEMA_MISMATCH`.
 - Query failure: `DA_REPORT_UNAVAILABLE`.
 
-These failures affect only the DA news provider. The primary report API and business database remain available. Automatic Company News loading is idempotent per report, active snapshot, provider, scope and report-month window; manual Refresh remains available after recovery.
+These failures affect only the DA news catalog/provider. The primary report API, already materialized selections and business database remain available. Entering Company News queries the first catalog page immediately; Refresh restarts the same filtered catalog query after recovery.
 
 ## Data boundary
 
-DA-Report does not expose a durable news-to-security or news-to-product relation. `category=Corporate` alone is not sufficient for this application. Automatic candidates require a unique title match against names from the report's active constituent snapshot. Summary-only, ambiguous and unmatched records are not shown automatically.
+The Company News catalog is fixed to `news_sources.report_type = 'regional'` and `news_enrichments.category = 'Corporate'`. It deliberately spans every ETF represented upstream and is not evidence that an article belongs to the selected commentary fund. Browsing reads SQLite directly; only explicitly saved articles are materialized into the commentary database with their DA external ID and enrichment lineage. See [ADR-0002](adr/0002-da-report-company-news-catalog.md).
+
+The compatibility provider fetch path still supports strict unique title matching against a report constituent snapshot. It is separate from the automatic catalog browser.

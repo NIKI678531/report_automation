@@ -36,9 +36,11 @@ from .models import (
     utcnow,
 )
 from .schemas import ReportCreate
+from .snapshot_composer import compose_da_report_fragment
 
 
 _NUMBER_TOKEN = re.compile(r"(?<![\w.])[+-]?\d[\d,]*(?:\.\d+)?%?")
+_CLEARABLE_DATASETS = frozenset({"constituent_performance", "index_constituents", "constituent_returns"})
 
 
 def empty_payload(report_date: date) -> dict:
@@ -58,7 +60,7 @@ def _snapshot_dataset_specs(payload: dict) -> list[tuple[str, list | dict]]:
     constituents = payload.get("constituents", [])
     if constituents:
         specs.append(("constituent_snapshot", constituents))
-        if any(any(row.get(field) is not None for field in ("return_1m", "return_3m", "return_6m", "return_ytd")) for row in constituents):
+        if any(any(row.get(field) is not None or row.get(f"{field}_missing_reason") for field in ("return_1m", "return_3m", "return_6m", "return_ytd")) for row in constituents):
             specs.append(("constituent_period_return", constituents))
     if payload.get("total_return_series"):
         specs.append(("total_return_series", payload["total_return_series"]))
@@ -122,34 +124,54 @@ def import_industry_master(db: Session, rows: list[dict], request_id: str) -> di
 def ensure_snapshot_datasets(db: Session, snapshot: DataSnapshot) -> list[SnapshotDataset]:
     existing = list(db.scalars(select(SnapshotDataset).where(SnapshotDataset.snapshot_id == snapshot.id)))
     by_type = {item.dataset_type: item for item in existing}
-    source_objects = sorted({
-        str(item.get("filename") or item.get("import_id"))
-        for item in (snapshot.payload or {}).get("datasets", {}).values()
-        if isinstance(item, dict) and (item.get("filename") or item.get("import_id"))
-    })
+    dataset_metadata = (snapshot.payload or {}).get("datasets", {})
+
+    def metadata_for(dataset_type: str) -> dict:
+        candidates = {
+            "constituent_snapshot": ("constituent_performance", "index_constituents"),
+            "constituent_period_return": ("constituent_performance", "constituent_returns"),
+            "index_event": ("index_events",),
+        }.get(dataset_type, (dataset_type,))
+        for key in candidates:
+            metadata = dataset_metadata.get(key) if isinstance(dataset_metadata, dict) else None
+            if isinstance(metadata, dict):
+                return metadata
+        return {}
+
     for dataset_type, rows in _snapshot_dataset_specs(snapshot.payload or {}):
         if dataset_type in by_type:
             continue
-        row_count = len(rows) if isinstance(rows, list) else len(rows)
+        metadata = metadata_for(dataset_type)
+        row_count = int(metadata.get("row_count") or len(rows))
+        row_checksum = str(metadata.get("checksum") or checksum(rows))
+        source_type = str(metadata.get("source_type") or snapshot.source_policy)
+        source_object = str(
+            metadata.get("source_object")
+            or metadata.get("filename")
+            or metadata.get("import_id")
+            or source_type
+        )
+        lineage = dict(metadata.get("lineage") or {})
+        lineage.update({
+            "source_system": lineage.get("source_system") or source_type,
+            "dataset_type": dataset_type,
+            "snapshot_id": snapshot.id,
+            "as_of_date": snapshot.as_of_date.isoformat(),
+            "mapping_version": str(metadata.get("mapping_version") or snapshot.mapping_version),
+            "checksum": row_checksum,
+        })
         item = SnapshotDataset(
             snapshot_id=snapshot.id,
             dataset_type=dataset_type,
-            source_type=snapshot.source_policy,
-            source_object=", ".join(source_objects) or snapshot.source_policy,
+            source_type=source_type,
+            source_object=source_object,
             row_count=row_count,
             coverage=Decimal("1") if dataset_type == "constituent_snapshot" and snapshot.status == SnapshotStatus.VALID else None,
-            checksum=checksum(rows),
-            parser_version=None,
-            mapping_version=snapshot.mapping_version,
+            checksum=row_checksum,
+            parser_version=metadata.get("parser_version"),
+            mapping_version=str(metadata.get("mapping_version") or snapshot.mapping_version),
             validation_results=list(snapshot.quality_results or []),
-            lineage={
-                "source_system": snapshot.source_policy,
-                "dataset_type": dataset_type,
-                "snapshot_id": snapshot.id,
-                "as_of_date": snapshot.as_of_date.isoformat(),
-                "mapping_version": snapshot.mapping_version,
-                "checksum": checksum(rows),
-            },
+            lineage=lineage,
         )
         db.add(item)
         by_type[dataset_type] = item
@@ -167,11 +189,28 @@ def persist_calculation_records(
     results: list[dict],
 ) -> dict[str, ModuleSnapshot]:
     datasets = ensure_snapshot_datasets(db, snapshot)
-    dataset_ids = sorted(item.id for item in datasets)
+    datasets_by_type = {item.dataset_type: item for item in datasets}
+
+    def dataset_ids_for(dataset_types: tuple[str, ...]) -> list[str]:
+        return sorted(
+            datasets_by_type[dataset_type].id
+            for dataset_type in dataset_types
+            if dataset_type in datasets_by_type
+        )
+
     metric_rows: list[MetricValue] = []
     metric_specs: list[dict] = []
 
-    def add_metric(metric_code: str, raw, unit: str, dimension_key: str = "", period_start=None, period_end=None, lineage: dict | None = None) -> None:
+    def add_metric(
+        metric_code: str,
+        raw,
+        unit: str,
+        dimension_key: str = "",
+        period_start=None,
+        period_end=None,
+        lineage: dict | None = None,
+        dataset_types: tuple[str, ...] = (),
+    ) -> None:
         if raw is None:
             return
         metric_specs.append({
@@ -182,6 +221,7 @@ def persist_calculation_records(
             "period_start": period_start,
             "period_end": period_end,
             "lineage": lineage or {},
+            "dataset_types": dataset_types,
         })
 
     summary_units = {
@@ -196,8 +236,26 @@ def persist_calculation_records(
         "top_security_code": "SECURITY_CODE",
         "bottom_security_code": "SECURITY_CODE",
     }
+    summary_dependencies = {
+        "constituent_count": ("constituent_snapshot",),
+        "weight_total": ("constituent_snapshot",),
+        "sector_count": ("constituent_snapshot", "industry_master"),
+        "top_security_code": ("constituent_snapshot", "constituent_period_return"),
+        "bottom_security_code": ("constituent_snapshot", "constituent_period_return"),
+        "turnover_observation_count": ("fund_kpi_daily", "trading_calendar"),
+        "turnover_expected_day_count": ("trading_calendar",),
+        "turnover_average": ("fund_kpi_daily", "trading_calendar"),
+        "turnover_coverage": ("fund_kpi_daily", "trading_calendar"),
+        "aum_value": ("fund_kpi_daily",),
+        "next_rebalancing_date": ("index_event",),
+    }
     for metric_code, raw in metrics.items():
-        add_metric(metric_code, raw, summary_units.get(metric_code, "TEXT"))
+        add_metric(
+            metric_code,
+            raw,
+            summary_units.get(metric_code, "TEXT"),
+            dataset_types=summary_dependencies.get(metric_code, ()),
+        )
 
     history = derived_payload.get("historical_performance", {})
     periods = history.get("periods", {})
@@ -213,22 +271,33 @@ def persist_calculation_records(
                 date.fromisoformat(period["period_start"]) if period.get("period_start") else None,
                 date.fromisoformat(period["period_end"]) if period.get("period_end") else None,
                 {"instrument": row.get("name"), "role": row.get("role")},
+                ("total_return_series",),
             )
 
+    return_periods = derived_payload.get("return_periods", {})
+    constituent_starts = return_periods.get("starts", {})
+    constituent_end = return_periods.get("end")
     for row in derived_payload.get("constituents", []):
         dimension = str(row.get("security_code") or "")
-        add_metric("constituent.close_price", row.get("close_price"), str(row.get("currency") or "UNKNOWN"), dimension)
-        add_metric("constituent.weight", row.get("weight"), "RATIO", dimension)
+        add_metric(
+            "constituent.close_price", row.get("close_price"),
+            str(row.get("currency") or "UNKNOWN"), dimension,
+            dataset_types=("constituent_snapshot",),
+        )
+        add_metric(
+            "constituent.weight", row.get("weight"), "RATIO", dimension,
+            dataset_types=("constituent_snapshot",),
+        )
         for field in ("return_1m", "return_3m", "return_6m", "return_ytd"):
-            period = periods.get(field, {})
             add_metric(
                 f"constituent.{field}",
                 row.get(field),
                 "RATIO",
                 dimension,
-                date.fromisoformat(period["period_start"]) if period.get("period_start") else None,
-                date.fromisoformat(period["period_end"]) if period.get("period_end") else None,
+                date.fromisoformat(constituent_starts[field]) if constituent_starts.get(field) else None,
+                date.fromisoformat(constituent_end) if constituent_end else None,
                 {"missing_reason": row.get(f"{field}_missing_reason")},
+                ("constituent_period_return",),
             )
 
     for row in derived_payload.get("analytics", {}).get("sectors", []):
@@ -238,12 +307,14 @@ def persist_calculation_records(
             "RATIO",
             str(row.get("code") or row.get("sector") or ""),
             lineage={"label": row.get("sector"), "taxonomy": row.get("taxonomy")},
+            dataset_types=("constituent_snapshot", "industry_master"),
         )
 
     for spec in metric_specs:
         metric_code = spec["metric_code"]
         raw = spec["raw"]
         dimension_key = spec["dimension_key"]
+        metric_dataset_ids = dataset_ids_for(spec["dataset_types"])
         existing = db.scalar(select(MetricValue).where(
             MetricValue.snapshot_id == snapshot.id,
             MetricValue.metric_code == metric_code,
@@ -271,7 +342,8 @@ def persist_calculation_records(
             lineage={
                 "source_system": snapshot.source_policy,
                 "snapshot_id": snapshot.id,
-                "snapshot_dataset_ids": dataset_ids,
+                "snapshot_dataset_ids": metric_dataset_ids,
+                "snapshot_dataset_types": list(spec["dataset_types"]),
                 "formula_version": formula_version,
                 "input_checksum": snapshot.checksum,
                 **spec["lineage"],
@@ -320,6 +392,15 @@ def persist_calculation_records(
         ),
         "footnotes": (),
     }
+    module_dataset_types = {
+        "historical_performance": ("total_return_series",),
+        "constituents_performance": ("constituent_snapshot", "constituent_period_return", "index_event"),
+        "final_analytics": (
+            "constituent_snapshot", "constituent_period_return", "industry_master",
+            "fund_kpi_daily", "trading_calendar",
+        ),
+        "footnotes": tuple(sorted(datasets_by_type)),
+    }
     for module_code, payload in module_payloads.items():
         existing = db.scalar(select(ModuleSnapshot).where(
             ModuleSnapshot.snapshot_id == snapshot.id,
@@ -335,19 +416,26 @@ def persist_calculation_records(
             item.id for item in metric_rows
             if prefixes and any(item.metric_code.startswith(prefix) for prefix in prefixes)
         )
+        source_dataset_ids = dataset_ids_for(module_dataset_types[module_code])
         item = ModuleSnapshot(
             snapshot_id=snapshot.id,
             module_code=module_code,
             formula_version=formula_version,
             template_version=report.template_version,
-            source_dataset_ids=dataset_ids,
+            source_dataset_ids=source_dataset_ids,
             metric_value_ids=metric_ids,
             payload=payload,
             display_format={},
             footnote_bindings=list((derived_payload.get("footnotes") or {}).keys()),
             checksum=checksum(payload),
             input_checksum=checksum({
-                "snapshot_checksum": snapshot.checksum,
+                "source_datasets": [
+                    {
+                        "id": item_id,
+                        "checksum": next(dataset.checksum for dataset in datasets if dataset.id == item_id),
+                    }
+                    for item_id in source_dataset_ids
+                ],
                 "formula_version": formula_version,
                 "module_code": module_code,
             }),
@@ -419,6 +507,11 @@ def dataset_present(payload: dict, dataset_type: str) -> bool:
     if dataset_type in set(payload.get("datasets", {})):
         return True
     constituents = payload.get("constituents", [])
+    if dataset_type == "constituent_performance":
+        return bool(constituents) and all(
+            all(row.get(field) is not None or row.get(f"{field}_missing_reason") for field in ingestion.RETURN_FIELDS)
+            for row in constituents
+        )
     if dataset_type == "index_constituents":
         return bool(constituents)
     if dataset_type == "constituent_returns":
@@ -441,6 +534,7 @@ def dataset_present(payload: dict, dataset_type: str) -> bool:
 
 def snapshot_dataset_type(dataset_type: str) -> str:
     return {
+    "constituent_performance": "constituent_snapshot",
         "index_constituents": "constituent_snapshot",
         "constituent_returns": "constituent_period_return",
         "fund_kpi_daily": "fund_kpi_daily",
@@ -478,6 +572,12 @@ def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> li
         base[target] = json.loads(json.dumps(payload.get(target, [])))
         if spec.key == "total_return_series":
             base["historical_performance"] = {"rows": []}
+        return findings
+    if spec.key == "constituent_performance":
+        incoming = json.loads(json.dumps(payload.get("constituents", [])))
+        base["constituents"] = incoming
+        base["return_periods"] = json.loads(json.dumps(payload.get("return_periods", {})))
+        base["as_of_date"] = incoming[0]["as_of_date"] if incoming else base.get("as_of_date")
         return findings
     if spec.key == "index_constituents":
         incoming = payload.get("constituents", [])
@@ -649,7 +749,7 @@ def upsert_news_candidates(db: Session, report: Report, candidates: list[dict], 
                 report_id=report.id,
                 news_item_id=item.id,
                 provider=provider,
-                match_status="CONFIRMED" if security_code or metadata.get("matched_security_code") else "NEEDS_REVIEW",
+                match_status="CONFIRMED" if security_code or metadata.get("matched_security_code") or metadata.get("catalog_verified") else "NEEDS_REVIEW",
                 match_evidence={
                     key: metadata.get(key)
                     for key in ("matched_security_code", "matched_alias", "match_method", "external_id")
@@ -732,6 +832,95 @@ def resolve_news_constituent_snapshot(db: Session, report: Report) -> DataSnapsh
     )
 
 
+def _stage_auto_snapshot(
+    db: Session,
+    report: Report,
+    product: ProductCatalog,
+    request_id: str,
+    preserve_constituents: bool,
+) -> DataSnapshot:
+    payload = empty_payload(report.report_date)
+    active_snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
+    if preserve_constituents and active_snapshot and dataset_present(active_snapshot.payload or {}, "constituent_performance"):
+        active_payload = active_snapshot.payload or {}
+        payload["constituents"] = json.loads(json.dumps(active_payload.get("constituents", [])))
+        if active_payload.get("return_periods"):
+            payload["return_periods"] = json.loads(json.dumps(active_payload["return_periods"]))
+        for key in ("constituent_performance", "index_constituents", "constituent_returns"):
+            metadata = (active_payload.get("datasets") or {}).get(key)
+            if isinstance(metadata, dict):
+                payload["datasets"][key] = json.loads(json.dumps(metadata))
+
+    fragment, provider_findings = compose_da_report_fragment(product, report.report_date)
+    for key in ("total_return_series", "fund_kpis", "trading_calendar", "index_events"):
+        if key in fragment:
+            payload[key] = fragment[key]
+    payload["datasets"].update(fragment.get("datasets", {}))
+    payload["constituent_index_code"] = report.constituent_index_code
+    if payload.get("total_return_series"):
+        try:
+            payload["historical_performance"] = historical_performance(
+                payload["total_return_series"], report.report_date, product.formula_profile,
+            )
+        except ValueError as error:
+            provider_findings.append({
+                "check_id": "HISTORICAL_PERIODS_INCOMPLETE",
+                "error_code": "HISTORICAL_PERIODS_INCOMPLETE",
+                "severity": "BLOCKING",
+                "status": "FAILED",
+                "message": str(error),
+                "actual": None,
+                "threshold": "Common FUND and BENCHMARK endpoints for 1M, 3M, 6M and YTD",
+                "fix_hint": "Extend the DA-Report Total Return observations to every required common endpoint.",
+            })
+    from .industry import map_effective_hsics
+    mapping_findings = map_effective_hsics(db, payload, report.report_date)
+    results = [*quality_checks(payload, product.expected_constituent_count), *provider_findings, *mapping_findings]
+    missing = missing_required_slots(payload)
+    blocked = [
+        item for item in results
+        if item.get("severity") == "BLOCKING" and item.get("status", "FAILED") != "PASSED"
+    ]
+    valid = not missing and not blocked
+    has_upload = dataset_present(payload, "constituent_performance")
+    snapshot = DataSnapshot(
+        report_id=report.id,
+        as_of_date=report.report_date,
+        source_policy="DA_REPORT_PLUS_UPLOAD" if has_upload else "DA_REPORT_AUTO",
+        mapping_version="da-report-monthly-v1",
+        status=SnapshotStatus.VALID if valid else SnapshotStatus.PENDING,
+        checksum=checksum(payload),
+        payload=payload,
+        quality_results=results,
+    )
+    db.add(snapshot)
+    db.flush()
+    ensure_snapshot_datasets(db, snapshot)
+    report.active_snapshot_id = snapshot.id
+    report.status = ReportStatus.DATA_READY if valid else ReportStatus.DRAFT
+    current = latest_document(db, report.id)
+    bound = bind_snapshot(current.content, payload)
+    bound["snapshot_id"] = snapshot.id
+    document = ReportDocument(
+        report_id=report.id,
+        version=current.version + 1,
+        snapshot_id=snapshot.id,
+        template_version=report.template_version,
+        language_mode=report.language_mode,
+        content=bound,
+        checksum=checksum(bound),
+    )
+    db.add(document)
+    report.version += 1
+    audit(db, "snapshot.auto_refreshed", "snapshot", snapshot.id, request_id, {
+        "status": snapshot.status.value,
+        "missing_slots": missing,
+        "provider_findings": [item.get("check_id") for item in provider_findings],
+        "preserved_constituents": has_upload,
+    })
+    return snapshot
+
+
 def create_report(db: Session, command: ReportCreate, request_id: str) -> Report:
     product = resolve_product(db, command.product_code, command.report_date)
     report = Report(
@@ -763,6 +952,9 @@ def create_report(db: Session, command: ReportCreate, request_id: str) -> Report
         checksum=checksum(content),
     )
     db.add(document)
+    db.flush()
+    if settings.da_report_auto_load:
+        _stage_auto_snapshot(db, report, product, request_id, preserve_constituents=False)
     audit(db, "report.created", "report", report.id, request_id)
     db.commit()
     db.refresh(report)
@@ -804,6 +996,15 @@ def fixture_payload(product_code: str, report_date) -> dict:
 def create_snapshot(db: Session, report: Report, source_policy: str, mapping_version: str, request_id: str) -> DataSnapshot:
     if report.status == ReportStatus.FINALIZED:
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED", "message": "Create a revision before refreshing data."})
+    if source_policy == "DA_REPORT_AUTO":
+        product = resolve_product(db, report.product_code, report.report_date)
+        snapshot = _stage_auto_snapshot(db, report, product, request_id, preserve_constituents=True)
+        db.commit()
+        db.refresh(snapshot)
+        if snapshot.status == SnapshotStatus.VALID:
+            run_calculation(db, report, request_id)
+            db.refresh(snapshot)
+        return snapshot
     if source_policy != "GOLDEN_FIXTURE":
         raise HTTPException(status_code=422, detail={
             "error_code": "CONNECTOR_NOT_CONFIGURED",
@@ -886,13 +1087,42 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         })
     findings: list[dict] = []
     findings = overlay_slot(base, spec, data_import.payload)
+    incoming_index_code = str(data_import.payload.get("constituent_index_code") or "")
+    if data_import.dataset_type == "constituent_performance" and incoming_index_code != report.constituent_index_code:
+        findings.append({
+            "error_code": "CONSTITUENT_INDEX_MISMATCH",
+            "severity": "BLOCKING",
+            "entity_id": incoming_index_code or None,
+            "message": f"The file covers {incoming_index_code or 'an unspecified index'}, not {report.constituent_index_code}.",
+            "fix_hint": "Upload the constituent-performance file for the report's configured index.",
+        })
     base["constituent_index_code"] = report.constituent_index_code
     from .industry import map_effective_hsics
     findings.extend(map_effective_hsics(db, base, report.report_date))
+    metadata_payload_key = spec.payload_key or {
+        "constituent_performance": "constituents",
+        "index_constituents": "constituents",
+        "constituent_returns": "constituent_returns",
+        "total_return_series": "total_return_series",
+        "fund_kpi_daily": "fund_kpis",
+        "trading_calendar": "trading_calendar",
+        "index_events": "index_events",
+    }.get(spec.key, spec.key)
     base.setdefault("datasets", {})[data_import.dataset_type] = {
         "import_id": data_import.id,
         "filename": data_import.original_filename,
         "checksum": data_import.checksum,
+        "source_type": "UPLOAD",
+        "source_object": data_import.original_filename,
+        "row_count": len(data_import.payload.get(metadata_payload_key, [])),
+        "parser_version": data_import.parser_version,
+        "mapping_version": str(data_import.mapping_version or data_import.parser_version),
+        "lineage": {
+            "source_system": "UPLOAD",
+            "import_id": data_import.id,
+            "original_filename": data_import.original_filename,
+            "file_checksum": data_import.checksum,
+        },
         "applied_at": datetime.now(timezone.utc).isoformat(),
     }
     results = quality_checks(base, product.expected_constituent_count)
@@ -903,13 +1133,17 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
     # snapshot is recorded as PENDING rather than rejected. Only a snapshot that is complete *and*
     # passes every blocking check becomes VALID and therefore calculable.
     complete = not missing
-    if complete and blocked and data_import.dataset_type in {"constituents", "historical_performance", "final_analytics"}:
+    if complete and blocked and data_import.dataset_type in {"constituent_performance", "constituents", "historical_performance", "final_analytics"}:
         raise HTTPException(status_code=422, detail={"error_code": "IMPORT_QUALITY_BLOCKED", "checks": blocked})
     status = SnapshotStatus.VALID if complete and not blocked else SnapshotStatus.PENDING
+    contains_da_report = any(
+        isinstance(metadata, dict) and metadata.get("source_type") == "DA_REPORT_SQLITE"
+        for metadata in (base.get("datasets") or {}).values()
+    )
     snapshot = DataSnapshot(
         report_id=report.id,
         as_of_date=report.report_date,
-        source_policy="UPLOAD_OVERRIDE",
+        source_policy="DA_REPORT_PLUS_UPLOAD" if contains_da_report else "UPLOAD_OVERRIDE",
         mapping_version=data_import.parser_version,
         status=status,
         checksum=checksum(base),
@@ -954,6 +1188,145 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
             raise
     else:
         db.commit()
+    db.refresh(snapshot)
+    return snapshot
+
+
+def discard_import(db: Session, report: Report, import_id: str, request_id: str) -> DataImport:
+    if report.status == ReportStatus.FINALIZED:
+        raise HTTPException(status_code=409, detail={
+            "error_code": "REPORT_FINALIZED",
+            "message": "Create a revision before discarding report imports.",
+        })
+    data_import = db.get(DataImport, import_id)
+    if not data_import or data_import.report_id != report.id:
+        raise HTTPException(status_code=404, detail={"error_code": "IMPORT_NOT_FOUND"})
+    if data_import.status == "APPLIED":
+        raise HTTPException(status_code=409, detail={
+            "error_code": "IMPORT_ALREADY_APPLIED",
+            "message": "Applied data must be cleared from its dataset slot instead.",
+            "fix_hint": "Use Delete data on the applied dataset card.",
+        })
+    if data_import.status == "DISCARDED":
+        return data_import
+    previous_status = data_import.status
+    data_import.status = "DISCARDED"
+    audit(db, "import.discarded", "import", data_import.id, request_id, {
+        "dataset_type": data_import.dataset_type,
+        "filename": data_import.original_filename,
+        "previous_status": previous_status,
+    })
+    db.commit()
+    db.refresh(data_import)
+    return data_import
+
+
+def clear_dataset(
+    db: Session,
+    report: Report,
+    dataset_type: str,
+    expected_version: int,
+    request_id: str,
+) -> DataSnapshot:
+    if dataset_type not in _CLEARABLE_DATASETS:
+        raise HTTPException(status_code=422, detail={
+            "error_code": "DATASET_CLEAR_UNSUPPORTED",
+            "message": f"The {dataset_type} dataset cannot be cleared from this workspace.",
+            "fix_hint": f"Clearable datasets: {', '.join(sorted(_CLEARABLE_DATASETS))}.",
+        })
+    if report.status == ReportStatus.FINALIZED:
+        raise HTTPException(status_code=409, detail={
+            "error_code": "REPORT_FINALIZED",
+            "message": "Create a revision before clearing applied data.",
+        })
+    if report.version != expected_version:
+        raise HTTPException(status_code=409, detail={
+            "error_code": "VERSION_CONFLICT",
+            "message": "The report changed before the dataset could be cleared.",
+            "current_version": report.version,
+        })
+    active_snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
+    if not active_snapshot or not dataset_present(active_snapshot.payload or {}, dataset_type):
+        raise HTTPException(status_code=409, detail={
+            "error_code": "DATASET_NOT_APPLIED",
+            "message": f"The {dataset_type} dataset is not applied to the active snapshot.",
+        })
+    if dataset_type == "index_constituents" and dataset_present(active_snapshot.payload or {}, "constituent_returns"):
+        raise HTTPException(status_code=409, detail={
+            "error_code": "DATASET_DEPENDENCY_BLOCKED",
+            "message": "Constituent returns must be cleared before index constituents.",
+            "dependencies": ["constituent_returns"],
+            "fix_hint": "Delete the Constituent returns data first, then retry.",
+        })
+
+    base = json.loads(json.dumps(active_snapshot.payload or {}))
+    datasets = base.setdefault("datasets", {})
+    removed_metadata = dict(datasets.pop(dataset_type, {}) or {})
+    if dataset_type == "constituent_returns":
+        for row in base.get("constituents", []):
+            for field in ingestion.RETURN_FIELDS:
+                row.pop(field, None)
+                row.pop(f"{field}_missing_reason", None)
+        base.pop("return_periods", None)
+    elif dataset_type == "constituent_performance":
+        base["constituents"] = []
+        base.pop("return_periods", None)
+    else:
+        base["constituents"] = []
+
+    base["analytics"] = {"top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": []}
+    base.pop("metrics", None)
+    base.pop("formula_version", None)
+    footnotes = dict(base.get("footnotes") or {})
+    footnotes.pop("constituents", None)
+    footnotes.pop("analytics", None)
+    base["footnotes"] = footnotes
+
+    product = resolve_product(db, report.product_code, report.report_date)
+    results = quality_checks(base, product.expected_constituent_count)
+    missing = missing_required_slots(base)
+    snapshot = DataSnapshot(
+        report_id=report.id,
+        as_of_date=report.report_date,
+        source_policy=active_snapshot.source_policy,
+        mapping_version=active_snapshot.mapping_version,
+        status=SnapshotStatus.PENDING,
+        checksum=checksum(base),
+        payload=base,
+        quality_results=results,
+    )
+    db.add(snapshot)
+    db.flush()
+    ensure_snapshot_datasets(db, snapshot)
+
+    current = latest_document(db, report.id)
+    content = bind_snapshot(current.content, base)
+    content["snapshot_id"] = snapshot.id
+    content.pop("formula_version", None)
+    content.pop("module_bindings", None)
+    document = ReportDocument(
+        report_id=report.id,
+        version=current.version + 1,
+        snapshot_id=snapshot.id,
+        template_version=report.template_version,
+        language_mode=report.language_mode,
+        content=content,
+        checksum=checksum(content),
+    )
+    db.add(document)
+    report.active_snapshot_id = snapshot.id
+    report.status = ReportStatus.DRAFT
+    report.version += 1
+    audit(db, "dataset.cleared", "snapshot", snapshot.id, request_id, {
+        "dataset_type": dataset_type,
+        "previous_snapshot_id": active_snapshot.id,
+        "cleared_snapshot_id": snapshot.id,
+        "removed_import_id": removed_metadata.get("import_id"),
+        "removed_filename": removed_metadata.get("filename"),
+        "removed_checksum": removed_metadata.get("checksum"),
+        "missing_slots": missing,
+    })
+    db.commit()
     db.refresh(snapshot)
     return snapshot
 
@@ -1169,6 +1542,19 @@ def release_gate_checks(db: Session, report: Report, document: ReportDocument) -
         "status": "FAILED" if placeholders else "PASSED",
         "fix_hint": "Replace all editorial placeholders." if placeholders else "",
     })
+    selected_news = document.content.get("sections", {}).get("company_news", [])
+    news_after_report_date = sorted({
+        str(item.get("published_at", ""))
+        for item in selected_news
+        if str(item.get("published_at", ""))[:10] > report.report_date.isoformat()
+    })
+    checks.append({
+        "check_id": "NEWS_AFTER_REPORT_DATE",
+        "severity": "WARNING",
+        "status": "WARNING" if news_after_report_date else "PASSED",
+        "actual": {"published_at": news_after_report_date},
+        "fix_hint": "Confirm that post-report-date news is intentionally included." if news_after_report_date else "",
+    })
     checks.append(ai_number_check(db, report, document))
     return checks
 
@@ -1188,6 +1574,7 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
             derived_payload["historical_performance"] = historical_performance(
                 derived_payload["total_return_series"],
                 report.report_date,
+                formula_version,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail={

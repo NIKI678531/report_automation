@@ -162,10 +162,15 @@ def render_content_manifest(content: dict[str, Any]) -> dict[str, Any]:
         "company_news": [
             {
                 "news_item_id": item.get("news_item_id"),
+                "provider": item.get("provider"),
+                "external_id": item.get("external_id"),
                 "title": item.get("title"),
                 "summary": item.get("summary"),
                 "source_url": item.get("source_url"),
                 "published_at": item.get("published_at"),
+                "fetched_at": item.get("fetched_at"),
+                "sentiment": item.get("sentiment"),
+                "importance_score": item.get("importance_score"),
             }
             for item in sections.get("company_news", [])
         ],

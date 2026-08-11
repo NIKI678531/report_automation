@@ -24,6 +24,9 @@ class ProductRead(BaseModel):
     constituent_index_name: str | None
     benchmark_instrument_code: str
     benchmark_instrument_name: str | None
+    fund_total_return_instrument_code: str | None
+    fund_kpi_product_code: str | None
+    trading_calendar_code: str | None
     benchmark_code: str
     benchmark_name: str | None
     currency: str
@@ -95,7 +98,7 @@ class ReportDetail(ReportRead):
 
 
 class SnapshotCreate(BaseModel):
-    source_policy: Literal["CDB_ONLY", "GOLDEN_FIXTURE", "UPLOAD_OVERRIDE"] = "GOLDEN_FIXTURE"
+    source_policy: Literal["DA_REPORT_AUTO", "CDB_ONLY", "GOLDEN_FIXTURE", "UPLOAD_OVERRIDE"] = "GOLDEN_FIXTURE"
     mapping_version: str = "hstech-v1"
 
 
@@ -161,6 +164,11 @@ class ImportCreateRead(ImportRead):
 
 class ImportApply(BaseModel):
     reason: str | None = Field(default=None, min_length=5, max_length=500)
+
+
+class DatasetClear(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1)
 
 
 class DocumentUpdate(BaseModel):
@@ -240,11 +248,69 @@ class NewsRead(NewsCreate):
         return {**{name: getattr(value, name) for name in cls.model_fields if hasattr(value, name)}, **fields}
 
 
+class NewsCatalogSourceFacet(BaseModel):
+    value: str
+    label: str
+    label_zh: str | None = None
+    count: int
+
+
+class NewsCatalogFacets(BaseModel):
+    sources: list[NewsCatalogSourceFacet]
+    sentiments: dict[str, int]
+    importance: dict[str, int]
+    date_min: date | None = None
+    date_max: date | None = None
+
+
+class DaReportNewsCatalogItem(BaseModel):
+    provider: Literal["DA_REPORT"] = "DA_REPORT"
+    external_id: str
+    source_url: str
+    source_code: str
+    source_name: str
+    source_name_zh: str | None = None
+    published_at: datetime
+    published_at_source: Literal["published_at", "fetched_at"]
+    fetched_at: datetime
+    title: str
+    title_en: str | None = None
+    title_zh: str | None = None
+    summary: str
+    summary_en: str | None = None
+    summary_zh: str | None = None
+    category: Literal["Corporate"]
+    region: str | None = None
+    sentiment: str | None = None
+    importance_score: float | None = None
+    model: str | None = None
+
+
+class DaReportNewsCatalogPage(BaseModel):
+    items: list[DaReportNewsCatalogItem]
+    total: int
+    has_more: bool
+    next_cursor: str | None = None
+    facets: NewsCatalogFacets
+
+
 class NewsSelectionItem(BaseModel):
-    news_item_id: str
+    news_item_id: str | None = None
+    provider: Literal["DA_REPORT"] | None = None
+    external_id: str | None = None
     position: int = Field(ge=0)
     title_override: str | None = None
     summary_override: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_reference(self) -> "NewsSelectionItem":
+        if self.news_item_id:
+            if self.provider is not None or self.external_id is not None:
+                raise ValueError("A local news selection cannot include provider or external_id.")
+            return self
+        if self.provider != "DA_REPORT" or not self.external_id:
+            raise ValueError("Provide exactly one local news_item_id or DA_REPORT external_id.")
+        return self
 
 
 class NewsSelectionUpdate(BaseModel):

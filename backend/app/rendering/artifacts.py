@@ -191,6 +191,29 @@ def build_artifact(db: Session, report: Report, document: ReportDocument, format
                 browser = playwright.chromium.launch(headless=True)
                 page = browser.new_page()
                 page.goto(source.as_uri(), wait_until="networkidle")
+                page.evaluate("""async () => {
+                    await document.fonts.ready;
+                    await Promise.all(Array.from(document.images).map((image) => {
+                        if (image.complete) return image.decode().catch(() => undefined);
+                        return new Promise((resolve) => {
+                            image.addEventListener('load', resolve, { once: true });
+                            image.addEventListener('error', resolve, { once: true });
+                        });
+                    }));
+                }""")
+                overflow = page.evaluate("""() => Array.from(document.querySelectorAll('.report-page')).flatMap((reportPage) => {
+                    const body = reportPage.querySelector('.page-body');
+                    const footer = reportPage.querySelector('.page-footer');
+                    if (!body || !footer) return [];
+                    const bodyBottom = body.getBoundingClientRect().bottom;
+                    const footerTop = footer.getBoundingClientRect().top;
+                    return bodyBottom > footerTop
+                        ? [{ page: reportPage.dataset.page, bodyBottom, footerTop }]
+                        : [];
+                })""")
+                if overflow:
+                    browser.close()
+                    raise ValueError(f"PDF_LAYOUT_OVERFLOW: report content enters the footer safe area: {overflow}")
                 page.pdf(path=str(destination), format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}, prefer_css_page_size=True)
                 browser.close()
     object_key = f"{format_name}/{destination.name}"

@@ -54,6 +54,23 @@ def test_bottom_selection_and_display_order_are_separate():
     assert metrics["bottom_security_code"] == "100"
 
 
+def test_sector_chart_snapshot_freezes_backend_order_and_angles():
+    rows = [
+        {"security_code": "1", "name_en": "A", "weight": "0.6", "sector": "Technology", "return_1m": "0.1"},
+        {"security_code": "2", "name_en": "B", "weight": "0.4", "sector": "Consumer", "return_1m": "0.2"},
+    ]
+
+    analytics, _ = calculate_snapshot({"constituents": rows})
+
+    chart = analytics["sector_chart"]
+    assert chart["chart_type"] == "donut"
+    assert len(chart["input_checksum"]) == 64
+    assert chart["slices"] == [
+        {"code": "Consumer", "label": "Consumer", "weight": "0.4", "start_angle": "0", "end_angle": "144.0", "color_index": 0},
+        {"code": "Technology", "label": "Technology", "weight": "0.6", "start_angle": "144.0", "end_angle": "360", "color_index": 1},
+    ]
+
+
 def test_turnover_coverage_uses_authoritative_trading_days_and_95_percent_threshold():
     base = {
         "as_of_date": "2026-06-30",

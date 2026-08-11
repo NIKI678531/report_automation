@@ -7,12 +7,14 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
+from app.core.config import settings
 from app.domain.models import MappingProfile, ProductCatalog
 from app.main import create_app
 
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
+    monkeypatch.setattr(settings, "da_report_auto_load", False)
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     Base.metadata.create_all(engine)
@@ -26,6 +28,9 @@ def client():
             constituent_index_name="Hang Seng TECH Index",
             benchmark_instrument_code="HSTECHN",
             benchmark_instrument_name="HSTECHN Index",
+            fund_total_return_instrument_code="3033.HK",
+            fund_kpi_product_code="3033",
+            trading_calendar_code="HK",
             benchmark_code="HSTECH",
             benchmark_name="Hang Seng TECH Index",
             valid_from=date(2020, 8, 28),
@@ -44,6 +49,9 @@ def client():
             constituent_index_name="Hang Seng Index",
             benchmark_instrument_code="HSI",
             benchmark_instrument_name="Hang Seng Index",
+            fund_total_return_instrument_code="3037.HK",
+            fund_kpi_product_code="3037",
+            trading_calendar_code="HK",
             benchmark_code="HSI",
             benchmark_name="Hang Seng Index",
             valid_from=date(2026, 1, 1),
@@ -62,6 +70,9 @@ def client():
             constituent_index_name="Synthetic Test Index",
             benchmark_instrument_code="TESTTR",
             benchmark_instrument_name="Synthetic Test Total Return Index",
+            fund_total_return_instrument_code="9999.HK",
+            fund_kpi_product_code="TEST",
+            trading_calendar_code="HK",
             benchmark_code="TESTIDX",
             benchmark_name="Synthetic Test Index",
             valid_from=date(2025, 1, 1),
@@ -80,6 +91,9 @@ def client():
             constituent_index_name="Slot Ingestion Test Index",
             benchmark_instrument_code="SLOTTR",
             benchmark_instrument_name="Slot Ingestion Test Total Return Index",
+            fund_total_return_instrument_code="SLOT.HK",
+            fund_kpi_product_code="SLOT",
+            trading_calendar_code="HK",
             benchmark_code="SLOTIDX",
             benchmark_name="Slot Ingestion Test Index",
             valid_from=date(2025, 1, 1),

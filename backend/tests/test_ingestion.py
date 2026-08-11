@@ -30,6 +30,14 @@ def total_return_csv() -> bytes:
     return output.encode()
 
 
+def constituent_performance_csv(index_code: str = "SLOTIDX") -> bytes:
+    return (
+        "index_code,as_of_date,security_code,ticker,name_en,name_zh_hant,close_price,currency,weight_pct,source_industry_code,period_end,period_start_1m,return_1m_pct,return_1m_missing_reason,period_start_3m,return_3m_pct,return_3m_missing_reason,period_start_6m,return_6m_pct,return_6m_missing_reason,period_start_ytd,return_ytd_pct,return_ytd_missing_reason,constituent_source,return_source\n"
+        f"{index_code},2026-06-30,1,0001.HK,Alpha,,10,HKD,50,70,2026-06-30,2026-05-29,10,,2026-03-31,11,,2025-12-31,12,,2025-12-31,13,,Official Index,Official Returns\n"
+        f"{index_code},2026-06-30,2,0002.HK,Beta,,20,HKD,50,23,2026-06-30,2026-05-29,-5,,2026-03-31,-4,,2025-12-31,-3,,2025-12-31,-2,,Official Index,Official Returns\n"
+    ).encode()
+
+
 def upload(client, report_id: str, dataset_type: str, path: Path, filename: str | None = None):
     mime = "text/csv" if path.suffix == ".csv" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     return client.post(
@@ -56,7 +64,7 @@ def test_misdirected_file_names_the_slot_it_belongs_to(client, report):
     body = response.json()
     assert body["status"] == "NEEDS_MAPPING"
     finding = body["validation_results"][0]
-    assert finding["error_code"] == "MAP-001"
+    assert finding["check_id"] == "MAP-001"
     # The hint has to name where the file should go, not merely that it does not fit here.
     assert "constituent_returns" in finding["fix_hint"]
 
@@ -68,7 +76,7 @@ def test_import_binds_the_exact_mapping_profile_and_reports_duplicate_return_gro
     profiles = client.get("/api/v1/mapping-profiles?dataset_type=constituent_returns").json()
     assert body["mapping_profile_id"] == profiles[0]["id"]
     assert body["mapping_version"] == 1
-    assert any(item["error_code"] == "IGNORED_DUPLICATE_RETURN_GROUP" for item in body["validation_results"])
+    assert any(item["check_id"] == "IGNORED_DUPLICATE_RETURN_GROUP" for item in body["validation_results"])
 
 
 def test_standard_constituent_return_csv_preserves_periods_and_explicit_percent_unit(client, report):
@@ -87,6 +95,48 @@ def test_standard_constituent_return_csv_preserves_periods_and_explicit_percent_
     assert body["status"] == "VALIDATED"
     assert body["payload"]["constituent_returns"][0]["return_1m"] == "0.1"
     assert body["payload"]["return_periods"]["starts"]["return_6m"] == "2025-12-31"
+
+
+def test_single_constituent_performance_csv_owns_identity_and_returns(client, report):
+    uploaded = client.post(
+        f"/api/v1/reports/{report['id']}/imports",
+        data={"dataset_type": "constituent_performance"},
+        files={"file": ("constituent-performance.csv", constituent_performance_csv(), "text/csv")},
+    )
+
+    assert uploaded.status_code == 201, uploaded.text
+    body = uploaded.json()
+    assert body["status"] == "VALIDATED"
+    assert body["mapping_profile_id"] is None
+    assert body["payload"]["constituents"][0]["return_1m"] == "0.1"
+    assert body["payload"]["constituents"][0]["weight"] == "0.5"
+    assert body["payload"]["return_periods"]["starts"]["return_ytd"] == "2025-12-31"
+
+    applied = apply(client, report["id"], body["id"], reason=None)
+
+    assert applied.status_code == 200, applied.text
+    payload = applied.json()["payload"]
+    assert payload["datasets"]["constituent_performance"]["import_id"] == body["id"]
+    assert len(payload["constituents"]) == 2
+    slots = {item["key"]: item for item in client.get(f"/api/v1/reports/{report['id']}/datasets").json()}
+    assert slots["constituent_performance"]["state"] == "APPLIED"
+    assert slots["constituent_performance"]["rows"] == 2
+    missing = set(client.post(f"/api/v1/reports/{report['id']}/calculations").json()["missing_slots"])
+    assert missing == {"total_return_series", "fund_kpi_daily", "trading_calendar", "industry_master"}
+
+
+def test_constituent_performance_rejects_wrong_index(client, report):
+    uploaded = client.post(
+        f"/api/v1/reports/{report['id']}/imports",
+        data={"dataset_type": "constituent_performance"},
+        files={"file": ("wrong-index.csv", constituent_performance_csv("OTHER"), "text/csv")},
+    ).json()
+
+    applied = apply(client, report["id"], uploaded["id"], reason=None)
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["status"] == "PENDING"
+    assert any(item.get("error_code") == "CONSTITUENT_INDEX_MISMATCH" for item in applied.json()["quality_results"])
 
 
 def test_mapping_profile_versions_are_admin_only_and_immutable(client):
@@ -148,6 +198,108 @@ def test_first_slot_apply_needs_no_reason_but_replacing_that_slot_does(client, r
     assert replacement_audit["details"]["diff"] == replacement["diff"]
 
 
+def test_unapplied_import_can_be_discarded_without_changing_the_active_slot(client, report):
+    report_id = report["id"]
+    uploaded = upload(client, report_id, "index_constituents", FIXTURES / "index_constituents.csv").json()
+
+    discarded = client.post(f"/api/v1/reports/{report_id}/imports/{uploaded['id']}/discard")
+
+    assert discarded.status_code == 200, discarded.text
+    assert discarded.json()["status"] == "DISCARDED"
+    assert client.post(f"/api/v1/reports/{report_id}/imports/{uploaded['id']}/discard").status_code == 200
+    not_applicable = apply(client, report_id, uploaded["id"], reason=None)
+    assert not_applicable.status_code == 409
+    assert not_applicable.json()["error_code"] == "IMPORT_NOT_APPLICABLE"
+    slot = next(item for item in client.get(f"/api/v1/reports/{report_id}/datasets").json() if item["key"] == "index_constituents")
+    assert slot["state"] == "MISSING"
+    assert slot["filename"] is None
+    events = client.get("/api/v1/audit").json()
+    assert len([item for item in events if item["action"] == "import.discarded" and item["entity_id"] == uploaded["id"]]) == 1
+
+
+def test_applied_constituent_datasets_clear_through_new_immutable_snapshots(client, report):
+    report_id = report["id"]
+    constituents = upload(client, report_id, "index_constituents", FIXTURES / "index_constituents.csv").json()
+    assert apply(client, report_id, constituents["id"], reason=None).status_code == 200
+    returns = upload(client, report_id, "constituent_returns", FIXTURES / "bloomberg_monthly.xlsx").json()
+    applied_returns = apply(client, report_id, returns["id"], reason=None)
+    assert applied_returns.status_code == 200, applied_returns.text
+    previous_snapshot = applied_returns.json()
+    applied_discard = client.post(f"/api/v1/reports/{report_id}/imports/{returns['id']}/discard")
+    assert applied_discard.status_code == 409
+    assert applied_discard.json()["error_code"] == "IMPORT_ALREADY_APPLIED"
+
+    pending = upload(
+        client,
+        report_id,
+        "index_constituents",
+        FIXTURES / "index_constituents.csv",
+        filename="pending-constituents.csv",
+    ).json()
+    assert pending["status"] == "VALIDATED"
+    current_slot = next(item for item in client.get(f"/api/v1/reports/{report_id}/datasets").json() if item["key"] == "index_constituents")
+    assert current_slot["latest_import_id"] == constituents["id"]
+    assert current_slot["filename"] == "index_constituents.csv"
+
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    stale = client.post(
+        f"/api/v1/reports/{report_id}/datasets/constituent_returns/clear",
+        json={"version": detail["version"] - 1},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error_code"] == "VERSION_CONFLICT"
+    blocked = client.post(
+        f"/api/v1/reports/{report_id}/datasets/index_constituents/clear",
+        json={"version": detail["version"]},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error_code"] == "DATASET_DEPENDENCY_BLOCKED"
+
+    cleared_returns = client.post(
+        f"/api/v1/reports/{report_id}/datasets/constituent_returns/clear",
+        json={"version": detail["version"]},
+    )
+    assert cleared_returns.status_code == 200, cleared_returns.text
+    cleared_payload = cleared_returns.json()["payload"]
+    assert cleared_returns.json()["status"] == "PENDING"
+    assert len(cleared_payload["constituents"]) == len(previous_snapshot["payload"]["constituents"])
+    assert "constituent_returns" not in cleared_payload["datasets"]
+    assert cleared_payload["datasets"]["index_constituents"]["import_id"] == constituents["id"]
+    assert all(all(field not in row for field in ("return_1m", "return_3m", "return_6m", "return_ytd")) for row in cleared_payload["constituents"])
+    assert cleared_payload["analytics"] == {"top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": []}
+
+    old_snapshot = client.get(f"/api/v1/reports/{report_id}/snapshots/{previous_snapshot['id']}").json()
+    assert old_snapshot["payload"]["datasets"]["constituent_returns"]["import_id"] == returns["id"]
+    assert any(row.get("return_1m") is not None for row in old_snapshot["payload"]["constituents"])
+    after_returns = client.get(f"/api/v1/reports/{report_id}").json()
+    assert after_returns["status"] == "DRAFT"
+    assert after_returns["active_snapshot_id"] == cleared_returns.json()["id"]
+    assert "module_bindings" not in after_returns["latest_document"]["content"]
+    slots_after_returns = {item["key"]: item for item in client.get(f"/api/v1/reports/{report_id}/datasets").json()}
+    assert slots_after_returns["constituent_returns"]["state"] == "MISSING"
+    assert slots_after_returns["index_constituents"]["state"] == "APPLIED"
+    assert slots_after_returns["index_constituents"]["rows"] == len(cleared_payload["constituents"])
+
+    cleared_constituents = client.post(
+        f"/api/v1/reports/{report_id}/datasets/index_constituents/clear",
+        json={"version": after_returns["version"]},
+    )
+    assert cleared_constituents.status_code == 200, cleared_constituents.text
+    assert cleared_constituents.json()["payload"]["constituents"] == []
+    assert "index_constituents" not in cleared_constituents.json()["payload"]["datasets"]
+
+    latest = client.get(f"/api/v1/reports/{report_id}").json()
+    repeated = client.post(
+        f"/api/v1/reports/{report_id}/datasets/index_constituents/clear",
+        json={"version": latest["version"]},
+    )
+    assert repeated.status_code == 409
+    assert repeated.json()["error_code"] == "DATASET_NOT_APPLIED"
+    events = client.get("/api/v1/audit").json()
+    cleared_events = [item for item in events if item["action"] == "dataset.cleared" and item["details"]["previous_snapshot_id"]]
+    assert {item["details"]["dataset_type"] for item in cleared_events} == {"index_constituents", "constituent_returns"}
+
+
 def test_calculation_refuses_an_incomplete_snapshot(client, report):
     constituents = upload(client, report["id"], "index_constituents", FIXTURES / "index_constituents.csv").json()
     apply(client, report["id"], constituents["id"])
@@ -157,7 +309,7 @@ def test_calculation_refuses_an_incomplete_snapshot(client, report):
     assert body["error_code"] == "SNAPSHOT_INCOMPLETE"
     # The user needs to be told which files are still outstanding, not just that something is wrong.
     assert set(body["missing_slots"]) == {
-        "constituent_returns", "total_return_series", "fund_kpi_daily",
+        "constituent_performance", "total_return_series", "fund_kpi_daily",
         "trading_calendar", "industry_master",
     }
 
@@ -326,12 +478,12 @@ def test_dataset_slots_report_progress(client, report):
     assert slots.status_code == 200, slots.text
     by_key = {slot["key"]: slot for slot in slots.json()}
     assert set(by_key) == {
-        "index_constituents", "constituent_returns", "total_return_series",
+        "constituent_performance", "index_constituents", "constituent_returns", "total_return_series",
         "fund_kpi_daily", "trading_calendar", "index_events", "industry_master",
     }
     assert all(slot["state"] == "MISSING" for slot in by_key.values())
     assert {key for key, slot in by_key.items() if slot["required"]} == {
-        "index_constituents", "constituent_returns", "total_return_series",
+        "constituent_performance", "total_return_series",
         "fund_kpi_daily", "trading_calendar", "industry_master",
     }
     assert by_key["index_events"]["required"] is False

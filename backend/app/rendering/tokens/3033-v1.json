@@ -27,6 +27,23 @@
     "paper": "#ffffff",
     "muted": "#666666"
   },
+  "chart": {
+    "sectorDonut": {
+      "viewBoxSize": 120,
+      "outerRadius": 52,
+      "innerRadius": 30,
+      "palette": [
+        "#5186bd",
+        "#223a8b",
+        "#00b0f0",
+        "#8064a2",
+        "#2f8f83",
+        "#d49a2a",
+        "#c45f5f",
+        "#6c7a89"
+      ]
+    }
+  },
   "rules": {
     "pages": 4,
     "constituentRows": 30,

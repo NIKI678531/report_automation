@@ -35,12 +35,59 @@ describe("FastAPI client", () => {
     fetchMock.mockRestore();
   });
 
+  it("queries the DA company news catalog with cursor-bound filters", async () => {
+    const payload = { items: [], total: 0, has_more: false, next_cursor: null, facets: {} };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
+    await api.listCompanyNewsCatalog("r1", {
+      query: "Tencent results",
+      sentiment: "bull",
+      sort: "oldest",
+      cursor: "next-page",
+      limit: 25,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/reports/r1/news/catalog?query=Tencent+results&sentiment=bull&sort=oldest&cursor=next-page&limit=25",
+      expect.any(Object),
+    );
+    fetchMock.mockRestore();
+  });
+
+  it("saves DA catalog selections by trusted external id", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ version: 2, items: [] }), { status: 200 }));
+    await api.selectNews("r1", 1, [{ provider: "DA_REPORT", external_id: "42", position: 0 }]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/news", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ version: 1, items: [{ provider: "DA_REPORT", external_id: "42", position: 0 }] }),
+    }));
+    fetchMock.mockRestore();
+  });
+
   it("applies first-time data without an override reason", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     await api.applyImport("r1", "i1");
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/imports/i1/apply", expect.objectContaining({
       method: "POST",
       body: "{}",
+    }));
+    fetchMock.mockRestore();
+  });
+
+  it("discards an unapplied import", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    await api.discardImport("r1", "i1");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/imports/i1/discard", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({}),
+    }));
+    fetchMock.mockRestore();
+  });
+
+  it("clears an applied constituent dataset with optimistic locking", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    await api.clearDataset("r1", "constituent_returns", 7);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/datasets/constituent_returns/clear", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ version: 7 }),
     }));
     fetchMock.mockRestore();
   });
