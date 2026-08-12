@@ -181,6 +181,7 @@ def render_content_manifest(content: dict[str, Any]) -> dict[str, Any]:
     }
     manifest = {
         "document_checksum": checksum(content),
+        "lane": content.get("lane", "PRODUCTION"),
         "module_bindings": content.get("module_bindings", {}),
         "section_checksums": {key: checksum(value) for key, value in facts.items()},
         "module_order": [
@@ -204,6 +205,7 @@ def initial_document(
         "report_id": report_id,
         "template_version": template_version,
         "design_token_version": design_token_version,
+        "lane": "PRODUCTION",
         "language_mode": "EN",
         "report_date": report_date.isoformat(),
         "month_name": month,
@@ -228,18 +230,38 @@ def initial_document(
     }
 
 
-def bind_snapshot(content: dict[str, Any], snapshot_payload: dict[str, Any], include_editorial: bool = False) -> dict[str, Any]:
+def bind_snapshot(
+    content: dict[str, Any],
+    snapshot_payload: dict[str, Any],
+    *,
+    lane: str,
+    include_testing_editorial: bool = False,
+) -> dict[str, Any]:
     result = deepcopy(content)
+    # The lane travels with the facts it describes. Stamped here rather than left to the caller so
+    # a document can never carry a snapshot's numbers without carrying its lane.
+    result["lane"] = lane
     result["sections"]["constituents"] = snapshot_payload.get("constituents", [])
     result["sections"]["historical_performance"] = snapshot_payload.get("historical_performance", {"rows": []})
-    if include_editorial:
+    # The fixture's prose and news were typed out of the approved PDF; nothing generated them. They
+    # are bound only so the render pipeline has real content to regress against, so they are
+    # confined to the TESTING lane and labelled where they enter the document. A production report
+    # gets an empty Review section and has to be written.
+    if include_testing_editorial and lane != "TESTING":
+        raise ValueError("Transcribed editorial may only be bound on the TESTING lane")
+    if include_testing_editorial:
         result["sections"]["company_news"] = snapshot_payload.get("company_news", [])
-    if include_editorial and snapshot_payload.get("month_in_review"):
+    if include_testing_editorial and snapshot_payload.get("month_in_review"):
         existing_review = result["sections"].get("month_in_review", {})
         incoming_review = deepcopy(snapshot_payload["month_in_review"])
         for field in ("title", "display_title", "blocks", "layout_schema_version"):
             if field in existing_review:
                 incoming_review[field] = deepcopy(existing_review[field])
+        incoming_review["provenance"] = {
+            "source": "TESTING_FIXTURE",
+            "file": "editorial.json",
+            "note": "Transcribed from the approved reference report. Not generated, not derived.",
+        }
         result["sections"]["month_in_review"] = incoming_review
     result["sections"]["analytics"] = snapshot_payload.get("analytics", result["sections"]["analytics"])
     result["sections"]["footnotes"] = snapshot_payload.get("footnotes", {})

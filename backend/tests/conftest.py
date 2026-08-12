@@ -15,6 +15,9 @@ from app.main import create_app
 @pytest.fixture()
 def client(monkeypatch):
     monkeypatch.setattr(settings, "da_report_auto_load", False)
+    # The golden fixture is the render pipeline's only end-to-end input, so the suite deliberately
+    # opens the TESTING lane. A deployed environment leaves it shut.
+    monkeypatch.setattr(settings, "allow_testing_lane", True)
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     Base.metadata.create_all(engine)

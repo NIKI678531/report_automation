@@ -59,6 +59,31 @@ def _render_tokens(version: str) -> dict[str, Any]:
     return _merge_tokens(_render_tokens(str(parent)), tokens) if parent else tokens
 
 
+# The lane mark is a control, not decoration, so it must survive a token file that forgets it.
+# The tokens decide how it looks; this decides that it exists at all.
+_TESTING_BANNER_FALLBACK = {
+    "label": "TESTING DATA - NOT FOR DISTRIBUTION",
+    "watermark": "TESTING",
+    "color": "#c45f5f",
+    "opacity": 0.12,
+    "watermarkPt": 84,
+    "chipPt": 7,
+    "rotationDeg": -28,
+}
+
+
+def testing_banner(document: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve the TESTING-lane mark for a document, or ``None`` on the production lane.
+
+    Resolved here rather than at each call site so HTML, PDF and DOCX take the same wording and
+    colour from the same versioned place, and so no format can quietly omit it.
+    """
+    if str(document.get("lane", "PRODUCTION")) != "TESTING":
+        return None
+    tokens = _render_tokens(str(document.get("design_token_version", "3033-v1")))
+    return {**_TESTING_BANNER_FALLBACK, **(tokens.get("testingBanner") or {})}
+
+
 def _polar_point(center: float, radius: float, angle: float) -> tuple[float, float]:
     radians = math.radians(angle - 90)
     return center + radius * math.cos(radians), center + radius * math.sin(radians)
@@ -79,61 +104,71 @@ def _donut_path(center: float, outer_radius: float, inner_radius: float, start: 
     )
 
 
-def sector_chart(
-    chart_snapshot: dict[str, Any] | None,
-    legacy_sectors: list[dict[str, Any]] | None,
-    chart_tokens: dict[str, Any],
-) -> dict[str, Any]:
-    rows = []
-    for row in (chart_snapshot or {}).get("slices", []):
-        weight = float(row.get("weight") or 0)
-        if weight > 0:
-            rows.append({
-                "sector": str(row.get("label") or ""),
-                "weight": weight,
-                "start_angle": float(row.get("start_angle") or 0),
-                "end_angle": float(row.get("end_angle") or 0),
-                "color_index": int(row.get("color_index") or 0),
-            })
-    if not rows:
-        cursor = 0.0
-        total_legacy = sum(float(row.get("weight") or 0) for row in legacy_sectors or [])
-        for index, row in enumerate(legacy_sectors or []):
-            weight = float(row.get("weight") or 0)
-            if weight <= 0 or total_legacy <= 0:
-                continue
-            start = cursor
-            cursor += weight / total_legacy * 360
-            rows.append({
-                "sector": str(row.get("sector") or ""),
-                "weight": weight,
-                "start_angle": start,
-                "end_angle": cursor,
-                "color_index": index,
-            })
-    total = sum(row["weight"] for row in rows)
-    if total <= 0:
+def sector_chart(chart_snapshot: dict[str, Any] | None, chart_tokens: dict[str, Any]) -> dict[str, Any]:
+    """Lay out the `industry_breakdown` chart snapshot.
+
+    Ordering, the zero-weight filter, the display string and the colour token are all decided
+    in ``domain.calculation.sector_chart_snapshot``. Everything here is geometry and colour
+    resolution — the renderer must not regroup, re-sort or recompute (rules document §4.3).
+    """
+    series = (chart_snapshot or {}).get("series") or []
+    if not series:
         return {"has_data": False, "rows": []}
 
     view_box = float(chart_tokens["viewBoxSize"])
     center = view_box / 2
     outer_radius = float(chart_tokens["outerRadius"])
     inner_radius = float(chart_tokens["innerRadius"])
+    label_radius = float(chart_tokens["labelOutsideRadius"])
+    inside_threshold = float(chart_tokens["labelInsideThresholdRatio"])
     palette = [str(color) for color in chart_tokens["palette"]]
-    chart_rows: list[dict[str, Any]] = []
-    for row in rows:
-        color = palette[row["color_index"] % len(palette)]
-        chart_rows.append({
-            **row,
-            "color": color,
-            "path": _donut_path(center, outer_radius, inner_radius, row["start_angle"], row["end_angle"]),
-        })
-    summary = ", ".join(f"{row['sector']} {row['weight'] / total:.1%}" for row in chart_rows)
+    color_tokens = {str(key): str(value) for key, value in (chart_tokens.get("colorTokens") or {}).items()}
+
+    rows: list[dict[str, Any]] = []
+    outside: list[dict[str, Any]] = []
+    for row in series:
+        start = float(row.get("start_angle") or 0)
+        end = float(row.get("end_angle") or 0)
+        order = int(row.get("sort_order") or len(rows) + 1)
+        token = str(row.get("color_token") or "")
+        middle = (start + end) / 2
+        chart_row = {
+            "sector": str(row.get("label") or ""),
+            "display_value": str(row.get("display_value") or ""),
+            "color": color_tokens.get(token, palette[(order - 1) % len(palette)]),
+            "path": _donut_path(center, outer_radius, inner_radius, start, end),
+            "inside": (end - start) / 360 >= inside_threshold,
+        }
+        if chart_row["inside"]:
+            x, y = _polar_point(center, (outer_radius + inner_radius) / 2, middle)
+            chart_row["label_x"], chart_row["label_y"] = round(x, 3), round(y, 3)
+            chart_row["label_anchor"] = "middle"
+        else:
+            outside.append(chart_row)
+            chart_row["_middle"] = middle
+        rows.append(chart_row)
+
+    # Slivers get a leader line into the empty corner beside the ring. Sides alternate so two
+    # adjacent slivers — the 1.7% and 1.3% industries in the reference — do not collide, and the
+    # text grows outward from `label_radius`, which is chosen to keep it inside the view box.
+    for index, chart_row in enumerate(outside):
+        side = -1 if index % 2 == 0 else 1
+        anchor_x, anchor_y = _polar_point(center, outer_radius + 1, chart_row.pop("_middle"))
+        elbow_x, elbow_y = anchor_x + side * 4, anchor_y - 5
+        text_x = center + side * label_radius
+        chart_row["leader"] = (
+            f"{anchor_x:.3f},{anchor_y:.3f} {elbow_x:.3f},{elbow_y:.3f} "
+            f"{text_x - side * 2:.3f},{elbow_y:.3f}"
+        )
+        chart_row["label_x"], chart_row["label_y"] = round(text_x, 3), round(elbow_y + 1.4, 3)
+        chart_row["label_anchor"] = "end" if side < 0 else "start"
+
     return {
         "has_data": True,
         "view_box": view_box,
-        "rows": chart_rows,
-        "alt_text": f"Index sector breakdown: {summary}",
+        "box_mm": float(chart_tokens["boxWidthMm"]),
+        "rows": rows,
+        "alt_text": str((chart_snapshot or {}).get("alt_text") or ""),
     }
 
 
@@ -151,9 +186,9 @@ def render_html(report: Report, document: dict[str, Any]) -> str:
         logo_data=logo,
         review_title=review_display_title(document),
         enable_review_layout=template_version != "3033-v1",
+        testing_banner=testing_banner(document),
         sector_chart=sector_chart(
             sections.get("analytics", {}).get("sector_chart"),
-            sections.get("analytics", {}).get("sectors", []),
             tokens["chart"]["sectorDonut"],
         ),
     )

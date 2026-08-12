@@ -23,7 +23,7 @@ describe("report module page labels", () => {
     expect(reportPageLabel("footnotes")).toBe("06");
     expect(reportPageEyebrow("constituents", "Snapshot data")).toBe("Page 04 · Snapshot data");
     expect(reportPageEyebrow("analytics", "Calculated outputs")).toBe("Page 05 · Calculated outputs");
-    expect(reportPageEyebrow("footnotes", "System-bound disclosures")).toBe("Page 06 · System-bound disclosures");
+    expect(reportPageEyebrow("footnotes", "Free layout")).toBe("Page 06 · Free layout");
   });
 
   it("prefers canonical document identity with safe legacy fallbacks", () => {

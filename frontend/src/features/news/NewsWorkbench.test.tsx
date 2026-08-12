@@ -45,6 +45,7 @@ const report: Report = {
   benchmark_code: "HSTECH",
   report_date: "2026-06-30",
   status: "DRAFT",
+  lane: "PRODUCTION",
   revision: 1,
   version: 1,
   active_snapshot_id: null,

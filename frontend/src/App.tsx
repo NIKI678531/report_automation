@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Download, Eye, FileCheck2, Fi
 import { api, type Product, type RenderJob, type Report } from "./api";
 import { type ModuleId, ModuleNav } from "./components/ModuleNav";
 import { ReportModule } from "./components/ReportModulesV2";
-import { reportsForContext } from "./reportModules";
+import { FOOTNOTE_SECTIONS, reportsForContext } from "./reportModules";
 import "./styles.css";
 
 const defaultReportDate = "2026-06-30";
@@ -150,7 +150,11 @@ function App() {
 
       {selected && <>
         <section className="status-rail">
-          <div><span className={`status status-${selected.status.toLowerCase()}`}>{selected.status}</span><small>Report lifecycle</small></div>
+          <div>
+            <span className={`status status-${selected.status.toLowerCase()}`}>{selected.status}</span>
+            {selected.lane === "TESTING" && <span className="lane-chip" title="Bound to testing data. Artifacts are watermarked and named TESTING-…"><AlertTriangle size={13} aria-hidden="true" /> TESTING DATA</span>}
+            <small>Report lifecycle</small>
+          </div>
           <div><span>Snapshot</span><strong>{selected.active_snapshot_id ? "Bound" : "Missing"}</strong></div>
           <div><span>Quality</span><strong>{selected.quality_results?.filter((item) => item.status === "PASSED").length ?? 0}/{selected.quality_results?.length ?? 0}</strong></div>
           <div><span>Artifacts</span><strong>{artifacts.length}</strong></div>
@@ -186,7 +190,7 @@ function getModuleStates(report: Report): Partial<Record<ModuleId, "ready" | "at
     news: Array.isArray(sections.company_news) && sections.company_news.length ? "ready" : "attention",
     constituents: Array.isArray(sections.constituents) && sections.constituents.length ? "ready" : "empty",
     analytics: Array.isArray(analytics.top10) && analytics.top10.length ? "ready" : "empty",
-    footnotes: Object.keys(footnotes).length ? "ready" : "attention",
+    footnotes: FOOTNOTE_SECTIONS.every(({ key }) => typeof footnotes[key] === "string" && footnotes[key].trim()) ? "ready" : "attention",
   };
 }
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, type Report } from "../api";
 import { ReportModule } from "./ReportModulesV2";
@@ -19,6 +19,7 @@ const report: Report = {
   benchmark_code: "HSTECH",
   report_date: "2026-06-30",
   status: "EDITING",
+  lane: "PRODUCTION",
   revision: 1,
   version: 4,
   active_snapshot_id: "snapshot-1",
@@ -34,11 +35,28 @@ const report: Report = {
           top10: [{ issuer: "Alpha", weight: "1" }],
           sectors: [{ code: "70", sector: "Information Technology", weight: "1" }],
           sector_chart: {
-            slices: [{ code: "70", label: "Information Technology", weight: "1", start_angle: "0", end_angle: "360", color_index: 2 }],
+            chart_code: "industry_breakdown",
+            alt_text: "Index sector breakdown: Information Technology 100.0%",
+            series: [{
+              code: "70",
+              label: "Information Technology",
+              raw_value: "1",
+              unit: "RATIO",
+              display_value: "100.0%",
+              sort_order: 1,
+              color_token: "industry.hsics.70",
+              start_angle: "0",
+              end_angle: "360",
+            }],
           },
           top: [{ issuer: "Alpha", return: "0.1" }],
           bottom: [{ issuer: "Alpha", return: "0.1" }],
           portfolio: [{ label: "Number of holdings", value: "1" }],
+        },
+        footnotes: {
+          historical: "Historical disclosure from this report.",
+          constituents: "Constituent disclosure from this report.",
+          analytics: "Analytics disclosure from this report.",
         },
       },
     },
@@ -84,5 +102,44 @@ describe("report module data responsibilities", () => {
     expect(screen.queryByRole("button", { name: /Upload file/i })).toBeNull();
     expect(screen.getByRole("img", { name: /Index Sectors Breakdown/i })).toBeTruthy();
     expect(screen.getByText(/Derived by the backend from the active constituent snapshot/i)).toBeTruthy();
+  });
+
+  it("edits the three report-backed disclosures and identifies their bound modules", async () => {
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+
+    render(<ReportModule report={report} active="footnotes" busy={false} run={run} />);
+
+    expect(screen.getByText("Page 06 · Free layout")).toBeTruthy();
+    expect(screen.getAllByRole("textbox")).toHaveLength(3);
+    expect(screen.getByDisplayValue("Historical disclosure from this report.")).toBeTruthy();
+    expect(screen.getByText(/Bound to Historical Performance/)).toBeTruthy();
+    expect(screen.getByText(/Bound to Constituent Performance/)).toBeTruthy();
+    expect(screen.getByText(/Bound to Final Analytics/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Historical footnote"), { target: { value: "Edited report-specific disclosure." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save disclosures" }));
+
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledOnce());
+    const [reportId, version, content] = saveDocument.mock.calls[0];
+    expect(reportId).toBe("report-1");
+    expect(version).toBe(4);
+    expect(((content.sections as Record<string, unknown>).footnotes as Record<string, string>)).toEqual({
+      historical: "Edited report-specific disclosure.",
+      constituents: "Constituent disclosure from this report.",
+      analytics: "Analytics disclosure from this report.",
+    });
+  });
+
+  it("leaves missing disclosures empty for another product instead of inventing content", () => {
+    const anotherProduct = structuredClone(report);
+    anotherProduct.product_code = "3037";
+    const sections = anotherProduct.latest_document?.content.sections as Record<string, unknown>;
+    sections.footnotes = { historical: "3037 report source text." };
+
+    render(<ReportModule report={anotherProduct} active="footnotes" busy={false} run={run} />);
+
+    expect((screen.getByLabelText("Historical footnote") as HTMLTextAreaElement).value).toBe("3037 report source text.");
+    expect((screen.getByLabelText("Constituents footnote") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText("Analytics footnote") as HTMLTextAreaElement).value).toBe("");
   });
 });

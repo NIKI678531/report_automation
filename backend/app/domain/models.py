@@ -46,6 +46,19 @@ class SnapshotStatus(str, enum.Enum):
     INVALID = "INVALID"
 
 
+class Lane(str, enum.Enum):
+    """Whether a snapshot's data is fit to be published.
+
+    ``source_policy`` answers *where the data came from*; the lane answers *may this be
+    distributed*. They are orthogonal on purpose: any source that is transcribed, synthetic or
+    otherwise not derived from an approved system belongs on TESTING, and every artifact built
+    from a TESTING snapshot is watermarked and prefixed so it cannot be mistaken for a deliverable.
+    """
+
+    PRODUCTION = "PRODUCTION"
+    TESTING = "TESTING"
+
+
 class ProductCatalog(Base):
     __tablename__ = "product_catalog"
     __table_args__ = (UniqueConstraint("product_code", "valid_from", name="uq_product_catalog_version"),)
@@ -89,6 +102,9 @@ class Report(Base):
     benchmark_code: Mapped[str] = mapped_column(String(32))
     report_date: Mapped[date] = mapped_column(Date)
     language_mode: Mapped[str] = mapped_column(String(20), default="EN")
+    # Denormalised from the active snapshot so the report list can badge the lane without loading
+    # every snapshot. Written wherever `active_snapshot_id` is assigned, and never on its own.
+    lane: Mapped[str] = mapped_column(String(16), default=Lane.PRODUCTION.value)
     status: Mapped[ReportStatus] = mapped_column(Enum(ReportStatus), default=ReportStatus.DRAFT)
     revision: Mapped[int] = mapped_column(Integer, default=1)
     version: Mapped[int] = mapped_column(Integer, default=1)
@@ -107,7 +123,10 @@ class DataSnapshot(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     report_id: Mapped[str] = mapped_column(ForeignKey("reports.id"), index=True)
     as_of_date: Mapped[date] = mapped_column(Date)
-    source_policy: Mapped[str] = mapped_column(String(30), default="GOLDEN_FIXTURE")
+    # No default: every construction site must state where the data came from. A default here once
+    # made GOLDEN_FIXTURE the silent fallback for anything that forgot to say.
+    source_policy: Mapped[str] = mapped_column(String(30))
+    lane: Mapped[str] = mapped_column(String(16), default=Lane.PRODUCTION.value)
     mapping_version: Mapped[str] = mapped_column(String(50), default="hstech-v1")
     status: Mapped[SnapshotStatus] = mapped_column(Enum(SnapshotStatus), default=SnapshotStatus.PENDING)
     checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)

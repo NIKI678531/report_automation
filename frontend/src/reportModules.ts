@@ -7,6 +7,14 @@ export const REPORT_MODULES = [
 	{ id: "footnotes", label: "Footnotes & Disclosures", pageLabel: "06" },
 ] as const;
 
+export const FOOTNOTE_SECTIONS = [
+	{ key: "historical", label: "Historical", boundTo: "Historical Performance" },
+	{ key: "constituents", label: "Constituents", boundTo: "Constituent Performance" },
+	{ key: "analytics", label: "Analytics", boundTo: "Final Analytics" },
+] as const;
+
+export type FootnoteSectionKey = (typeof FOOTNOTE_SECTIONS)[number]["key"];
+
 export type ModuleId = (typeof REPORT_MODULES)[number]["id"];
 
 interface ReportIdentity {

@@ -47,11 +47,14 @@
     .analytics-grid { display:grid; grid-template-columns:1fr 1fr; gap:7mm; }
     .blue-title { background:var(--blue); color:#fff; font-weight:700; font-size:12pt; text-align:center; padding:2.2mm; margin-bottom:2mm; }
     .top10 td { padding:1.8mm .5mm; font-size:11pt; } .top10 td:last-child { text-align:right; }
-    .donut { display:block; width:52mm; height:52mm; margin:5mm auto 2mm; }
+    .donut { display:block; margin:2mm auto 1mm; }
     .donut-slice { stroke:var(--paper); stroke-width:.6; }
+    .donut-leader { fill:none; stroke:#595959; stroke-width:.45; }
+    .donut-label { font-size:5.4px; font-weight:700; fill:var(--paper); }
+    .donut-label-outside { font-size:5px; font-weight:400; fill:var(--text); }
     .legend { display:grid; grid-template-columns:1fr 1fr; gap:1mm; font-size:9pt; }
     .swatch { display:inline-block; width:2mm; height:2mm; margin-right:1mm; }
-    .legend-value { color:#333; margin-left:.8mm; }
+    .title-split { display:grid; grid-template-columns:1fr auto; align-items:baseline; padding-left:5mm; padding-right:3mm; }
     .sector-empty { min-height:52mm; display:flex; align-items:center; justify-content:center; color:#666; font-style:italic; }
     .performers { margin-top:8mm; }
     .simple th { background:white; color:black; border-bottom:1px solid #000; text-align:left; }
@@ -62,6 +65,13 @@
     .empty-note { color:#666; font-style:italic; }
     [data-page="1"] .page-header { border-bottom:0; height:5mm; }
     [data-page="1"] .page-body { padding-top:2mm; }
+{%- if testing_banner %}
+    /* Absolutely positioned on purpose: the lane mark must contribute zero height, or it would
+       reflow the page and trip the footer safe-area guard in artifacts.build_artifact. */
+    .testing-mark { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; overflow:hidden; z-index:5; }
+    .testing-watermark { transform:rotate({{ testing_banner.rotationDeg }}deg); color:{{ testing_banner.color }}; opacity:{{ testing_banner.opacity }}; font-size:{{ testing_banner.watermarkPt }}pt; font-weight:700; letter-spacing:.08em; white-space:nowrap; }
+    .testing-chip { position:absolute; top:1.2mm; right:7mm; padding:.4mm 1.6mm; border:.6pt solid {{ testing_banner.color }}; color:{{ testing_banner.color }}; font-size:{{ testing_banner.chipPt }}pt; font-weight:700; letter-spacing:.04em; pointer-events:none; z-index:6; }
+{%- endif %}
     @media print {
       html,body { background:white; }
       @page { size:A4 portrait; margin:0; }
@@ -76,6 +86,10 @@
 {% macro chrome(page) -%}
   <header class="page-header">Monthly Commentary | {{ report_date_long }}</header>
   <footer class="page-footer"><img src="data:image/png;base64,{{ logo_data }}" alt="CSOP Asset Management"><span class="page-number">{{ page }}</span></footer>
+  {%- if testing_banner %}
+  <div class="testing-mark" data-lane="TESTING" aria-hidden="true"><span class="testing-watermark">{{ testing_banner.watermark }}</span></div>
+  <div class="testing-chip">{{ testing_banner.label }}</div>
+  {%- endif %}
 {%- endmacro %}
 
 <section class="report-page" data-page="1" data-section-key="month_in_review">
@@ -109,7 +123,7 @@
 </section>
 
 <section class="report-page" data-page="4" data-section-key="analytics">
-  {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title">Top 10 Index Constituents*　　(%)</div><table class="top10">{% for row in sections.analytics.top10 %}<tr><td>{{ row.issuer }}</td><td>{{ row.weight|pct }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">Index Sectors Breakdown*</div>{% if sector_chart.has_data %}<svg class="donut" role="img" aria-label="{{ sector_chart.alt_text }}" viewBox="0 0 {{ sector_chart.view_box }} {{ sector_chart.view_box }}"><title>Index Sectors Breakdown</title><desc>{{ sector_chart.alt_text }}</desc>{% for row in sector_chart.rows %}<path class="donut-slice" data-sector-slice="{{ row.sector }}" d="{{ row.path }}" fill="{{ row.color }}" />{% endfor %}</svg><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}<b class="legend-value">{{ row.weight|pct }}%</b></span>{% endfor %}</div>{% else %}<div class="sector-empty">N/A</div>{% endif %}</section></div>
+  {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title title-split"><span>Top 10 Index Constituents*</span><span>(%)</span></div><table class="top10">{% for row in sections.analytics.top10 %}<tr><td>{{ row.issuer }}</td><td>{{ row.weight|pct }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">Index Sectors Breakdown*</div>{% if sector_chart.has_data %}<svg class="donut" role="img" aria-label="{{ sector_chart.alt_text }}" style="width:{{ sector_chart.box_mm }}mm;height:{{ sector_chart.box_mm }}mm" viewBox="0 0 {{ sector_chart.view_box }} {{ sector_chart.view_box }}"><title>Index Sectors Breakdown</title><desc>{{ sector_chart.alt_text }}</desc>{% for row in sector_chart.rows %}<path class="donut-slice" data-sector-slice="{{ row.sector }}" d="{{ row.path }}" fill="{{ row.color }}" />{% endfor %}{% for row in sector_chart.rows %}{% if not row.inside %}<polyline class="donut-leader" points="{{ row.leader }}" />{% endif %}{% endfor %}{% for row in sector_chart.rows %}<text class="{{ 'donut-label' if row.inside else 'donut-label-outside' }}" data-sector-label="{{ row.sector }}" x="{{ row.label_x }}" y="{{ row.label_y }}" text-anchor="{{ row.label_anchor }}" dominant-baseline="middle">{{ row.display_value }}</text>{% endfor %}</svg><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}</span>{% endfor %}</div>{% else %}<div class="sector-empty">N/A</div>{% endif %}</section></div>
   <div class="analytics-grid performers"><section><h2>Top Performers in {{ doc.month_name }}**</h2><table class="simple"><thead><tr><th>Issuer</th><th>{{ doc.month_name }} Return (%)</th></tr></thead><tbody>{% for row in sections.analytics.top %}<tr><td>{{ row.issuer }}</td><td>{{ row.return|pct }}</td></tr>{% endfor %}</tbody></table></section><section><h2>Bottom Performers in {{ doc.month_name }}**</h2><table class="simple"><thead><tr><th>Issuer</th><th>{{ doc.month_name }} Return (%)</th></tr></thead><tbody>{% for row in sections.analytics.bottom %}<tr><td>{{ row.issuer }}</td><td>{{ row.return|pct }}</td></tr>{% endfor %}</tbody></table></section></div>
   <section class="portfolio"><h2>{{ doc.product_ticker|default(report.product_code ~ '.HK', true) }} Portfolio Analysis</h2><table>{% for row in sections.analytics.portfolio %}<tr><td>{{ row.label }}</td><td>{{ row.value }}</td></tr>{% endfor %}</table></section></main><div class="footnote">{{ sections.footnotes.analytics|default('') }}</div>
 </section>
