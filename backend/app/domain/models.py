@@ -192,10 +192,24 @@ class MappingProfile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ImportBatch(Base):
+    __tablename__ = "import_batches"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    report_id: Mapped[str] = mapped_column(ForeignKey("reports.id"), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="STAGING")
+    validation_results: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    composition: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    applied_snapshot_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class DataImport(Base):
     __tablename__ = "data_imports"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     report_id: Mapped[str] = mapped_column(ForeignKey("reports.id"), index=True)
+    batch_id: Mapped[str | None] = mapped_column(ForeignKey("import_batches.id"), nullable=True, index=True)
     dataset_type: Mapped[str] = mapped_column(String(50), default="constituents")
     original_filename: Mapped[str] = mapped_column(String(255))
     mime_type: Mapped[str] = mapped_column(String(100))

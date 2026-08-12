@@ -123,6 +123,7 @@ class ImportRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     report_id: str
+    batch_id: str | None = None
     dataset_type: str
     original_filename: str
     mime_type: str
@@ -167,6 +168,17 @@ class ImportCreateRead(ImportRead):
 
 
 class ImportApply(BaseModel):
+    reason: str | None = Field(default=None, min_length=5, max_length=500)
+
+
+class AutomaticDataRefresh(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1)
+
+
+class ImportBatchApply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1)
     reason: str | None = Field(default=None, min_length=5, max_length=500)
 
 

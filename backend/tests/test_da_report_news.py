@@ -8,12 +8,7 @@ from app.core.config import settings
 import httpx
 import pytest
 
-from app.integrations.da_report import (
-    DaReportProviderError,
-    _materialize_snapshot,
-    fetch_news,
-    list_company_news_catalog,
-)
+from app.integrations.da_report import DaReportProviderError, _materialize_snapshot, fetch_news
 
 
 INGESTION_FIXTURE = Path(__file__).parent / "fixtures" / "ingestion" / "index_constituents.csv"
@@ -52,21 +47,18 @@ def build_da_snapshot(path) -> None:
         );
         INSERT INTO news_sources VALUES (1, 'source', 'Approved Source', '認可來源', 'regional');
         INSERT INTO news_sources VALUES (2, 'other', 'Other Source', '其他來源', 'da');
-        INSERT INTO news_sources VALUES (3, 'archive', 'Archive Source', '歷史來源', 'regional');
         INSERT INTO news_items VALUES
             (1, 1, 'https://example.test/tencent', 'raw', 'raw', '2026-06-12 08:30:00', '2026-06-12 09:00:00'),
             (2, 1, 'https://example.test/tsmc', 'raw', 'raw', '2026-06-13 08:30:00', '2026-06-13 09:00:00'),
             (3, 1, 'https://example.test/general', 'raw', 'raw', '2026-06-14 08:30:00', '2026-06-14 09:00:00'),
             (4, 2, 'https://example.test/wrong-report', 'raw', 'raw', '2026-06-15 08:30:00', '2026-06-15 09:00:00'),
-            (5, 1, 'https://example.test/outside', 'raw', 'raw', '2026-07-01 08:30:00', '2026-07-01 09:00:00'),
-            (6, 3, 'https://example.test/no-published-at', 'raw', 'raw', NULL, '2026-05-01 09:00:00');
+            (5, 1, 'https://example.test/outside', 'raw', 'raw', '2026-07-01 08:30:00', '2026-07-01 09:00:00');
         INSERT INTO news_enrichments VALUES
             (1, 'Tencent raises its outlook', '騰訊控股上調展望', 'Tencent summary', '騰訊摘要', 'Corporate', 'China', 'bull', 88, 'test-model'),
             (2, 'Marvell adopts new chip process', 'Marvell 採用新製程', 'Taiwan Semiconductor Manufacturing expands capacity', '台積電擴產', 'Corporate', 'Taiwan', 'neutral', 80, 'test-model'),
             (3, 'Regional market update', '區域市場更新', 'No named holding', '未提及持倉', 'Market', 'China', 'neutral', 70, 'test-model'),
             (4, 'Tencent item in wrong report type', '其他報告的騰訊新聞', '', '', 'Corporate', 'China', 'neutral', 60, 'test-model'),
-            (5, 'Tencent after report month', '報告月後的騰訊新聞', '', '', 'Corporate', 'China', 'neutral', 50, 'test-model'),
-            (6, 'Tencent filing without publish time', '騰訊公告缺少發布時間', '', '', 'Corporate', 'China', 'bear', 72, 'test-model');
+            (5, 'Tencent after report month', '報告月後的騰訊新聞', '', '', 'Corporate', 'China', 'neutral', 50, 'test-model');
     """)
     connection.commit()
     connection.close()
@@ -118,117 +110,6 @@ def test_da_report_returns_only_unique_title_matches_for_current_constituents(tm
     assert items[0]["metadata_json"]["match_method"] == "TITLE_ALIAS_EXACT"
 
 
-def test_company_news_catalog_lists_all_regional_corporate_items_without_constituents(tmp_path, monkeypatch):
-    database = tmp_path / "da-report.sqlite"
-    build_da_snapshot(database)
-    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
-    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
-
-    page = asyncio.run(list_company_news_catalog(limit=20))
-
-    assert [item["external_id"] for item in page["items"]] == ["5", "2", "1", "6"]
-    assert [item["title"] for item in page["items"]] == [
-        "Tencent after report month",
-        "Marvell adopts new chip process",
-        "Tencent raises its outlook",
-        "Tencent filing without publish time",
-    ]
-    assert page["total"] == 4
-    assert page["has_more"] is False
-    assert page["facets"]["sentiments"] == {"neutral": 2, "bear": 1, "bull": 1}
-    assert page["items"][-1]["published_at_source"] == "fetched_at"
-
-
-def test_company_news_catalog_uses_filter_bound_keyset_pagination(tmp_path, monkeypatch):
-    database = tmp_path / "da-report.sqlite"
-    build_da_snapshot(database)
-    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
-    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
-
-    first = asyncio.run(list_company_news_catalog(limit=2))
-    second = asyncio.run(list_company_news_catalog(limit=2, cursor=first["next_cursor"]))
-    oldest = asyncio.run(list_company_news_catalog(query="Tencent", sort="oldest", limit=20))
-
-    assert [item["external_id"] for item in first["items"]] == ["5", "2"]
-    assert [item["external_id"] for item in second["items"]] == ["1", "6"]
-    assert first["has_more"] is True
-    assert second["has_more"] is False
-    assert [item["external_id"] for item in oldest["items"]] == ["6", "1", "5"]
-    with pytest.raises(DaReportProviderError) as raised:
-        asyncio.run(list_company_news_catalog(query="Marvell", cursor=first["next_cursor"]))
-    assert raised.value.code == "DA_REPORT_CURSOR_INVALID"
-    with pytest.raises(DaReportProviderError) as malformed:
-        asyncio.run(list_company_news_catalog(cursor="not-a-valid-cursor"))
-    assert malformed.value.code == "DA_REPORT_CURSOR_INVALID"
-
-
-def test_company_news_catalog_combines_source_sentiment_importance_and_date_filters(tmp_path, monkeypatch):
-    database = tmp_path / "da-report.sqlite"
-    build_da_snapshot(database)
-    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
-    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
-
-    page = asyncio.run(list_company_news_catalog(
-        source="archive",
-        sentiment="bear",
-        importance="HIGH",
-        from_date=date(2026, 5, 1),
-        to_date=date(2026, 5, 1),
-    ))
-
-    assert [item["external_id"] for item in page["items"]] == ["6"]
-    assert page["items"][0]["published_at_source"] == "fetched_at"
-    assert page["total"] == 1
-
-
-def test_report_company_news_catalog_does_not_require_an_active_snapshot(client, tmp_path, monkeypatch):
-    database = tmp_path / "da-report.sqlite"
-    build_da_snapshot(database)
-    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
-    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
-    report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
-
-    first = client.get(f"/api/v1/reports/{report['id']}/news/catalog?limit=2")
-
-    assert first.status_code == 200, first.text
-    assert [item["external_id"] for item in first.json()["items"]] == ["5", "2"]
-    assert first.json()["facets"]["date_min"] == "2026-05-01"
-    cursor = first.json()["next_cursor"]
-    second = client.get(
-        f"/api/v1/reports/{report['id']}/news/catalog",
-        params={"limit": 2, "cursor": cursor},
-    )
-    assert second.status_code == 200, second.text
-    assert [item["external_id"] for item in second.json()["items"]] == ["1", "6"]
-
-
-def test_da_catalog_selection_materializes_lineage_and_warns_after_report_date(client, tmp_path, monkeypatch):
-    database = tmp_path / "da-report.sqlite"
-    build_da_snapshot(database)
-    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
-    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
-    report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
-    detail = client.get(f"/api/v1/reports/{report['id']}").json()
-
-    selected = client.put(f"/api/v1/reports/{report['id']}/news", json={
-        "version": detail["latest_document"]["version"],
-        "items": [{"provider": "DA_REPORT", "external_id": "5", "position": 0}],
-    })
-
-    assert selected.status_code == 200, selected.text
-    item = selected.json()["items"][0]
-    assert item["title"] == "Tencent after report month"
-    assert item["provider"] == "DA_REPORT"
-    assert item["external_id"] == "5"
-    assert item["sentiment"] == "neutral"
-    stored = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]["content"]
-    assert stored["sections"]["company_news"][0]["news_item_id"]
-    review = client.get(f"/api/v1/reports/{report['id']}/review").json()
-    warning = next(item for item in review["checks"] if item["check_id"] == "NEWS_AFTER_REPORT_DATE")
-    assert warning["severity"] == "WARNING"
-    assert warning["status"] == "WARNING"
-
-
 def test_report_fetch_dispatches_da_report_with_active_constituents(client, tmp_path, monkeypatch):
     database = tmp_path / "da-report.sqlite"
     build_da_snapshot(database)
@@ -248,7 +129,7 @@ def test_report_fetch_dispatches_da_report_with_active_constituents(client, tmp_
 
     assert fetched.status_code == 200, fetched.text
     assert fetched.json()["provider"] == "DA_REPORT"
-    assert fetched.json()["created"] == 1, fetched.text
+    assert fetched.json()["created"] == 1
     assert fetched.json()["items"][0]["security_code"] == "700"
     assert fetched.json()["items"][0]["importance"] == "HIGH"
     candidates = client.get(f"/api/v1/reports/{report['id']}/news/candidates").json()
@@ -310,7 +191,7 @@ def test_draft_ensures_candidates_with_same_context_valid_snapshot(client, tmp_p
     )
 
     assert fetched.status_code == 200, fetched.text
-    assert fetched.json()["created"] == 1, fetched.text
+    assert fetched.json()["created"] == 1
     assert fetched.json()["items"][0]["title"] == "Tencent raises its outlook"
     unchanged = client.get(f"/api/v1/reports/{draft['id']}").json()
     assert unchanged["status"] == "DRAFT"

@@ -20,9 +20,11 @@ from app.domain.models import (
     SnapshotDataset,
 )
 from app.domain.schemas import (
+    AutomaticDataRefresh,
     CalculationRead,
     DatasetClear,
     ImportApply,
+    ImportBatchApply,
     ImportCreateRead,
     ImportRead,
     SnapshotCreate,
@@ -31,6 +33,18 @@ from app.domain.schemas import (
 from .deps import Db, RequestId
 
 router = APIRouter()
+
+
+@router.post("/reports/{report_id}/automatic-data/refresh")
+def refresh_automatic_data(
+    report_id: str,
+    command: AutomaticDataRefresh,
+    db: Db,
+    x_request_id: RequestId,
+) -> dict:
+    report = service.get_report(db, report_id)
+    snapshot, changed = service.refresh_automatic_data(db, report, command.version, x_request_id)
+    return {"changed": changed, "snapshot": SnapshotRead.model_validate(snapshot).model_dump(mode="json")}
 
 
 @router.post("/reports/{report_id}/snapshots", response_model=SnapshotRead, status_code=status.HTTP_201_CREATED)
@@ -90,6 +104,68 @@ async def create_import(
         apply_mode="OVERWRITE" if replacing_dataset else "FIRST_APPLY",
         requires_reason=replacing_dataset,
     )
+
+
+@router.post("/reports/{report_id}/import-batches", status_code=status.HTTP_201_CREATED)
+async def create_import_batch(
+    report_id: str,
+    db: Db,
+    x_request_id: RequestId,
+    files: list[UploadFile] = File(...),
+) -> dict:
+    report = service.get_report(db, report_id)
+    if not files or len(files) > 20:
+        raise HTTPException(status_code=413, detail={"error_code": "BATCH_FILE_LIMIT", "message": "Select between 1 and 20 files."})
+    buffered: list[tuple[str, str, bytes]] = []
+    total = 0
+    for file in files:
+        data = await file.read()
+        total += len(data)
+        if len(data) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE", "message": "Each file is limited to 20 MB."})
+        if total > 100 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail={"error_code": "BATCH_TOO_LARGE", "message": "One batch is limited to 100 MB."})
+        buffered.append((file.filename or "upload", file.content_type or "", data))
+    batch = service.create_import_batch(db, report, buffered, x_request_id)
+    return service.batch_view(db, batch)
+
+
+@router.get("/reports/{report_id}/import-batches/{batch_id}")
+def get_import_batch(report_id: str, batch_id: str, db: Db) -> dict:
+    report = service.get_report(db, report_id)
+    return service.batch_view(db, service.get_import_batch(db, report, batch_id))
+
+
+@router.post("/reports/{report_id}/import-batches/{batch_id}/files/{import_id}/exclude")
+def exclude_import_batch_file(
+    report_id: str,
+    batch_id: str,
+    import_id: str,
+    db: Db,
+    x_request_id: RequestId,
+) -> dict:
+    report = service.get_report(db, report_id)
+    batch = service.exclude_batch_file(db, report, batch_id, import_id, x_request_id)
+    return service.batch_view(db, batch)
+
+
+@router.post("/reports/{report_id}/import-batches/{batch_id}/discard")
+def discard_import_batch(report_id: str, batch_id: str, db: Db, x_request_id: RequestId) -> dict:
+    report = service.get_report(db, report_id)
+    batch = service.discard_import_batch(db, report, batch_id, x_request_id)
+    return service.batch_view(db, batch)
+
+
+@router.post("/reports/{report_id}/import-batches/{batch_id}/apply", response_model=SnapshotRead)
+def apply_import_batch(
+    report_id: str,
+    batch_id: str,
+    command: ImportBatchApply,
+    db: Db,
+    x_request_id: RequestId,
+) -> DataSnapshot:
+    report = service.get_report(db, report_id)
+    return service.apply_import_batch(db, report, batch_id, command.version, command.reason, x_request_id)
 
 
 @router.get("/reports/{report_id}/imports", response_model=list[ImportRead])

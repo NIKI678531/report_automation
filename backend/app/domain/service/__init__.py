@@ -23,6 +23,14 @@ from .calculations import persist_calculation_records, run_calculation
 from .catalog import import_industry_master, import_products, list_products, resolve_product
 from .documents import ai_assisted_draft, latest_document, update_document
 from .imports import dataset_slots, stage_import
+from .import_batches import (
+    apply_import_batch,
+    batch_view,
+    create_import_batch,
+    discard_import_batch,
+    exclude_batch_file,
+    get_import_batch,
+)
 from .news import (
     add_manual_news_candidate,
     fetch_report_news,
@@ -51,6 +59,7 @@ from .snapshots import (
     fixture_payload,
     missing_required_slots,
     overlay_slot,
+    refresh_automatic_data,
     require_complete_snapshot,
     snapshot_dataset_type,
 )
@@ -60,20 +69,25 @@ __all__ = [
     "ai_assisted_draft",
     "ai_number_check",
     "apply_import",
+    "apply_import_batch",
     "audit",
     "clear_dataset",
     "create_report",
+    "create_import_batch",
     "create_revision",
     "create_snapshot",
     "dataset_present",
     "dataset_slots",
     "discard_import",
+    "discard_import_batch",
     "empty_payload",
     "ensure_snapshot_datasets",
+    "exclude_batch_file",
     "fetch_report_news",
     "finalize",
     "fixture_payload",
     "get_report",
+    "get_import_batch",
     "import_industry_master",
     "import_products",
     "latest_document",
@@ -84,6 +98,7 @@ __all__ = [
     "overlay_slot",
     "persist_calculation_records",
     "release_gate_checks",
+    "refresh_automatic_data",
     "require_complete_snapshot",
     "resolve_news_constituent_snapshot",
     "resolve_product",
@@ -91,6 +106,7 @@ __all__ = [
     "select_report_news",
     "snapshot_dataset_type",
     "stage_import",
+    "batch_view",
     "update_document",
     "upsert_news_candidates",
 ]

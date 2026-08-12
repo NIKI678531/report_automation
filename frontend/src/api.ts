@@ -135,6 +135,33 @@ export interface ImportResult {
   requires_reason: boolean;
 }
 
+export interface ImportBatchFile {
+  id: string;
+  filename: string;
+  detected_type: string;
+  mapping_version: number | null;
+  status: "VALIDATED" | "REJECTED" | "NEEDS_MAPPING" | "UNSUPPORTED" | "EXCLUDED" | "APPLIED";
+  row_count: number;
+  errors: Array<{ error_code?: string; check_id?: string; severity: string; message?: string; fix_hint?: string }>;
+  preview: { columns: string[]; rows: Array<Record<string, unknown>> };
+}
+
+export interface ImportBatch {
+  id: string;
+  report_id: string;
+  status: "STAGING" | "INCOMPLETE" | "BLOCKED" | "READY" | "APPLIED" | "DISCARDED";
+  coverage: {
+    mode?: "CANONICAL" | "SPLIT";
+    identity?: { state: "READY" | "MISSING"; import_ids: string[] };
+    returns?: { state: "READY" | "MISSING"; import_ids: string[] };
+    unsupported_count?: number;
+  };
+  errors: Array<{ error_code?: string; severity: string; message?: string; fix_hint?: string }>;
+  reason: string | null;
+  applied_snapshot_id: string | null;
+  files: ImportBatchFile[];
+}
+
 export interface NewsSelectionDraft {
   news_item_id?: string;
   provider?: "DA_REPORT";
@@ -194,6 +221,12 @@ export const api = {
   render: (id: string) => request<RenderJob[]>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats: ["html", "pdf", "docx"] }), headers: { "Idempotency-Key": crypto.randomUUID() } }),
   listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),
   uploadDataset: (id: string, datasetType: DatasetType, file: File) => { const body = new FormData(); body.append("dataset_type", datasetType); body.append("file", file); return request<ImportResult>(`/reports/${id}/imports`, { method: "POST", body }); },
+  uploadImportBatch: (id: string, files: File[]) => { const body = new FormData(); files.forEach((file) => body.append("files", file)); return request<ImportBatch>(`/reports/${id}/import-batches`, { method: "POST", body }); },
+  getImportBatch: (reportId: string, batchId: string) => request<ImportBatch>(`/reports/${reportId}/import-batches/${batchId}`),
+  excludeImportBatchFile: (reportId: string, batchId: string, importId: string) => request<ImportBatch>(`/reports/${reportId}/import-batches/${batchId}/files/${importId}/exclude`, { method: "POST", body: JSON.stringify({}) }),
+  applyImportBatch: (reportId: string, batchId: string, version: number, reason?: string) => request(`/reports/${reportId}/import-batches/${batchId}/apply`, { method: "POST", body: JSON.stringify({ version, ...(reason ? { reason } : {}) }) }),
+  discardImportBatch: (reportId: string, batchId: string) => request<ImportBatch>(`/reports/${reportId}/import-batches/${batchId}/discard`, { method: "POST", body: JSON.stringify({}) }),
+  refreshAutomaticData: (reportId: string, version: number) => request<{ changed: boolean }>(`/reports/${reportId}/automatic-data/refresh`, { method: "POST", body: JSON.stringify({ version }) }),
   applyImport: (reportId: string, importId: string, reason?: string) => request(`/reports/${reportId}/imports/${importId}/apply`, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   discardImport: (reportId: string, importId: string) => request(`/reports/${reportId}/imports/${importId}/discard`, { method: "POST", body: JSON.stringify({}) }),
   clearDataset: (reportId: string, datasetType: ClearableDatasetType, version: number) => request(`/reports/${reportId}/datasets/${datasetType}/clear`, { method: "POST", body: JSON.stringify({ version }) }),

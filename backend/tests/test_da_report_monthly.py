@@ -90,6 +90,65 @@ def test_monthly_schema_failure_does_not_require_news_tables(tmp_path, monkeypat
     assert raised.value.code == "DA_REPORT_MONTHLY_SCHEMA_MISMATCH"
 
 
+def test_total_return_series_is_available_when_supporting_tables_are_missing(tmp_path, monkeypatch):
+    database = tmp_path / "total-return-only.sqlite"
+    connection = sqlite3.connect(database)
+    connection.executescript("""
+        CREATE TABLE total_return_series (
+            id INTEGER PRIMARY KEY, instrument_code TEXT, trade_date TEXT,
+            total_return_value REAL, series_type TEXT, currency TEXT, source TEXT, updated_at TEXT
+        );
+        INSERT INTO total_return_series VALUES
+            (1, '3033.HK', '2025-12-31', 100, 'TOTAL_RETURN', 'HKD', 'Bloomberg', '2026-07-01'),
+            (2, 'HSTECHN', '2025-12-31', 200, 'TOTAL_RETURN', 'HKD', 'Bloomberg', '2026-07-01'),
+            (3, '3033.HK', '2026-06-30', 120, 'TOTAL_RETURN', 'HKD', 'Bloomberg', '2026-07-01'),
+            (4, 'HSTECHN', '2026-06-30', 240, 'TOTAL_RETURN', 'HKD', 'Bloomberg', '2026-07-01');
+    """)
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
+    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
+
+    payload = load_monthly_data(
+        product_code="3033",
+        fund_instrument_code="3033.HK",
+        benchmark_instrument_code="HSTECHN",
+        trading_calendar_code="HK",
+        constituent_index_code="HSTECH",
+        report_date=date(2026, 6, 30),
+    )
+
+    assert len(payload["total_return_series"]) == 4
+    assert payload["datasets"]["total_return_series"]["source_type"] == "DA_REPORT_SQLITE"
+    assert "fund_kpi_daily" not in payload["datasets"]
+    assert {item["check_id"] for item in payload["_findings"]} >= {
+        "DA_REPORT_FUND_KPI_DAILY_SCHEMA_MISMATCH",
+        "DA_REPORT_TRADING_CALENDAR_SCHEMA_MISMATCH",
+    }
+
+
+def test_automatic_refresh_endpoint_does_not_version_unchanged_source(client, tmp_path, monkeypatch):
+    database = tmp_path / "da-report-idempotent.sqlite"
+    build_monthly_snapshot(database)
+    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
+    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
+    monkeypatch.setattr(settings, "da_report_auto_load", True)
+    created = client.post("/api/v1/reports", json={"product_code": "3033", "report_date": "2026-06-30"})
+    assert created.status_code == 201, created.text
+    report = client.get(f"/api/v1/reports/{created.json()['id']}").json()
+    before = client.get(f"/api/v1/reports/{report['id']}/snapshots").json()
+
+    refreshed = client.post(
+        f"/api/v1/reports/{report['id']}/automatic-data/refresh",
+        json={"version": report["version"]},
+    )
+
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["changed"] is False
+    after = client.get(f"/api/v1/reports/{report['id']}/snapshots").json()
+    assert len(after) == len(before)
+
+
 def test_report_auto_snapshot_becomes_valid_after_one_constituent_upload(client, tmp_path, monkeypatch):
     database = tmp_path / "da-report-auto.sqlite"
     build_monthly_snapshot(database)
@@ -162,6 +221,7 @@ def test_report_auto_snapshot_becomes_valid_after_one_constituent_upload(client,
     assert constituent_3m["period_start"] == "2026-03-31"
     assert historical_3m["period_start"] == "2025-12-31"
     upload_checksum = applied.json()["payload"]["datasets"]["constituent_performance"]["checksum"]
+    version_before_refresh = client.get(f"/api/v1/reports/{detail['id']}").json()["version"]
 
     refreshed = client.post(
         f"/api/v1/reports/{detail['id']}/snapshots",
@@ -169,6 +229,9 @@ def test_report_auto_snapshot_becomes_valid_after_one_constituent_upload(client,
     )
 
     assert refreshed.status_code == 201, refreshed.text
-    assert refreshed.json()["id"] != applied.json()["id"]
+    # The DA-Report source and preserved upload lineage are unchanged, so refreshing is
+    # idempotent and does not append another snapshot/document version.
+    assert refreshed.json()["id"] == applied.json()["id"]
+    assert client.get(f"/api/v1/reports/{detail['id']}").json()["version"] == version_before_refresh
     assert refreshed.json()["status"] == "VALID"
     assert refreshed.json()["payload"]["datasets"]["constituent_performance"]["checksum"] == upload_checksum

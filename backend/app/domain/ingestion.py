@@ -200,6 +200,8 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
     records = imports._records_from_csv(data)
     rows: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
+    index_codes: set[str] = set()
+    as_of_dates: set[date] = set()
     for index, row in enumerate(records, start=2):
         raw_code = _mapped_value(row, "security_code", profile)
         if raw_code in (None, ""):
@@ -223,10 +225,35 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
         elif weight_unit != "RATIO":
             collector.add("MAP-003", "Weight unit is not explicit in the mapping profile.", row=index, field="weight", entity_id=code, fix_hint="Set weight to PERCENT or RATIO in unit_map.")
             continue
-        as_of = _row_date(_mapped_value(row, "as_of_date", profile) or _mapped_value(row, "trade_date", profile), index, collector) or report_date
+        product_date = _row_date(_mapped_value(row, "as_of_date", profile), index, collector)
+        trade_date = _row_date(_mapped_value(row, "trade_date", profile), index, collector)
+        if product_date and trade_date and product_date != trade_date:
+            collector.add(
+                "CONSTITUENT_DATE_MISMATCH",
+                f"Prod Dt {product_date.isoformat()} differs from Tradate {trade_date.isoformat()}.",
+                row=index,
+                field="Tradate",
+                entity_id=code,
+                fix_hint="Export one end-of-day constituent file whose production and trade dates agree.",
+            )
+            continue
+        as_of = product_date or trade_date or report_date
         if as_of > report_date:
             collector.add("AS_OF_AFTER_REPORT_DATE", f"Row date {as_of.isoformat()} is later than the report date {report_date.isoformat()}.", row=index, field="Prod Dt", entity_id=code, fix_hint="Upload the end-of-day file for the report month.")
             continue
+        incoming_index = str(_direct_value(row, "Idx Cde") or "").strip().upper()
+        if not incoming_index:
+            collector.add(
+                "CONSTITUENT_INDEX_MISSING",
+                "Idx Cde is required on every HSI constituent row.",
+                row=index,
+                field="Idx Cde",
+                entity_id=code,
+                fix_hint="Export the constituent file with its index-code column intact.",
+            )
+            continue
+        index_codes.add(incoming_index)
+        as_of_dates.add(as_of)
         rows.append({
             "security_code": code,
             "ticker": f"{code.zfill(4)}.HK",
@@ -246,11 +273,33 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
     if not rows:
         collector.add("DATASET_EMPTY", "No usable constituent rows were found.", fix_hint="Check that the file is the HSTECH end-of-day constituent export.")
         return {}
+    if len(index_codes) != 1:
+        collector.add(
+            "CONSTITUENT_INDEX_INCONSISTENT",
+            f"The file contains multiple index codes: {', '.join(sorted(index_codes))}.",
+            field="Idx Cde",
+            fix_hint="Upload one index constituent export per file.",
+        )
+    if len(as_of_dates) != 1:
+        collector.add(
+            "CONSTITUENT_AS_OF_INCONSISTENT",
+            "All constituent rows must have the same Prod Dt/Tradate.",
+            field="Prod Dt",
+            fix_hint="Upload one end-of-day constituent export per file.",
+        )
     # The weight total is QC-002's job, not the parser's. It used to be raised here as a WARNING
     # as well, which contradicted the spec (CAL-001: blocking) and put two findings of different
     # severity on the same import record for one fact.
     rows.sort(key=lambda item: (-Decimal(item["weight"]), item["security_code"]))
-    return {"constituents": rows}
+    return {
+        "constituents": rows,
+        "constituent_index_code": next(iter(index_codes)) if len(index_codes) == 1 else None,
+    }
+
+
+def _direct_value(row: dict[str, Any], header: str) -> Any:
+    expected = _normalize_header(header)
+    return next((value for key, value in row.items() if _normalize_header(key) == expected), None)
 
 
 def _text(value: Any) -> str | None:

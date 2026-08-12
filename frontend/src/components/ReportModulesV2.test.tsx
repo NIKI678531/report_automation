@@ -66,32 +66,24 @@ const report: Report = {
 const run = async (work: () => Promise<unknown>) => { await work(); };
 
 describe("report module data responsibilities", () => {
-  it("keeps Historical Performance read-only and automatic", () => {
+  it("keeps Historical Performance upload-free and refreshes automatically", async () => {
+    const refresh = vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
     render(<ReportModule report={report} active="performance" busy={false} run={run} />);
 
     expect(screen.getByText(/loaded from the read-only DA-Report snapshot/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Upload file/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /Refresh/i })).toBeTruthy();
+    await waitFor(() => expect(refresh).toHaveBeenCalledWith("report-1", 4));
   });
 
-  it("shows one merged constituent upload slot", async () => {
-    vi.spyOn(api, "listDatasets").mockResolvedValue([{
-      key: "constituent_performance",
-      title: "Constituent performance",
-      description: "One canonical CSV",
-      required: true,
-      accepts: [".csv"],
-      state: "MISSING",
-      latest_import_id: null,
-      filename: null,
-      rows: 0,
-      blocking: 0,
-      warnings: 0,
-    }]);
-
+  it("shows one unrestricted multi-file constituent drop zone", async () => {
     render(<ReportModule report={report} active="constituents" busy={false} run={run} />);
 
-    await waitFor(() => expect(screen.getByLabelText("constituent_performance data import")).toBeTruthy());
-    expect(screen.getAllByRole("button", { name: /Upload file/i })).toHaveLength(1);
+    expect(screen.getByLabelText("Constituent multi-file import")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Choose files/i })).toBeTruthy();
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.multiple).toBe(true);
+    expect(input.getAttribute("accept")).toBeNull();
   });
 
   it("derives Final Analytics without uploads and renders the sector donut", async () => {

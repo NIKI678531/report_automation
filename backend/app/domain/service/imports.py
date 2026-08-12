@@ -35,6 +35,7 @@ def stage_import(
     content_type: str,
     data: bytes,
     request_id: str,
+    batch_id: str | None = None,
 ) -> tuple[DataImport, bool]:
     """Record one upload as a ``DataImport``.
 
@@ -102,7 +103,7 @@ def stage_import(
             covered = len([row for row in rows if row["security_code"] in active_codes]) if active_codes else 0
             diff.update({"covered": covered, "uncovered": max(len(active_codes) - covered, 0)})
     item = DataImport(
-        report_id=report.id, dataset_type=dataset_type, original_filename=filename,
+        report_id=report.id, batch_id=batch_id, dataset_type=dataset_type, original_filename=filename,
         mime_type=content_type or "application/octet-stream", size_bytes=len(data), checksum=hashlib.sha256(data).hexdigest(),
         parser_version=f"{dataset_type}-mapping-v2", mapping_profile_id=profile.id if profile else None,
         mapping_version=profile.version if profile else None, payload=payload, validation_results=validations,

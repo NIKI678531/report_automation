@@ -318,10 +318,22 @@ def _stage_auto_snapshot(
     product: ProductCatalog,
     request_id: str,
     preserve_constituents: bool,
+    deduplicate: bool = False,
 ) -> DataSnapshot:
     payload = empty_payload(report.report_date)
     active_snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
-    if preserve_constituents and active_snapshot and dataset_present(active_snapshot.payload or {}, "constituent_performance"):
+    active_datasets = ((active_snapshot.payload or {}).get("datasets") or {}) if active_snapshot else {}
+    upload_lineage = any(
+        isinstance(active_datasets.get(key), dict) and active_datasets[key].get("source_type") == "UPLOAD"
+        for key in ("constituent_performance", "index_constituents", "constituent_returns")
+    )
+    if (
+        preserve_constituents
+        and active_snapshot
+        and active_snapshot.lane == Lane.PRODUCTION.value
+        and upload_lineage
+        and dataset_present(active_snapshot.payload or {}, "constituent_performance")
+    ):
         active_payload = active_snapshot.payload or {}
         payload["constituents"] = json.loads(json.dumps(active_payload.get("constituents", [])))
         if active_payload.get("return_periods"):
@@ -361,7 +373,23 @@ def _stage_auto_snapshot(
         if item.get("severity") == "BLOCKING" and item.get("status", "FAILED") != "PASSED"
     ]
     valid = not missing and not blocked
-    has_upload = dataset_present(payload, "constituent_performance")
+    has_upload = any(
+        isinstance((payload.get("datasets") or {}).get(key), dict)
+        and payload["datasets"][key].get("source_type") == "UPLOAD"
+        for key in ("constituent_performance", "index_constituents", "constituent_returns")
+    )
+    payload_checksum = checksum(payload)
+    if (
+        deduplicate
+        and active_snapshot
+        and active_snapshot.lane == Lane.PRODUCTION.value
+        and active_snapshot.checksum == payload_checksum
+        and (active_snapshot.quality_results or []) == results
+    ):
+        audit(db, "snapshot.auto_refresh_unchanged", "snapshot", active_snapshot.id, request_id, {
+            "source_checksum": (fragment.get("source_checksum") or (fragment.get("datasets", {}).get("total_return_series", {}).get("lineage", {}).get("sqlite_checksum"))),
+        })
+        return active_snapshot
     snapshot = DataSnapshot(
         report_id=report.id,
         as_of_date=report.report_date,
@@ -369,7 +397,7 @@ def _stage_auto_snapshot(
         lane=Lane.PRODUCTION.value,
         mapping_version="da-report-monthly-v1",
         status=SnapshotStatus.VALID if valid else SnapshotStatus.PENDING,
-        checksum=checksum(payload),
+        checksum=payload_checksum,
         payload=payload,
         quality_results=results,
     )
@@ -379,20 +407,21 @@ def _stage_auto_snapshot(
     report.active_snapshot_id = snapshot.id
     report.lane = snapshot.lane
     report.status = ReportStatus.DATA_READY if valid else ReportStatus.DRAFT
-    current = latest_document(db, report.id)
-    bound = bind_snapshot(current.content, payload, lane=snapshot.lane)
-    bound["snapshot_id"] = snapshot.id
-    document = ReportDocument(
-        report_id=report.id,
-        version=current.version + 1,
-        snapshot_id=snapshot.id,
-        template_version=report.template_version,
-        language_mode=report.language_mode,
-        content=bound,
-        checksum=checksum(bound),
-    )
-    db.add(document)
-    report.version += 1
+    if not valid:
+        current = latest_document(db, report.id)
+        bound = bind_snapshot(current.content, payload, lane=snapshot.lane)
+        bound["snapshot_id"] = snapshot.id
+        document = ReportDocument(
+            report_id=report.id,
+            version=current.version + 1,
+            snapshot_id=snapshot.id,
+            template_version=report.template_version,
+            language_mode=report.language_mode,
+            content=bound,
+            checksum=checksum(bound),
+        )
+        db.add(document)
+        report.version += 1
     audit(db, "snapshot.auto_refreshed", "snapshot", snapshot.id, request_id, {
         "status": snapshot.status.value,
         "missing_slots": missing,
@@ -400,6 +429,33 @@ def _stage_auto_snapshot(
         "preserved_constituents": has_upload,
     })
     return snapshot
+
+
+def refresh_automatic_data(
+    db: Session,
+    report: Report,
+    expected_version: int,
+    request_id: str,
+) -> tuple[DataSnapshot, bool]:
+    from .calculations import run_calculation
+
+    if report.status == ReportStatus.FINALIZED:
+        raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED", "message": "Create a revision before refreshing data."})
+    if report.version != expected_version:
+        raise HTTPException(status_code=409, detail={
+            "error_code": "VERSION_CONFLICT", "message": "The report changed before automatic data could refresh.",
+            "current_version": report.version,
+        })
+    before_id = report.active_snapshot_id
+    product = resolve_product(db, report.product_code, report.report_date)
+    snapshot = _stage_auto_snapshot(db, report, product, request_id, preserve_constituents=True, deduplicate=True)
+    changed = snapshot.id != before_id
+    db.commit()
+    db.refresh(snapshot)
+    if changed and snapshot.status == SnapshotStatus.VALID:
+        run_calculation(db, report, request_id)
+        db.refresh(snapshot)
+    return snapshot, changed
 
 
 def create_snapshot(db: Session, report: Report, source_policy: str, mapping_version: str, request_id: str) -> DataSnapshot:
@@ -412,10 +468,12 @@ def create_snapshot(db: Session, report: Report, source_policy: str, mapping_ver
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED", "message": "Create a revision before refreshing data."})
     if source_policy == "DA_REPORT_AUTO":
         product = resolve_product(db, report.product_code, report.report_date)
-        snapshot = _stage_auto_snapshot(db, report, product, request_id, preserve_constituents=True)
+        before_id = report.active_snapshot_id
+        snapshot = _stage_auto_snapshot(db, report, product, request_id, preserve_constituents=True, deduplicate=True)
+        changed = snapshot.id != before_id
         db.commit()
         db.refresh(snapshot)
-        if snapshot.status == SnapshotStatus.VALID:
+        if changed and snapshot.status == SnapshotStatus.VALID:
             run_calculation(db, report, request_id)
             db.refresh(snapshot)
         return snapshot
@@ -515,7 +573,7 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
     findings: list[dict] = []
     findings = overlay_slot(base, spec, data_import.payload)
     incoming_index_code = str(data_import.payload.get("constituent_index_code") or "")
-    if data_import.dataset_type == "constituent_performance" and incoming_index_code != report.constituent_index_code:
+    if data_import.dataset_type in {"constituent_performance", "index_constituents"} and incoming_index_code != report.constituent_index_code:
         findings.append({
             "error_code": "CONSTITUENT_INDEX_MISMATCH",
             "severity": "BLOCKING",

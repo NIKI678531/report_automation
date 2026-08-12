@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Calculator, Database, Save, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Calculator, Database, RefreshCw, Save, Sparkles } from "lucide-react";
 import { api, type DatasetSlot, type Report } from "../api";
 import { SectorDonut, sectorSlices, type SectorChartSnapshot } from "../features/analytics/SectorDonut";
 import { CompanyNewsWorkbench } from "../features/news/CompanyNewsWorkbench";
 import { legacyReviewBlocks, ReviewCanvas, type ReviewBlock } from "../features/review/ReviewCanvas";
 import { FOOTNOTE_SECTIONS, reportConstituentsTitle, reportMonthName, reportPageEyebrow, reportProductTicker, type FootnoteSectionKey, type ModuleId } from "../reportModules";
-import { CsvDatasetUpload } from "./CsvDatasetUpload";
+import { MultiFileBatchUpload } from "./MultiFileBatchUpload";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 type JsonRecord = Record<string, unknown>;
@@ -71,10 +71,16 @@ function ReviewModule({ report, busy, run }: Omit<ModuleProps, "active">) {
   return <><ModuleHeading eyebrow={reportPageEyebrow("review", "Free layout")} title={<input className="review-title-input" aria-label="Page 1 review title" value={reviewTitle} maxLength={200} required disabled={frozen} onChange={(event) => setReviewTitle(event.target.value)} />} description="Build the opening page on a controlled 12-column canvas. Drag, resize and edit blocks without changing bound financial facts." actions={<><button disabled={busy || !report.active_snapshot_id || frozen} onClick={() => run(() => api.generateDraft(report.id, version, "Complete the outlook after reviewer confirmation."))}><Sparkles size={16} /> Assisted draft</button><button className="primary" disabled={busy || frozen || !reviewTitle.trim()} onClick={save}><Save size={16} /> Save layout</button></>} /><ReviewCanvas initialBlocks={blocks} disabled={frozen} onChange={setBlocks} /></>;
 }
 
-function PerformanceModule({ report }: Omit<ModuleProps, "active">) {
+function PerformanceModule({ report, busy, run }: Omit<ModuleProps, "active">) {
   const performance = (sectionsOf(report).historical_performance as JsonRecord | undefined) ?? {};
   const data = rows(performance.rows);
-  return <><ModuleHeading eyebrow={reportPageEyebrow("performance", "Automatic data")} title="Historical Performance" description={`Official FUND and ${report.benchmark_code} Total Return series are loaded from the read-only DA-Report snapshot and calculated on the server.`} /><section className="data-surface"><table><thead><tr><th>Instrument</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.name)}><th>{String(row.name)}</th><td>{percent(row.return_1m)}</td><td>{percent(row.return_3m)}</td><td>{percent(row.return_6m)}</td><td>{percent(row.return_ytd)}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section><FormulaStrip title="Total return" formula="Return = TR(end) / TR(start) - 1" detail="The server preserves raw observations and derives every displayed period from the active immutable snapshot." /></>;
+  const autoRefreshStarted = useRef(false);
+  useEffect(() => {
+    if (autoRefreshStarted.current || report.status === "FINALIZED") return;
+    autoRefreshStarted.current = true;
+    void run(() => api.refreshAutomaticData(report.id, report.version));
+  }, [report.id]);
+  return <><ModuleHeading eyebrow={reportPageEyebrow("performance", "Automatic data")} title="Historical Performance" description={`Official FUND and ${report.benchmark_code} Total Return series are loaded from the read-only DA-Report snapshot and calculated on the server.`} actions={<button disabled={busy || report.status === "FINALIZED"} onClick={() => run(() => api.refreshAutomaticData(report.id, report.version))}><RefreshCw size={16} /> Refresh</button>} /><section className="data-surface"><table><thead><tr><th>Instrument</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.name)}><th>{String(row.name)}</th><td>{percent(row.return_1m)}</td><td>{percent(row.return_3m)}</td><td>{percent(row.return_6m)}</td><td>{percent(row.return_ytd)}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section><FormulaStrip title="Total return" formula="Return = TR(end) / TR(start) - 1" detail="The server preserves raw observations and derives every displayed period from the active immutable snapshot." /></>;
 }
 
 function NewsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
@@ -83,7 +89,7 @@ function NewsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
 
 function ConstituentsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
   const data = rows(sectionsOf(report).constituents);
-  return <><ModuleHeading eyebrow={reportPageEyebrow("constituents", "Snapshot data")} title={reportConstituentsTitle(report)} description={`${data.length || "No"} holdings bound to the active immutable snapshot.`} /><CsvDatasetUpload report={report} datasetType="constituent_performance" busy={busy} run={run} allowClear /><section className="data-surface constituent-table"><table><thead><tr><th>Code</th><th>Constituent</th><th>Price</th><th>Weight</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.security_code)}><th><span className="security-code">{String(row.ticker ?? row.security_code)}</span></th><td><strong>{String(row.name_en ?? "")}</strong><small>{String(row.sector ?? "")}</small></td><td>{String(row.currency ?? "")} {Number(row.close_price ?? 0).toFixed(2)}</td><td>{percent(row.weight)}</td><td>{percent(row.return_1m)}</td><td>{percent(row.return_3m)}</td><td>{percent(row.return_6m)}</td><td>{percent(row.return_ytd)}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section></>;
+  return <><ModuleHeading eyebrow={reportPageEyebrow("constituents", "Snapshot data")} title={reportConstituentsTitle(report)} description={`${data.length || "No"} holdings bound to the active immutable snapshot.`} /><MultiFileBatchUpload report={report} busy={busy} run={run} hasCurrentData={data.length > 0} /><section className="data-surface constituent-table"><table><thead><tr><th>Code</th><th>Constituent</th><th>Price</th><th>Weight</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.security_code)}><th><span className="security-code">{String(row.ticker ?? row.security_code)}</span></th><td><strong>{String(row.name_en ?? "")}</strong><small>{String(row.sector ?? "")}</small></td><td>{String(row.currency ?? "")} {Number(row.close_price ?? 0).toFixed(2)}</td><td>{percent(row.weight)}</td><td>{percent(row.return_1m)}</td><td>{percent(row.return_3m)}</td><td>{percent(row.return_6m)}</td><td>{percent(row.return_ytd)}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section></>;
 }
 
 function AnalyticsModule({ report }: Omit<ModuleProps, "active">) {
