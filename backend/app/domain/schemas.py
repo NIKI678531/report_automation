@@ -79,6 +79,7 @@ class ReportRead(BaseModel):
     benchmark_code: str
     report_date: date
     language_mode: str
+    lane: str
     status: ReportStatus
     revision: int
     version: int
@@ -98,7 +99,9 @@ class ReportDetail(ReportRead):
 
 
 class SnapshotCreate(BaseModel):
-    source_policy: Literal["DA_REPORT_AUTO", "CDB_ONLY", "GOLDEN_FIXTURE", "UPLOAD_OVERRIDE"] = "GOLDEN_FIXTURE"
+    # Required on purpose: a default here made GOLDEN_FIXTURE — transcribed data on the TESTING
+    # lane — the answer to a request that never named a source.
+    source_policy: Literal["DA_REPORT_AUTO", "CDB_ONLY", "GOLDEN_FIXTURE", "UPLOAD_OVERRIDE"]
     mapping_version: str = "hstech-v1"
 
 
@@ -108,6 +111,7 @@ class SnapshotRead(BaseModel):
     report_id: str
     as_of_date: date
     source_policy: str
+    lane: str
     mapping_version: str
     status: SnapshotStatus
     checksum: str | None

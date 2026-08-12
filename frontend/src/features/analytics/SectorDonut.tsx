@@ -1,69 +1,60 @@
-interface SectorRow {
-  code?: unknown;
-  sector?: unknown;
-  weight?: unknown;
-}
-
-interface SectorSlice {
+interface SectorSeriesEntry {
   code: string;
   sector: string;
-  weight: number;
+  displayValue: string;
   share: number;
   offset: number;
-  colorIndex: number;
+  colorClass: string;
 }
 
-interface SectorChartSnapshot {
-  slices?: unknown;
+export interface SectorChartSnapshot {
+  series?: unknown;
+  alt_text?: unknown;
 }
 
-function formatPercent(value: number): string {
-  return new Intl.NumberFormat("en-HK", {
-    style: "percent",
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  }).format(value);
-}
+/**
+ * Product-UI colour classes, bound to the industry rather than to its position in the list.
+ * The backend hands us a `color_token`; this maps it onto the design-system swatch classes in
+ * `styles.css`. It is deliberately *not* the report output palette — report tokens
+ * (`backend/app/rendering/tokens/`) and the product design system are separate contracts.
+ */
+const INDUSTRY_COLOR_CLASS: Record<string, number> = {
+  "industry.hsics.23": 1,
+  "industry.hsics.70": 2,
+  "industry.hsics.28": 3,
+  "industry.hsics.10": 4,
+};
 
-export function sectorSlices(sectors: SectorRow[], chart?: SectorChartSnapshot): SectorSlice[] {
-  if (Array.isArray(chart?.slices)) {
-    const snapshot = chart.slices.flatMap((value, index) => {
-      if (!value || typeof value !== "object") return [];
-      const row = value as Record<string, unknown>;
-      const weight = Number(row.weight);
-      const startAngle = Number(row.start_angle);
-      const endAngle = Number(row.end_angle);
-      if (!Number.isFinite(weight) || weight <= 0 || !Number.isFinite(startAngle) || !Number.isFinite(endAngle) || endAngle <= startAngle) return [];
-      return [{
-        code: String(row.code ?? row.label ?? ""),
-        sector: String(row.label ?? ""),
-        weight,
-        share: (endAngle - startAngle) / 360,
-        offset: startAngle / 360,
-        colorIndex: Number.isInteger(Number(row.color_index)) ? Number(row.color_index) : index,
-      }];
-    });
-    if (snapshot.length) return snapshot;
-  }
-  const rows = sectors.flatMap((row) => {
-    const weight = Number(row.weight);
-    return Number.isFinite(weight) && weight > 0
-      ? [{ code: String(row.code ?? row.sector ?? ""), sector: String(row.sector ?? ""), weight }]
-      : [];
-  });
-  const total = rows.reduce((sum, row) => sum + row.weight, 0);
-  let offset = 0;
-  return rows.map((row, index) => {
-    const share = row.weight / total;
-    const slice = { ...row, share, offset, colorIndex: index };
-    offset += share;
-    return slice;
+/**
+ * Read the `industry_breakdown` chart snapshot. Order, the zero-weight filter, the percentage
+ * string and the colour identity are all decided by the backend; the browser only turns angles
+ * into stroke geometry. It must never recompute a number that appears on screen.
+ */
+export function sectorSlices(chart?: SectorChartSnapshot): SectorSeriesEntry[] {
+  if (!Array.isArray(chart?.series)) return [];
+  return chart.series.flatMap((value, index) => {
+    if (!value || typeof value !== "object") return [];
+    const row = value as Record<string, unknown>;
+    const startAngle = Number(row.start_angle);
+    const endAngle = Number(row.end_angle);
+    if (!Number.isFinite(startAngle) || !Number.isFinite(endAngle) || endAngle <= startAngle) return [];
+    const sortOrder = Number.isFinite(Number(row.sort_order)) ? Number(row.sort_order) : index + 1;
+    const token = String(row.color_token ?? "");
+    return [{
+      code: String(row.code ?? row.label ?? ""),
+      sector: String(row.label ?? ""),
+      displayValue: String(row.display_value ?? ""),
+      share: (endAngle - startAngle) / 360,
+      offset: startAngle / 360,
+      colorClass: `sector-color-${INDUSTRY_COLOR_CLASS[token] ?? ((sortOrder - 1) % 8) + 1}`,
+    }];
   });
 }
 
-export function SectorDonut({ sectors, chart }: { sectors: SectorRow[]; chart?: SectorChartSnapshot }) {
-  const slices = sectorSlices(sectors, chart);
-  const description = slices.map((slice) => `${slice.sector} ${formatPercent(slice.share)}`).join(", ");
+export function SectorDonut({ chart }: { chart?: SectorChartSnapshot }) {
+  const slices = sectorSlices(chart);
+  const description = String(chart?.alt_text ?? "")
+    || slices.map((slice) => `${slice.sector} ${slice.displayValue}`).join(", ");
 
   return <figure className="sector-donut-figure">
     <svg className="sector-donut" viewBox="0 0 120 120" role="img" aria-labelledby="sector-donut-title sector-donut-desc">
@@ -72,7 +63,7 @@ export function SectorDonut({ sectors, chart }: { sectors: SectorRow[]; chart?: 
       <circle className="sector-donut-track" cx="60" cy="60" r="44" pathLength="100" />
       {slices.map((slice, index) => <circle
         key={`${slice.code}-${index}`}
-        className={`sector-donut-slice sector-color-${slice.colorIndex % 8 + 1}`}
+        className={`sector-donut-slice ${slice.colorClass}`}
         cx="60"
         cy="60"
         r="44"
@@ -83,9 +74,9 @@ export function SectorDonut({ sectors, chart }: { sectors: SectorRow[]; chart?: 
     </svg>
     <figcaption className="sector-donut-legend">
       {slices.map((slice, index) => <span key={`${slice.code}-legend-${index}`}>
-        <i className={`sector-swatch sector-color-${slice.colorIndex % 8 + 1}`} aria-hidden="true" />
+        <i className={`sector-swatch ${slice.colorClass}`} aria-hidden="true" />
         <b>{slice.sector}</b>
-        <strong>{formatPercent(slice.weight)}</strong>
+        <strong>{slice.displayValue}</strong>
       </span>)}
     </figcaption>
   </figure>;

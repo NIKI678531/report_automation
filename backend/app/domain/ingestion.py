@@ -246,9 +246,9 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
     if not rows:
         collector.add("DATASET_EMPTY", "No usable constituent rows were found.", fix_hint="Check that the file is the HSTECH end-of-day constituent export.")
         return {}
-    total = sum((Decimal(row["weight"]) for row in rows), Decimal("0"))
-    if abs(total - Decimal("1")) > Decimal("0.0001"):
-        collector.add("WEIGHT_SUM_OFF", f"Weights total {total:.6f} instead of 1.000000.", severity=WARNING, field="Pct Idx Wgt", fix_hint="Confirm the export covers the full index and uses percent weights.")
+    # The weight total is QC-002's job, not the parser's. It used to be raised here as a WARNING
+    # as well, which contradicted the spec (CAL-001: blocking) and put two findings of different
+    # severity on the same import record for one fact.
     rows.sort(key=lambda item: (-Decimal(item["weight"]), item["security_code"]))
     return {"constituents": rows}
 
@@ -569,15 +569,7 @@ def parse_constituent_performance(
             "constituent_source and return_source must each name one authoritative source for the complete file.",
             fix_hint="Split mixed sources into separately reviewed files and upload the one effective source.",
         )
-    total = sum((Decimal(row["weight"]) for row in rows), Decimal("0"))
-    if abs(total - Decimal("1")) > Decimal("0.0001"):
-        collector.add(
-            "WEIGHT_SUM_OFF",
-            f"Weights total {total:.6f} instead of 1.000000.",
-            severity=WARNING,
-            field="weight_pct",
-            fix_hint="Confirm the file covers the full index and uses percent weights.",
-        )
+    # See the note in the index-constituent parser: the weight total belongs to QC-002 alone.
     rows.sort(key=lambda item: (-Decimal(item["weight"]), item["security_code"]))
     return {
         "constituents": rows,

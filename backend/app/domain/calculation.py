@@ -7,6 +7,29 @@ from typing import Iterable
 
 from .validation import BLOCKING, FAILED, PASSED, WARNING
 
+SECTOR_CHART_FORMULA_VERSION = "sector-weight-v1"
+
+# The versioned display_format_profile from the rules document §6. Values are rounded
+# ROUND_HALF_UP at the presentation boundary only; `raw_value` keeps full precision and a
+# `display_value` never flows back into a calculation.
+DISPLAY_FORMAT_V1 = {
+    "sector_weight_places": 1,
+    "aum_million_places": 2,
+    "turnover_million_places": 0,
+}
+
+# Versioned template configuration, keyed by `formula_profile` (rules document §4.3: "legend
+# order and colour come from versioned template configuration, not from database order or a
+# hard-coded calculation"). Declaring the order keeps the legend stable month to month instead
+# of reshuffling whenever two industries swap rank. The reference output orders the HSTECH
+# breakdown Consumer Discretionary -> Information Technology -> Healthcare -> Industrials,
+# which is *not* weight-descending: Information Technology carries the larger weight.
+# Industries outside the list fall back to weight-descending with an ascending-code
+# tie-breaker (SORT-001), so a newly mapped industry still lands somewhere deterministic.
+INDUSTRY_DISPLAY_ORDER = {
+    "hstech-2026.1": ["23", "70", "28", "10"],
+}
+
 
 class CalculationError(ValueError):
     """A deterministic calculation cannot proceed because its inputs are incomplete.
@@ -106,15 +129,23 @@ def display_percent(value: Decimal | float | int | None, places: int = 2) -> str
     return str((Decimal(str(value)) * Decimal("100")).quantize(quant, rounding=ROUND_HALF_UP))
 
 
-def stable_rank(rows: Iterable[dict], key: str, descending: bool = True) -> list[dict]:
-    return sorted(rows, key=lambda row: ((-Decimal(str(row[key]))) if descending else Decimal(str(row[key])), str(row.get("security_code", ""))))
+def sector_breakdown(rows: Iterable[dict], display_order: list[str] | None = None) -> list[dict]:
+    """Aggregate constituent weight by effective top-level industry.
 
+    ``display_order`` is the versioned template configuration; industries it does not name are
+    ranked weight-descending with an ascending-code tie-breaker (SORT-001). Order used to fall
+    out of ``sorted(totals.items())``, which sorted by HSICS code and produced a legend the
+    reference output does not use.
 
-def sector_breakdown(rows: Iterable[dict]) -> list[dict]:
+    Only the report-date-effective mapping is accepted. A raw source ``sector`` string used to
+    satisfy this function, which meant a chart could be aggregated on a taxonomy assignment that
+    QC-003 had already refused.
+    """
+    ranking = list(display_order or [])
     totals: dict[tuple[str, str], Decimal] = {}
     for row in rows:
-        code = str(row.get("effective_industry_code") or row.get("sector") or "")
-        label = str(row.get("effective_industry_name") or row.get("sector") or "")
+        code = str(row.get("effective_industry_code") or "")
+        label = str(row.get("effective_industry_name") or "")
         if not code or not label:
             raise CalculationError(
                 "INDUSTRY_MAPPING_MISSING",
@@ -125,34 +156,87 @@ def sector_breakdown(rows: Iterable[dict]) -> list[dict]:
             )
         key = (code, label)
         totals[key] = totals.get(key, Decimal("0")) + Decimal(str(row["weight"]))
-    return [{"code": key[0], "sector": key[1], "weight": str(value)} for key, value in sorted(totals.items())]
+    def rank(item: tuple[tuple[str, str], Decimal]) -> tuple[int, int, Decimal, str]:
+        code = item[0][0]
+        configured = ranking.index(code) if code in ranking else len(ranking)
+        return (0 if code in ranking else 1, configured, -item[1], code)
+
+    return [
+        {"code": key[0], "sector": key[1], "weight": str(value)}
+        for key, value in sorted(totals.items(), key=rank)
+    ]
 
 
-def sector_chart_snapshot(sectors: list[dict]) -> dict:
-    total = sum((Decimal(str(row["weight"])) for row in sectors), Decimal("0"))
+def sector_chart_snapshot(sectors: list[dict], payload: dict | None = None) -> dict:
+    """The `industry_breakdown` chart snapshot defined by the rules document §4.3.
+
+    Structured data, never a screenshot. Every value a renderer needs is resolved here:
+    ordering, the zero-weight filter, the display string and a stable colour token. The
+    renderer only lays the series out — it must not regroup, re-sort or recompute.
+    """
+    payload = payload or {}
+    master = payload.get("industry_master") or {}
+    places = DISPLAY_FORMAT_V1["sector_weight_places"]
+    # Zero-weight industries never reach the chart (rules document §4.3). This filter used to
+    # live in the renderer, where HTML and DOCX each applied their own version of it.
+    positive = [row for row in sectors if Decimal(str(row["weight"])) > 0]
+    source = json.dumps(sectors, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    snapshot = {
+        "schema_version": 2,
+        "chart_code": "industry_breakdown",
+        "chart_type": "donut",
+        "snapshot_id": str(payload.get("snapshot_id") or ""),
+        "snapshot_dataset_ids": _chart_dataset_ids(payload),
+        "formula_version": str(payload.get("formula_version") or SECTOR_CHART_FORMULA_VERSION),
+        "mapping_version": str(payload.get("mapping_version") or ""),
+        "taxonomy": str(master.get("taxonomy") or ""),
+        "taxonomy_version": str(master.get("version") or ""),
+        "as_of_date": str(payload.get("as_of_date") or ""),
+        "series": [],
+        "input_checksum": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "alt_text": "",
+    }
+    total = sum((Decimal(str(row["weight"])) for row in positive), Decimal("0"))
     if total <= 0:
-        return {"schema_version": 1, "chart_type": "donut", "slices": [], "input_checksum": hashlib.sha256(b"[]").hexdigest()}
+        return snapshot
+
     cursor = Decimal("0")
-    slices = []
-    for index, row in enumerate(sectors):
+    for index, row in enumerate(positive):
+        weight = Decimal(str(row["weight"]))
+        code = str(row.get("code") or row.get("sector") or "")
         start = cursor
-        cursor += Decimal(str(row["weight"])) / total * Decimal("360")
-        end = Decimal("360") if index == len(sectors) - 1 else cursor
-        slices.append({
-            "code": str(row.get("code") or row.get("sector") or ""),
+        cursor += weight / total * Decimal("360")
+        end = Decimal("360") if index == len(positive) - 1 else cursor
+        snapshot["series"].append({
+            "code": code,
             "label": str(row.get("sector") or ""),
-            "weight": str(row["weight"]),
+            "raw_value": str(weight),
+            "unit": "RATIO",
+            "display_value": f"{display_percent(weight, places)}%",
+            "sort_order": index + 1,
+            # Bound to the industry, not to the position in the list. A positional index made
+            # an industry change colour whenever the constituent set changed.
+            "color_token": f"industry.hsics.{code}",
             "start_angle": str(start),
             "end_angle": str(end),
-            "color_index": index,
         })
-    source = json.dumps(sectors, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-    return {
-        "schema_version": 1,
-        "chart_type": "donut",
-        "slices": slices,
-        "input_checksum": hashlib.sha256(source.encode("utf-8")).hexdigest(),
-    }
+    summary = ", ".join(f"{row['label']} {row['display_value']}" for row in snapshot["series"])
+    snapshot["alt_text"] = f"Index sector breakdown: {summary}"
+    return snapshot
+
+
+def _chart_dataset_ids(payload: dict) -> list[str]:
+    """Persisted SnapshotDataset ids behind the chart, when the caller knows them.
+
+    ``calculate_snapshot`` stays free of database access, so ``run_calculation`` seeds
+    ``snapshot_dataset_ids`` on the payload. Direct callers get the logical types instead of a
+    fabricated id.
+    """
+    known = payload.get("snapshot_dataset_ids") or {}
+    return sorted(
+        str(known.get(dataset_type) or dataset_type)
+        for dataset_type in ("constituent_snapshot", "industry_master")
+    )
 
 
 def trading_days(payload: dict) -> set[str]:
@@ -185,8 +269,33 @@ def _turnover_days(fund_kpis: Iterable[dict], expected_days: set[str]) -> set[st
     return {str(row.get("metric_date")) for row in _turnover_rows(fund_kpis, expected_days)}
 
 
-def quality_checks(payload: dict, expected_constituent_count: int | None = None) -> list[dict]:
-    """Deterministic snapshot quality gate.
+# Checks that are meaningful on a freshly parsed *single* dataset, before it is composed into a
+# snapshot. Anything requiring cross-dataset context is deliberately absent: QC-003 needs the
+# report-date industry master, QC-006/QC-007 need derived history and footnotes, and the KPI
+# checks need the report date, so running them here would fail every honest upload.
+IMPORT_CHECK_SETS = {
+    "constituent_performance": ("QC-001", "QC-002", "QC-004"),
+    "index_constituents": ("QC-001", "QC-002", "QC-004"),
+    "total_return_series": ("QC-005",),
+}
+
+
+def import_checks(payload: dict, dataset_type: str) -> list[dict]:
+    """Quality gate for one parsed upload, before it becomes part of a snapshot.
+
+    Separated from :func:`snapshot_checks` because the two were being fed incompatible payload
+    shapes through a single entry point: the import path passes a parsed single-dataset payload
+    and the snapshot path passes the derived, composed payload. Sharing one function meant the
+    import path silently skipped every check whose data was not present yet.
+    """
+    selected = IMPORT_CHECK_SETS.get(dataset_type)
+    if not selected:
+        return []
+    return [item for item in snapshot_checks(payload) if item["check_id"] in selected]
+
+
+def snapshot_checks(payload: dict, expected_constituent_count: int | None = None) -> list[dict]:
+    """Deterministic quality gate for a composed snapshot payload.
 
     Returns the canonical finding shape declared in ``validation.py`` (``check_id / severity /
     status / message / fix_hint``) plus the ``actual`` and ``threshold`` evidence that makes a
@@ -348,7 +457,9 @@ def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[
 
     datasets = payload.get("datasets", {})
     constituent_sources = []
-    for dataset_type in ("constituent_performance", "index_constituents", "constituents", "final_analytics"):
+    # Only real `ingestion.REGISTRY` slots. "constituents" and "final_analytics" used to be
+    # listed here as well; neither has ever been a dataset type, so they could never match.
+    for dataset_type in ("constituent_performance", "index_constituents"):
         source = datasets.get(dataset_type)
         if isinstance(source, dict):
             constituent_sources.append(str(source.get("filename") or source.get("import_id") or dataset_type))
@@ -394,8 +505,8 @@ def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
         bottom_selected,
         key=lambda row: (-Decimal(str(row["return_1m"])), -Decimal(str(row["weight"])), str(row["security_code"])),
     )
-    sectors = sector_breakdown(rows)
-    sector_chart = sector_chart_snapshot(sectors)
+    sectors = sector_breakdown(rows, INDUSTRY_DISPLAY_ORDER.get(str(payload.get("formula_version") or "")))
+    sector_chart = sector_chart_snapshot(sectors, payload)
     # Derived once, above the `if fund_kpis:` branch. These used to be bound only inside that
     # branch while the metrics block below read them unconditionally, so any snapshot carrying a
     # trading calendar but no fund KPIs raised UnboundLocalError instead of reporting 0 coverage.
@@ -413,15 +524,25 @@ def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
         portfolio = []
         if aum_rows:
             row = aum_rows[0]
-            portfolio.append({"label": f"Asset Under Management ({row['currency']})^", "value": f"{Decimal(str(row['value'])):,.2f} {row['unit']}"})
+            places = DISPLAY_FORMAT_V1["aum_million_places"]
+            portfolio.append({"label": f"Asset Under Management ({row['currency']})^", "value": f"{Decimal(str(row['value'])):,.{places}f} {row['unit']}"})
         if turnover_rows:
             row = turnover_rows[-1]
-            portfolio.append({"label": f"Average Daily Turnover ({row['currency']})^^", "value": f"{turnover_average:,.2f} {row['unit']}"})
+            # §6: the turnover million value carries no decimals. It used to reuse the AUM
+            # format and printed "12,882.00 million" where the reference prints "12,882 million".
+            places = DISPLAY_FORMAT_V1["turnover_million_places"]
+            rounded = turnover_average.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+            portfolio.append({"label": f"Average Daily Turnover ({row['currency']})^^", "value": f"{rounded:,.{places}f} {row['unit']}"})
         portfolio.append({"label": "Number of holdings", "value": str(sum(1 for row in rows if Decimal(str(row["weight"])) > 0))})
     else:
-        portfolio = payload.get("analytics", {}).get("portfolio", [
+        # Only what the constituent set alone can support. This used to fall back to
+        # `payload["analytics"]["portfolio"]` — copying a pre-formatted answer out of the input and
+        # presenting it as a calculated result. `fund_kpi_daily` is a required slot, so a snapshot
+        # without it is already incomplete and reports the gap as SNAPSHOT_INCOMPLETE; the missing
+        # AUM and turnover rows now simply do not appear.
+        portfolio = [
             {"label": "Number of holdings", "value": str(sum(1 for row in rows if Decimal(str(row["weight"])) > 0))}
-        ])
+        ]
     analytics = {
         "top10": [{"issuer": row["name_en"], "weight": row["weight"], "security_code": row["security_code"]} for row in ranked_weight[:10]],
         "sectors": sectors,

@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Calculator, Database, Save, Sparkles } from "lucide-react";
 import { api, type DatasetSlot, type Report } from "../api";
-import { SectorDonut } from "../features/analytics/SectorDonut";
+import { SectorDonut, sectorSlices, type SectorChartSnapshot } from "../features/analytics/SectorDonut";
 import { CompanyNewsWorkbench } from "../features/news/CompanyNewsWorkbench";
 import { legacyReviewBlocks, ReviewCanvas, type ReviewBlock } from "../features/review/ReviewCanvas";
-import { reportConstituentsTitle, reportMonthName, reportPageEyebrow, reportProductTicker, type ModuleId } from "../reportModules";
+import { FOOTNOTE_SECTIONS, reportConstituentsTitle, reportMonthName, reportPageEyebrow, reportProductTicker, type FootnoteSectionKey, type ModuleId } from "../reportModules";
 import { CsvDatasetUpload } from "./CsvDatasetUpload";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
@@ -39,7 +39,7 @@ export function ReportModule({ report, active, busy, run }: ModuleProps) {
   if (active === "news") return <NewsModule report={report} busy={busy} run={run} />;
   if (active === "constituents") return <ConstituentsModule report={report} busy={busy} run={run} />;
   if (active === "analytics") return <AnalyticsModule report={report} busy={busy} run={run} />;
-  return <FootnotesModule report={report} />;
+  return <FootnotesModule report={report} busy={busy} run={run} />;
 }
 
 function ReviewModule({ report, busy, run }: Omit<ModuleProps, "active">) {
@@ -88,11 +88,12 @@ function ConstituentsModule({ report, busy, run }: Omit<ModuleProps, "active">) 
 
 function AnalyticsModule({ report }: Omit<ModuleProps, "active">) {
   const analytics = (sectionsOf(report).analytics as JsonRecord | undefined) ?? {};
-  const top10 = rows(analytics.top10); const sectors = rows(analytics.sectors); const top = rows(analytics.top); const bottom = rows(analytics.bottom); const portfolio = rows(analytics.portfolio);
-  const sectorChart = analytics.sector_chart as { slices?: unknown } | undefined;
+  const top10 = rows(analytics.top10); const top = rows(analytics.top); const bottom = rows(analytics.bottom); const portfolio = rows(analytics.portfolio);
+  const sectorChart = analytics.sector_chart as SectorChartSnapshot | undefined;
+  const sectorSeries = sectorSlices(sectorChart);
   const monthName = reportMonthName(report);
   const productTicker = reportProductTicker(report);
-  return <><ModuleHeading eyebrow={reportPageEyebrow("analytics", "Calculated outputs")} title="Final Analytics" description="Derived by the backend from the active constituent snapshot; fund KPI, calendar and event observations are loaded automatically." /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title="Top 10 Index Constituents" /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{String(row.issuer)}</th><td>{percent(row.weight)}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section"><SectionTitle index="02" title="Index Sectors Breakdown" />{sectors.length ? <SectorDonut sectors={sectors} chart={sectorChart} /> : <EmptyData />}</section><section className="analytics-section"><SectionTitle index="03" title={`Performers in ${monthName}`} /><div className="performer-columns"><PerformerList title="Top" data={top} /><PerformerList title="Bottom" data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={`${productTicker} Portfolio Analysis`} /><dl className="portfolio-list">{portfolio.map((row) => <div key={String(row.label)}><dt>{String(row.label)}</dt><dd>{String(row.value)}</dd></div>)}</dl>{!portfolio.length && <EmptyData />}</section></div><FormulaStrip title="Analytics calculation set" formula="Weight ranking · HSICS aggregation · 1M performer ranking" detail="Every output is recalculated automatically when the active constituent snapshot becomes valid." /></>;
+  return <><ModuleHeading eyebrow={reportPageEyebrow("analytics", "Calculated outputs")} title="Final Analytics" description="Derived by the backend from the active constituent snapshot; fund KPI, calendar and event observations are loaded automatically." /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title="Top 10 Index Constituents" /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{String(row.issuer)}</th><td>{percent(row.weight)}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section"><SectionTitle index="02" title="Index Sectors Breakdown" />{sectorSeries.length ? <SectorDonut chart={sectorChart} /> : <EmptyData />}</section><section className="analytics-section"><SectionTitle index="03" title={`Performers in ${monthName}`} /><div className="performer-columns"><PerformerList title="Top" data={top} /><PerformerList title="Bottom" data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={`${productTicker} Portfolio Analysis`} /><dl className="portfolio-list">{portfolio.map((row) => <div key={String(row.label)}><dt>{String(row.label)}</dt><dd>{String(row.value)}</dd></div>)}</dl>{!portfolio.length && <EmptyData />}</section></div><FormulaStrip title="Analytics calculation set" formula="Weight ranking · HSICS aggregation · 1M performer ranking" detail="Every output is recalculated automatically when the active constituent snapshot becomes valid." /></>;
 }
 
 function IndustryMasterStatus({ report }: { report: Report }) {
@@ -107,9 +108,34 @@ function IndustryMasterStatus({ report }: { report: Report }) {
 function SectionTitle({ index, title }: { index: string; title: string }) { return <div className="section-title"><span>{index}</span><h3>{title}</h3></div>; }
 function PerformerList({ title, data }: { title: string; data: JsonRecord[] }) { return <div><h4>{title}</h4>{data.map((row, index) => <article key={`${String(row.issuer)}-${index}`}><span>{index + 1}</span><strong>{String(row.issuer)}</strong><em>{percent(row.return)}</em></article>)}</div>; }
 
-function FootnotesModule({ report }: { report: Report }) {
-  const entries = Object.entries((sectionsOf(report).footnotes as JsonRecord | undefined) ?? {});
-  return <><ModuleHeading eyebrow={reportPageEyebrow("footnotes", "System-bound disclosures")} title="Footnotes & Disclosures" description="Review source dates, formula references and required legal text before finalization." /><section className="footnote-list">{entries.map(([key, value]) => <article key={key}><span>{key.replaceAll("_", " ")}</span><p>{String(value)}</p><div>Bound to document v{report.latest_document?.version ?? 1}</div></article>)}</section></>;
+function footnotesOf(report: Report): Record<FootnoteSectionKey, string> {
+  const stored = (sectionsOf(report).footnotes as JsonRecord | undefined) ?? {};
+  return Object.fromEntries(FOOTNOTE_SECTIONS.map(({ key }) => [key, typeof stored[key] === "string" ? stored[key] : ""])) as Record<FootnoteSectionKey, string>;
+}
+
+function FootnotesModule({ report, busy, run }: Omit<ModuleProps, "active">) {
+  const version = report.latest_document?.version ?? 1;
+  const content = report.latest_document?.content as JsonRecord | undefined;
+  const [footnotes, setFootnotes] = useState(() => footnotesOf(report));
+  useEffect(() => setFootnotes(footnotesOf(report)), [report.id, version]);
+  const frozen = report.status === "FINALIZED";
+  const save = () => run(async () => {
+    const next = structuredClone(content ?? {}) as JsonRecord;
+    const sections = next.sections as JsonRecord;
+    const stored = (sections.footnotes as JsonRecord | undefined) ?? {};
+    sections.footnotes = { ...stored, ...footnotes };
+    await api.saveDocument(report.id, version, next);
+  });
+  return <>
+    <ModuleHeading eyebrow={reportPageEyebrow("footnotes", "Free layout")} title="Footnotes & Disclosures" description="Edit the three disclosures below. Each field keeps its source module binding and uses only the current product report data." actions={<button className="primary" disabled={busy || frozen} onClick={save}><Save size={16} /> Save disclosures</button>} />
+    <section className="footnote-list">
+      {FOOTNOTE_SECTIONS.map(({ key, label, boundTo }) => <article key={key}>
+        <span>{label}</span>
+        <textarea aria-label={`${label} footnote`} value={footnotes[key]} maxLength={10_000} rows={4} disabled={frozen} onChange={(event) => setFootnotes((current) => ({ ...current, [key]: event.target.value }))} />
+        <div>Bound to {boundTo} · document v{version}</div>
+      </article>)}
+    </section>
+  </>;
 }
 
 function FormulaStrip({ title, formula, detail }: { title: string; formula: string; detail: string }) { return <aside className="formula-strip"><Calculator size={20} /><div><span>{title}</span><strong>{formula}</strong><small>{detail}</small></div></aside>; }

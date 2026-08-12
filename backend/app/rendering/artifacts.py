@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.core.storage import storage
 from app.domain.document import render_content_manifest, review_display_title
 from app.domain.models import RenderArtifact, Report, ReportDocument
-from .html import pct, price, render_html
+from .html import pct, price, render_html, testing_banner
 
 
 MIME = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
@@ -30,12 +30,18 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _page_setup(section, page_number: int) -> None:
+def _page_setup(section, page_number: int, banner: dict | None = None) -> None:
     section.page_width, section.page_height = Cm(21), Cm(29.7)
     section.top_margin, section.right_margin, section.bottom_margin, section.left_margin = Cm(0.7), Cm(1), Cm(1.5), Cm(1)
     header = section.header.paragraphs[0]
     header.text = "Monthly Commentary"
     header.style = "Header"
+    if banner:
+        # DOCX has no cheap full-page watermark, so the lane rides in the running header, which
+        # repeats on every page and survives printing just as the HTML/PDF watermark does.
+        mark = header.add_run(f"    {banner['label']}")
+        mark.bold = True
+        mark.font.color.rgb = RGBColor.from_string(str(banner["color"]).lstrip("#").upper())
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     footer.add_run().add_picture(str(Path(__file__).parent / "static" / "csop-logo.png"), width=Cm(4.4))
@@ -96,6 +102,7 @@ def _plain_html(value: str) -> str:
 
 def render_docx(report: Report, content: dict, destination: Path) -> None:
     sections = content["sections"]
+    banner = testing_banner(content)
     document = Document()
     styles = document.styles
     styles["Normal"].font.name = "Calibri"
@@ -103,7 +110,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     for style_name in ["Title", "Heading 1", "Heading 2"]:
         styles[style_name].font.name = "Calibri"
         styles[style_name].font.color.rgb = RGBColor(34, 50, 127)
-    _page_setup(document.sections[0], 1)
+    _page_setup(document.sections[0], 1, banner)
     document.add_heading(report.product_name, 0)
     review = sections["month_in_review"]
     enable_review_layout = content.get("template_version") != "3033-v1"
@@ -137,7 +144,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _table(document, ["", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[x["name"], pct(x["return_1m"]), pct(x["return_3m"]), pct(x["return_6m"]), pct(x["return_ytd"])] for x in history])
     document.add_paragraph(sections["footnotes"].get("historical", ""), style="Caption")
 
-    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 2)
+    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 2, banner)
     document.add_heading("Company News", 1)
     for item in sections["company_news"]:
         paragraph = document.add_paragraph(style="List Bullet")
@@ -148,7 +155,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
             paragraph.add_run("\n" + metadata)
         paragraph.add_run("\n" + item["summary"])
 
-    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 3)
+    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 3, banner)
     heading = document.add_heading(f"The Performance of {getattr(report, 'constituent_index_code', report.benchmark_code)} Constituents", 1)
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
     document.add_paragraph(f"(*Next Rebalancing Date: {content.get('next_rebalancing_date') or 'N/A'})").alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -156,12 +163,15 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _table(document, ["Stock Code", "Stock Name", "Closing Price (HKD)", "Weighting (%)", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[x["security_code"], x["name_en"], price(x["close_price"]), pct(x["weight"]), pct(x["return_1m"]), pct(x["return_3m"]), pct(x["return_6m"]), pct(x["return_ytd"])] for x in constituents], blue_first=True)
     document.add_paragraph(sections["footnotes"].get("constituents", ""), style="Caption")
 
-    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 4)
+    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 4, banner)
     analytics = sections["analytics"]
     document.add_heading("Top 10 Index Constituents* (%)", 1)
     _table(document, ["Issuer", "Weight (%)"], [[x["issuer"], pct(x["weight"])] for x in analytics["top10"]])
     document.add_heading("Index Sectors Breakdown*", 1)
-    _table(document, ["Sector", "Weight (%)"], [[x["sector"], pct(x["weight"])] for x in analytics["sectors"]])
+    # Same chart snapshot the HTML/PDF donut reads, so the three formats can never drift apart
+    # on order or precision. `display_value` already carries the "%" sign.
+    sector_series = (analytics.get("sector_chart") or {}).get("series") or []
+    _table(document, ["Sector", "Weight"], [[x["label"], x["display_value"]] for x in sector_series])
     document.add_heading(f"Top Performers in {content['month_name']}", 1)
     _table(document, ["Issuer", "Return (%)"], [[x["issuer"], pct(x["return"])] for x in analytics["top"]])
     document.add_heading(f"Bottom Performers in {content['month_name']}", 1)
@@ -177,7 +187,10 @@ def build_artifact(db: Session, report: Report, document: ReportDocument, format
         raise ValueError(f"Unsupported format: {format_name}")
     directory = settings.output_root / format_name
     directory.mkdir(parents=True, exist_ok=True)
-    destination = directory / f"{report.product_code}_{report.report_date.isoformat()}_v{document.version}.{format_name}"
+    # The lane is part of the file's identity, not only of its contents: an artifact copied out of
+    # the tool loses its database row but keeps its name.
+    lane_prefix = "TESTING-" if str(document.content.get("lane", "PRODUCTION")) == "TESTING" else ""
+    destination = directory / f"{lane_prefix}{report.product_code}_{report.report_date.isoformat()}_v{document.version}.{format_name}"
     html = render_html(report, document.content)
     if format_name == "html":
         destination.write_text(html, encoding="utf-8")

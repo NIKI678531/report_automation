@@ -27,11 +27,29 @@
     "paper": "#ffffff",
     "muted": "#666666"
   },
+  "testingBanner": {
+    "label": "TESTING DATA - NOT FOR DISTRIBUTION",
+    "watermark": "TESTING",
+    "color": "#c45f5f",
+    "opacity": 0.12,
+    "watermarkPt": 84,
+    "chipPt": 7,
+    "rotationDeg": -28
+  },
   "chart": {
     "sectorDonut": {
       "viewBoxSize": 120,
-      "outerRadius": 52,
-      "innerRadius": 30,
+      "outerRadius": 46,
+      "innerRadius": 26,
+      "labelOutsideRadius": 46,
+      "labelInsideThresholdRatio": 0.06,
+      "boxWidthMm": 72,
+      "colorTokens": {
+        "industry.hsics.23": "#5186bd",
+        "industry.hsics.70": "#223a8b",
+        "industry.hsics.28": "#00b0f0",
+        "industry.hsics.10": "#8064a2"
+      },
       "palette": [
         "#5186bd",
         "#223a8b",

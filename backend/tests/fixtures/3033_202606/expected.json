@@ -1,0 +1,137 @@
+{
+  "source": "reference.pdf -- approved CSOP Hang Seng TECH Index ETF (3033.HK) Monthly Commentary, 30 June 2026",
+  "note": "Expected output, never input. snapshot.json must not contain any of these values: it holds the observations they are derived from. Percentages are transcribed as printed.",
+  "historical_performance": {
+    "circular": true,
+    "circular_reason": "snapshot.json's total_return_series is back-solved from these very returns, so a match here confirms the period arithmetic is self-consistent and nothing more. It is not independent evidence that the published figures are right.",
+    "reference_page": 1,
+    "rows": [
+      {
+        "role": "FUND",
+        "name": "3033.HK",
+        "return_1m": -0.0822,
+        "return_3m": -0.035,
+        "return_6m": -0.1879,
+        "return_ytd": -0.1879
+      },
+      {
+        "role": "BENCHMARK",
+        "name": "HSTECHN Index",
+        "return_1m": -0.0814,
+        "return_3m": -0.0324,
+        "return_6m": -0.1838,
+        "return_ytd": -0.1838
+      }
+    ]
+  },
+  "analytics": {
+    "reference_page": 4,
+    "top10": [
+      {
+        "security_code": "981",
+        "weight_pct": 10.15
+      },
+      {
+        "security_code": "9999",
+        "weight_pct": 9.53
+      },
+      {
+        "security_code": "700",
+        "weight_pct": 8.3
+      },
+      {
+        "security_code": "3690",
+        "weight_pct": 7.45
+      },
+      {
+        "security_code": "1211",
+        "weight_pct": 6.97
+      },
+      {
+        "security_code": "1810",
+        "weight_pct": 6.8
+      },
+      {
+        "security_code": "9988",
+        "weight_pct": 6.6
+      },
+      {
+        "security_code": "1347",
+        "weight_pct": 5.14
+      },
+      {
+        "security_code": "9888",
+        "weight_pct": 4.96
+      },
+      {
+        "security_code": "9618",
+        "weight_pct": 4.73
+      }
+    ],
+    "sectors": [
+      {
+        "code": "23",
+        "label": "Consumer Discretionary",
+        "display_value": "47.8%"
+      },
+      {
+        "code": "70",
+        "label": "Information Technology",
+        "display_value": "49.3%"
+      },
+      {
+        "code": "28",
+        "label": "Healthcare",
+        "display_value": "1.7%"
+      },
+      {
+        "code": "10",
+        "label": "Industrials",
+        "display_value": "1.3%"
+      }
+    ],
+    "top": [
+      {
+        "security_code": "1347",
+        "return_1m_pct": 33.42
+      },
+      {
+        "security_code": "2513",
+        "return_1m_pct": 31.91
+      },
+      {
+        "security_code": "981",
+        "return_1m_pct": 9.56
+      }
+    ],
+    "bottom": [
+      {
+        "security_code": "2382",
+        "return_1m_pct": -26.12
+      },
+      {
+        "security_code": "285",
+        "return_1m_pct": -27.78
+      },
+      {
+        "security_code": "100",
+        "return_1m_pct": -50.36
+      }
+    ],
+    "portfolio": [
+      {
+        "label": "Asset Under Management (HKD)^",
+        "value": "67,536.55 million"
+      },
+      {
+        "label": "Average Daily Turnover (HKD)^^",
+        "value": "12,882 million"
+      },
+      {
+        "label": "Number of holdings",
+        "value": "30"
+      }
+    ]
+  },
+  "next_rebalancing_date": "2026-09-04"
+}

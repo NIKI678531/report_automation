@@ -47,6 +47,14 @@ def upload(client, report_id: str, dataset_type: str, path: Path, filename: str 
     )
 
 
+def upload_bytes(client, report_id: str, dataset_type: str, data: bytes, filename: str = "upload.csv"):
+    return client.post(
+        f"/api/v1/reports/{report_id}/imports",
+        data={"dataset_type": dataset_type},
+        files={"file": (filename, data, "text/csv")},
+    )
+
+
 def apply(client, report_id: str, import_id: str, reason: str | None = "Monthly source replacement"):
     payload = {"reason": reason} if reason is not None else {}
     return client.post(f"/api/v1/reports/{report_id}/imports/{import_id}/apply", json=payload)
@@ -495,3 +503,73 @@ def test_dataset_slots_report_progress(client, report):
     assert after["index_constituents"]["rows"] == 5
     assert after["index_constituents"]["filename"] == "index_constituents.csv"
     assert after["constituent_returns"]["state"] == "MISSING"
+
+
+def bad_weight_constituent_csv(first: int, second: int, second_code: int = 2) -> bytes:
+    """The standard constituent CSV with the two weights and codes made configurable."""
+    header, alpha, beta = constituent_performance_csv().decode().splitlines()
+    return "\n".join([
+        header,
+        alpha.replace(",HKD,50,", f",HKD,{first},"),
+        beta.replace(",HKD,50,", f",HKD,{second},").replace("2026-06-30,2,", f"2026-06-30,{second_code},", 1),
+    ]).encode() + b"\n"
+
+
+def test_import_stage_blocks_a_constituent_file_whose_weights_do_not_total_100(client, report):
+    """QC-002 at upload time. This gate existed but keyed off a dataset name that never existed,
+    so a broken weight column used to travel all the way to the snapshot before anyone noticed."""
+    response = upload_bytes(client, report["id"], "constituent_performance", bad_weight_constituent_csv(50, 40))
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "REJECTED"
+    failure = next(item for item in body["validation_results"] if item["check_id"] == "QC-002")
+    assert failure["status"] == "FAILED"
+    assert failure["severity"] == "BLOCKING"
+    assert failure["actual"] == "0.9"
+    # One fact, one finding. The parser used to raise its own WEIGHT_SUM_OFF warning alongside
+    # this, so the same file was simultaneously a warning and a blocker in the audit record.
+    assert not [item for item in body["validation_results"] if item["check_id"] == "WEIGHT_SUM_OFF"]
+
+
+def test_import_stage_blocks_duplicate_security_codes(client, report):
+    """The parser rejects duplicates itself, before the quality gate runs.
+
+    QC-001 covers the same rule but is a backstop here: `import_checks` is deliberately skipped
+    once the parser has a blocking finding, because a payload built from a half-read file would
+    make every downstream check answer about data the uploader never sent. The parser's finding
+    is the better one anyway — it carries the row number and the row the code first appeared on.
+    """
+    response = upload_bytes(client, report["id"], "constituent_performance", bad_weight_constituent_csv(50, 50, second_code=1))
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "REJECTED"
+    failure = next(item for item in body["validation_results"] if item["severity"] == "BLOCKING")
+    assert failure["status"] == "FAILED"
+    assert "duplicate security_code 1" in failure["message"]
+    assert not [item for item in body["validation_results"] if item["check_id"].startswith("QC-")]
+
+
+def test_import_stage_runs_only_the_checks_a_single_dataset_can_answer(client, report):
+    """A clean upload passes, and no cross-dataset check is applied before composition."""
+    response = upload_bytes(client, report["id"], "constituent_performance", constituent_performance_csv())
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "VALIDATED"
+    reported = {item["check_id"] for item in body["validation_results"]}
+    assert {"QC-001", "QC-002", "QC-004"}.issubset(reported)
+    # QC-003 needs the report-date industry master and QC-006/QC-007 need derived history, so
+    # neither can be answered from one parsed file.
+    assert not reported & {"QC-003", "QC-006", "QC-007", "KPI-001", "KPI-002"}
+
+
+def test_import_requires_an_explicit_dataset_type(client, report):
+    """The Form default used to be "constituents", a name no registry slot has ever had."""
+    response = client.post(
+        f"/api/v1/reports/{report['id']}/imports",
+        files={"file": ("constituent-performance.csv", constituent_performance_csv(), "text/csv")},
+    )
+
+    assert response.status_code == 422, response.text

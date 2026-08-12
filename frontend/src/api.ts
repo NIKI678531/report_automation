@@ -153,6 +153,8 @@ export interface Report {
   benchmark_code: string;
   report_date: string;
   status: ReportStatus;
+  /** Whether this report's data may be distributed. TESTING artifacts are watermarked. */
+  lane: "PRODUCTION" | "TESTING";
   revision: number;
   version: number;
   active_snapshot_id: string | null;
