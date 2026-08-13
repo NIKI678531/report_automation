@@ -108,7 +108,7 @@ def sector_chart(chart_snapshot: dict[str, Any] | None, chart_tokens: dict[str, 
     """Lay out the `industry_breakdown` chart snapshot.
 
     Ordering, the zero-weight filter, the display string and the colour token are all decided
-    in ``domain.calculation.sector_chart_snapshot``. Everything here is geometry and colour
+    in ``domain.metrics.industry_breakdown.sector_chart_snapshot``. Everything here is geometry and colour
     resolution — the renderer must not regroup, re-sort or recompute (rules document §4.3).
     """
     series = (chart_snapshot or {}).get("series") or []

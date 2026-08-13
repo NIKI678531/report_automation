@@ -15,9 +15,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import ingestion
-from ..calculation import snapshot_checks
 from ..document import bind_snapshot, checksum
 from ..industry import map_effective_hsics
+from ..metrics.quality_checks import snapshot_checks
 from ..models import (
     DataImport,
     DataSnapshot,

@@ -1,9 +1,9 @@
 """Calculation orchestration.
 
-The arithmetic itself lives in ``domain.calculation`` and stays pure. This module supplies the
-session-bound half: it reads the active snapshot, hands a derived payload to the pure layer, and
-persists the resulting ``MetricValue`` / ``ModuleSnapshot`` / ``QualityCheckResult`` rows with
-their lineage.
+The arithmetic itself lives in ``domain.metrics``, one module per report module, and stays pure.
+This module supplies the session-bound half: it reads the active snapshot, hands a derived payload
+to the pure layer, and persists the resulting ``MetricValue`` / ``ModuleSnapshot`` /
+``QualityCheckResult`` rows with their lineage.
 """
 
 from __future__ import annotations
@@ -16,8 +16,11 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..calculation import build_lineage_footnotes, calculate_snapshot, historical_performance, snapshot_checks
 from ..document import bind_snapshot, checksum
+from ..metrics.final_analytics import calculate_snapshot
+from ..metrics.footnotes import build_lineage_footnotes
+from ..metrics.historical_performance import historical_performance
+from ..metrics.quality_checks import snapshot_checks
 from ..models import (
     DataSnapshot,
     MetricValue,

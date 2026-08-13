@@ -60,7 +60,7 @@ def total_return_series() -> list[dict[str, str]]:
     returns, not as levels, so they belong in a different dataset shape than this one.
 
     So the levels here are constructed as ``100 / (1 + period_return)`` from the returns printed in
-    ``reference.pdf``, which makes :func:`app.domain.calculation.historical_performance` an identity
+    ``reference.pdf``, which makes :func:`app.domain.metrics.historical_performance.historical_performance` an identity
     on this input: it must reproduce those returns, and would do so even if its period arithmetic
     were wrong. Tests reading this series may therefore assert only that the arithmetic is
     self-consistent -- endpoint selection, month-end semantics, the ratio itself. They may not claim

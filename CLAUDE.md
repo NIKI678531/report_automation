@@ -41,9 +41,11 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   `AuthorizationMiddleware`, one router mounted at `settings.api_prefix` (`/api/v1`), and a catch-all
   exception handler that returns the structured `{error_code, message, severity, fix_hint}` envelope.
   OpenAPI lives at `/api/v1/openapi.json`, docs at `/docs`.
-- `app/api/routes.py` — the single API surface. Reports, snapshots, imports, calculations, news
-  candidates/selection, document updates, review, finalize, preview, render jobs, artifacts, audit.
-  Add new endpoints here and keep them under `/api/v1`.
+- `app/api/routes/` — the API surface, one module per area: `reports.py` (lifecycle, document,
+  review, finalize, preview), `datasets.py` (snapshots, imports, import batches, calculations),
+  `news.py`, `render.py` (render jobs, artifacts), `catalog.py`, `admin.py`, with shared
+  dependencies in `deps.py` and the router assembled in `__init__.py`. Add a new endpoint to the
+  module that owns its area and keep it under `/api/v1`.
 - `app/core/config.py` — `Settings` (plain Pydantic `BaseModel` reading `os.getenv`, with
   `load_dotenv(backend/.env, override=False)` so the real process environment always wins).
   Key fields: `database_url`, `api_prefix`, `template_version`, `auth_mode`, `task_mode`,
@@ -52,9 +54,19 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   (role from `X-User-Role` in LOCAL mode; bearer required in `ENTRA` mode; VIEWER is read-only; finalize
   requires REVIEWER/ADMIN). `app/core/storage.py` — object-storage port with HMAC-signed, TTL-bound downloads.
 - `app/domain/` — keep these layers distinct:
-  - `models.py` SQLAlchemy ORM · `schemas.py` Pydantic request/response · `service.py` orchestration ·
-    `calculation.py` pure deterministic metric functions · `document.py` the `ReportDocument` content model ·
-    `imports.py` CSV/XLSX parsing, validation and diff · `products.py` effective-dated product catalog.
+  - `models.py` SQLAlchemy ORM · `schemas.py` Pydantic request/response · `document.py` the
+    `ReportDocument` content model · `imports.py` CSV/XLSX parsing, validation and diff ·
+    `products.py` effective-dated product catalog.
+  - `service/` session-bound orchestration, one module per concern and layered
+    `audit → catalog → documents → snapshots → imports → calculations → reports`, with `news`
+    beside them. Everything that touches a `Session` lives here.
+  - `metrics/` pure deterministic metric functions, **one module per report module** so an import
+    states which page it feeds: `historical_performance.py` (02), `constituent_performance.py` (04),
+    `industry_breakdown.py` (the donut in 05), `final_analytics.py` (05), `footnotes.py` (06).
+    Supporting modules that are not report modules: `errors.py`, `formatting.py`, `fund_kpis.py`,
+    and `quality_checks.py` for the QC/KPI gate, which spans modules. 01 Review and 03 Company News
+    have no arithmetic and deliberately have no module here. Import from the specific module —
+    there is no flat re-export.
 - `app/integrations/` — external adapters behind stable interfaces (`da_report.py` reads the approved
   read-only SQLite snapshot, `marketaux.py` is the optional remote vendor; both fail closed).
 - `app/rendering/` — `html.py` canonical HTML, `artifacts.py` PDF/DOCX products + checksum,
@@ -130,7 +142,9 @@ product-UI design system to report output, and do not apply report tokens to the
 - Async work returns 202 with `job_id` and a status URL; repeated idempotency keys return the original job.
 - Dates are ISO 8601 (`YYYY-MM-DD`); timestamps are UTC and converted to `Asia/Hong_Kong` in the UI.
 - Numeric APIs carry raw precision plus `unit` and `display_precision` — never a formatted string as fact.
-- Keep calculation functions in `domain/calculation.py` pure and versioned by `formula_version`.
+- Keep calculation functions in `domain/metrics/` pure and versioned by `formula_version`, in the
+  module named for the report module they feed. Nothing there may touch a `Session`; the
+  session-bound half is `domain/service/calculations.py`.
 - Every migration is reversible and covered by `backend/tests/test_migrations.py`.
 - Replacing React, FastAPI or the canonical rendering path requires a new ADR under `docs/adr/` plus full
   3033 regression evidence (see `docs/adr/0001-mandatory-stack-and-rendering.md`).

@@ -18,9 +18,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import ingestion
-from ..calculation import import_checks
 from ..imports import diff_dataset
 from ..industry import effective_hsics_records
+from ..metrics.quality_checks import import_checks
 from ..models import DataImport, DataSnapshot, MappingProfile, Report, ReportStatus
 from ..validation import blocking_findings
 from .audit import audit

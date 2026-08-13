@@ -7,9 +7,9 @@ tests do not pin down is free to drift between formats.
 """
 from decimal import Decimal
 
-from app.domain.calculation import (
+from app.domain.metrics.final_analytics import calculate_snapshot
+from app.domain.metrics.industry_breakdown import (
     INDUSTRY_DISPLAY_ORDER,
-    calculate_snapshot,
     sector_breakdown,
     sector_chart_snapshot,
 )

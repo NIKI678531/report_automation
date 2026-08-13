@@ -13,8 +13,8 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..calculation import calculate_snapshot
 from ..document import DocumentValidationError, checksum, validate_document_content
+from ..metrics.final_analytics import calculate_snapshot
 from ..models import DataSnapshot, Report, ReportDocument, ReportStatus
 from .audit import audit
 from .catalog import resolve_product

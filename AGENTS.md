@@ -32,9 +32,17 @@
 ## 代码位置约定
 
 - 应用装配：`backend/app/main.py`（`create_app()`）
-- 路由：`backend/app/api/routes.py`，统一挂载在 `settings.api_prefix`（`/api/v1`）
-- 领域层：`backend/app/domain/`（`models` ORM / `schemas` Pydantic / `service` 编排 /
-  `calculation` 纯计算 / `document` 内容模型 / `imports` 解析 / `products` 目录）
+- 路由：`backend/app/api/routes/`，按领域分模块（`reports` / `datasets` / `news` / `render` /
+  `catalog` / `admin`，公共依赖在 `deps.py`），统一挂载在 `settings.api_prefix`（`/api/v1`）
+- 领域层：`backend/app/domain/`（`models` ORM / `schemas` Pydantic / `document` 内容模型 /
+  `imports` 解析 / `products` 目录）
+  - `service/` 会话编排（分层 `audit → catalog → documents → snapshots → imports →
+    calculations → reports`，`news` 并列），凡是碰 `Session` 的都在这里
+  - `metrics/` 纯计算，**一个报告模块一个文件**：`historical_performance`（02）/
+    `constituent_performance`（04）/ `industry_breakdown`（05 内的环形图）/ `final_analytics`（05）/
+    `footnotes`（06）；非报告模块的支撑件为 `errors` / `formatting` / `fund_kpis`，跨模块的质检门
+    在 `quality_checks`。01 Review 与 03 Company News 无数值计算，故此处不设文件。
+    从具体模块 import，包顶层不做平铺 re-export。
 - 渲染：`backend/app/rendering/`（`templates/*.j2`、`tokens/3033-v*.json`、`artifacts.py`、`visual_qa.py`）
 - 外部适配器：`backend/app/integrations/`（`da_report.py` 只读快照新闻、`marketaux.py` 可选远程源）
 - 前端：`frontend/src/`（`components/` 通用件、`features/<domain>/` 业务工作台、

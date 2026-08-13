@@ -2,14 +2,12 @@ from decimal import Decimal
 
 import pytest
 
-from app.domain.calculation import (
-    CalculationError,
-    build_lineage_footnotes,
-    calculate_snapshot,
-    period_return,
-    sector_breakdown,
-    snapshot_checks,
-)
+from app.domain.metrics.errors import CalculationError
+from app.domain.metrics.final_analytics import calculate_snapshot
+from app.domain.metrics.footnotes import build_lineage_footnotes
+from app.domain.metrics.historical_performance import period_return
+from app.domain.metrics.industry_breakdown import sector_breakdown
+from app.domain.metrics.quality_checks import snapshot_checks
 
 # HSICS codes, as an aggregation key must be. `sector` alone is a raw source string and no longer
 # satisfies `sector_breakdown` — QC-003 refuses it, so the chart must refuse it too.

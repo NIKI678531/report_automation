@@ -19,9 +19,10 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from .. import ingestion
-from ..calculation import historical_performance, snapshot_checks
 from ..document import bind_snapshot, checksum
 from ..industry import map_effective_hsics
+from ..metrics.historical_performance import historical_performance
+from ..metrics.quality_checks import snapshot_checks
 from ..models import (
     DataImport,
     DataSnapshot,
