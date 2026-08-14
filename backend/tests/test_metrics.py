@@ -8,11 +8,30 @@ from app.domain.metrics.footnotes import build_lineage_footnotes
 from app.domain.metrics.historical_performance import period_return
 from app.domain.metrics.industry_breakdown import sector_breakdown
 from app.domain.metrics.quality_checks import snapshot_checks
+from app.domain.service.snapshots import has_uploaded_constituent_bundle
 
 # HSICS codes, as an aggregation key must be. `sector` alone is a raw source string and no longer
 # satisfies `sector_breakdown` — QC-003 refuses it, so the chart must refuse it too.
 IT = {"effective_industry_code": "70", "effective_industry_name": "Information Technology"}
 CONSUMER = {"effective_industry_code": "23", "effective_industry_name": "Consumer Discretionary"}
+
+
+def test_constituent_analysis_accepts_only_complete_upload_lineage():
+    assert has_uploaded_constituent_bundle({
+        "datasets": {"constituent_performance": {"source_type": "UPLOAD"}},
+    })
+    assert has_uploaded_constituent_bundle({
+        "datasets": {
+            "index_constituents": {"source_type": "UPLOAD"},
+            "constituent_returns": {"source_type": "UPLOAD"},
+        },
+    })
+    assert not has_uploaded_constituent_bundle({
+        "datasets": {
+            "index_constituents": {"source_type": "CDB"},
+            "constituent_returns": {"source_type": "UPLOAD"},
+        },
+    })
 
 
 def test_period_return_uses_total_return_ratio():

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from app.core.config import settings
+from app.integrations.datawarehouse import DataWarehouseProviderError, load_historical_performance
 from app.integrations.da_report import DaReportProviderError, load_monthly_data
 
 from .models import ProductCatalog
@@ -42,8 +44,9 @@ def compose_da_report_fragment(product: ProductCatalog, report_date: date) -> tu
             "threshold": {"required": sorted(bindings)},
             "fix_hint": "Add the missing ProductCatalog bindings; official Historical Performance can still be displayed.",
         })
+    fragment: dict[str, Any] = {"datasets": {}}
     try:
-        fragment = load_monthly_data(
+        da_report_fragment = load_monthly_data(
             product_code=str(product.fund_kpi_product_code or ""),
             fund_instrument_code=str(product.fund_total_return_instrument_code),
             benchmark_instrument_code=product.benchmark_instrument_code,
@@ -52,7 +55,7 @@ def compose_da_report_fragment(product: ProductCatalog, report_date: date) -> tu
             report_date=report_date,
         )
     except DaReportProviderError as error:
-        return {}, [{
+        findings.append({
             "check_id": error.code,
             "error_code": error.code,
             "severity": "BLOCKING",
@@ -61,6 +64,40 @@ def compose_da_report_fragment(product: ProductCatalog, report_date: date) -> tu
             "actual": None,
             "threshold": "A complete read-only DA-Report monthly-data snapshot",
             "fix_hint": "Refresh the approved DA-Report SQLite snapshot, then retry automatic data refresh.",
-        }]
-    findings.extend(fragment.pop("_findings", []))
+        })
+    else:
+        findings.extend(da_report_fragment.pop("_findings", []))
+        fragment.update(da_report_fragment)
+
+    if settings.datawarehouse_performance_enabled:
+        try:
+            performance_fragment = load_historical_performance(
+                fund_ticker=product.ticker,
+                benchmark_instrument_code=product.benchmark_instrument_code,
+                report_date=report_date,
+                formula_version=product.formula_profile,
+            )
+        except DataWarehouseProviderError as error:
+            # When the data-warehouse route is enabled it is authoritative for Page 02. Do not
+            # silently fall back to the legacy DA-Report Total Return contract.
+            fragment.pop("total_return_series", None)
+            if isinstance(fragment.get("datasets"), dict):
+                fragment["datasets"].pop("total_return_series", None)
+            findings.append({
+                "check_id": error.code,
+                "error_code": error.code,
+                "severity": "BLOCKING",
+                "status": "FAILED",
+                "message": error.message,
+                "actual": None,
+                "threshold": "Listed product and benchmark period-return rows through the selected report month",
+                "fix_hint": "Publish CO-CHST / CLS00178 and HSTECHN Index rows in the data-warehouse performance views, then refresh.",
+            })
+        else:
+            fragment.pop("total_return_series", None)
+            datasets = fragment.setdefault("datasets", {})
+            datasets.pop("total_return_series", None)
+            datasets.update(performance_fragment["datasets"])
+            fragment["historical_performance"] = performance_fragment["historical_performance"]
+            fragment["source_checksum"] = performance_fragment["source_checksum"]
     return fragment, findings

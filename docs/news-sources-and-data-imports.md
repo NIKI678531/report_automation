@@ -23,18 +23,17 @@ Each provider gets its own audit action, derived from the key: `news.da_report_f
 
 ## DA-Report configuration
 
-Company News ensures DA-Report candidates for each active snapshot, provider and report-month window. Reopening the same window is idempotent; changing the snapshot runs constituent matching again. Candidates are shared only across reports with the same product code and report date; manual candidates and saved selections remain report-specific. Candidate listing, manual creation and selection all enforce the HKT business-date window from the first day of the report month through the report date. A draft without its own snapshot may use the newest valid snapshot from that exact context for constituent matching without changing the draft's status or `active_snapshot_id`. If no valid context snapshot exists, automatic ensure returns an empty result without raising; manual Refresh still reports the missing snapshot. Automatic loading never selects items into the report.
+The Company News screen uses `GET /api/v1/reports/{id}/news/catalog`. Every visit reads the approved SQLite snapshot directly and returns all `regional + Corporate` records through filter-bound keyset pagination. It does not require an active commentary snapshot and does not filter by fund, report month or report date. The first page includes source, sentiment, importance and date facets; keyword, source, sentiment, importance, date and sort filters execute on the server.
 
-DA-Report has no news-to-security or news-to-product relation. `category=Corporate` means an item passed a regional holding check somewhere upstream; it does **not** prove that the item belongs to the current fund. This adapter therefore requires a unique title match against the active snapshot's controlled English/Traditional Chinese constituent names. Summary-only, ambiguous and unmatched items are excluded from automatic candidates.
+Catalog browsing never bulk-copies DA rows into the commentary database. Saving a selection sends `provider=DA_REPORT` plus the DA `external_id`; the backend re-reads that row, verifies that it remains a Regional Corporate record, then creates or reuses the local `NewsItem`. Already materialized selections subsequently use the local ID, so editing and rendering remain available during a DA outage. Manual entries and selected ordering remain report-specific.
+
+The catalog intentionally includes the complete upstream date range, including backfilled records and items after the report date. A null `published_at` falls back to `fetched_at` and is labelled accordingly. Cross-period selection is allowed; a selected item later than `report_date` produces a non-blocking Review warning. See [ADR-0002](adr/0002-da-report-company-news-catalog.md).
+
+`category=Corporate` means an item passed an upstream regional holding check; it does **not** prove that the item belongs to the selected commentary fund. Fund relevance is a user curation decision in this catalog workflow.
 
 Development can set `DA_REPORT_SQLITE_PATH`; with it unset the API falls back to `da_report.sqlite` in the repository root, then `~/Downloads/da_report.sqlite`. Production sets `DA_REPORT_OBJECT_URL` to a short-lived TOS/S3-compatible presigned URL and must set `DA_REPORT_SQLITE_SHA256`. The API downloads to `DA_REPORT_CACHE_DIR` on ephemeral disk, enforces the size limit, verifies SHA-256, atomically renames the completed file, and opens SQLite with both `mode=ro` and `PRAGMA query_only=ON`. The object URL is never included in provider errors.
 
-Endpoints used:
-
-- Constituent candidates: `GET /stable/news/stock`
-- General candidates: `GET /stable/news/general-latest`
-
-The report API derives constituent symbols from the report's active snapshot, or for a snapshot-less draft from the newest valid snapshot with the same product code and report date. General news is fetched only after the user selects the General scope. The default date range is the report month. Only title, snippet, source, URL, image URL, symbol, publication time, fetch evidence, and matching metadata are retained.
+The legacy `POST /api/v1/reports/{id}/news/candidates/fetch` path remains available for constituent-scoped DA matching and optional providers. Its snapshot/window idempotency and report-month constraints are unchanged, but the Company News screen no longer invokes it automatically.
 
 ## Marketaux configuration
 
@@ -65,23 +64,22 @@ environment, treat the token as URL-exposed: it will reach the vendor's own acce
 intermediate proxy, so it must be rotated on the same schedule as any other transport-visible secret.
 
 
-## Logical dataset slots
+## Monthly report data inputs
 
-The upload workspace exposes one source per logical dataset. It no longer accepts the combined `constituents`, `historical_performance` or `final_analytics` dataset types.
+The product workspace exposes one report-level upload. Historical Performance and fund-level Portfolio Analysis data are loaded automatically from the immutable DA-Report SQLite snapshot; Final Analytics is derived from the active constituent snapshot. Compatibility API slots remain readable for existing snapshots, but are not shown as user inputs.
 
 | Slot | Template / accepted source | Required |
 |---|---|---|
-| `index_constituents` | mapped index-provider CSV | yes |
-| `constituent_returns` | `docs/templates/constituent-returns-template.csv` or mapped Bloomberg XLSX/XLSM | yes |
-| `total_return_series` | `docs/templates/total-return-series-template.csv` | yes |
-| `fund_kpi_daily` | `docs/templates/fund-kpi-daily-template.csv` | yes |
-| `trading_calendar` | `docs/templates/trading-calendar-template.csv` | yes |
-| `index_events` | `docs/templates/index-events-template.csv` | optional |
+| `constituent_performance` | `docs/templates/constituent-performance-template.csv` | yes; only report upload |
+| `total_return_series` | DA-Report SQLite `total_return_series` | automatic |
+| `fund_kpi_daily` | DA-Report SQLite `fund_kpi_daily` | automatic |
+| `trading_calendar` | DA-Report SQLite `trading_calendar` | automatic |
+| `index_events` | DA-Report SQLite `index_events` | automatic; rows optional |
 | `industry_master` | centrally managed `docs/templates/industry-master-template.csv` | yes |
 
-Total Return rows remain raw observations. Once all required slots and one report-date-effective HSICS master are present, the backend automatically creates the valid immutable snapshot, calculates Historical Performance and Final Analytics, and persists MetricValue and ModuleSnapshot lineage. The browser does not calculate authoritative values.
+`constituent_performance` carries `index_code`, as-of date, identity, price/currency, percent weight, HSICS industry code, a common period end, each period start, and either an explicit percent return or a missing reason. Percent fields are normalized to ratios by the backend. Once this file, automatic datasets and one report-date-effective HSICS master are present, the backend calculates Historical Performance and Final Analytics and persists dataset-specific MetricValue and ModuleSnapshot lineage. The browser does not calculate authoritative values.
 
-The first application of each logical dataset uses **Use this data** and requires no reason. Replacing the currently effective source for the same logical dataset requires a replacement reason. Both operations create a new snapshot; replacement audit details include the actor, diff, previous snapshot/dataset checksum and reason.
+The first constituent application uses **Use this data** and requires no reason. Replacing it requires a replacement reason. Apply, replace, clear and automatic refresh all create new snapshots; automatic refresh preserves the effective constituent upload while replacing every SQLite-owned dataset.
 
 ## Mapping profiles and HSICS
 

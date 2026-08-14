@@ -160,7 +160,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
     document.add_paragraph(f"(*Next Rebalancing Date: {content.get('next_rebalancing_date') or 'N/A'})").alignment = WD_ALIGN_PARAGRAPH.CENTER
     constituents = sections["constituents"]
-    _table(document, ["Stock Code", "Stock Name", "Closing Price (HKD)", "Weighting (%)", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[x["security_code"], x["name_en"], price(x["close_price"]), pct(x["weight"]), pct(x["return_1m"]), pct(x["return_3m"]), pct(x["return_6m"]), pct(x["return_ytd"])] for x in constituents], blue_first=True)
+    _table(document, ["Stock Code", "Stock Name", "Closing Price (HKD)", "Weighting (%)", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[str(x.get("security_code", "")), str(x.get("name_en") or x.get("name_zh_hant") or ""), price(x.get("close_price")), pct(x.get("weight")), pct(x.get("return_1m")), pct(x.get("return_3m")), pct(x.get("return_6m")), pct(x.get("return_ytd"))] for x in constituents], blue_first=True)
     document.add_paragraph(sections["footnotes"].get("constituents", ""), style="Caption")
 
     _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 4, banner)

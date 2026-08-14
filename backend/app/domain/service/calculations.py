@@ -23,6 +23,7 @@ from ..metrics.historical_performance import historical_performance
 from ..metrics.quality_checks import snapshot_checks
 from ..models import (
     DataSnapshot,
+    Lane,
     MetricValue,
     ModuleSnapshot,
     QualityCheckResult,
@@ -33,7 +34,7 @@ from ..models import (
 from .audit import audit
 from .catalog import resolve_product
 from .documents import latest_document
-from .snapshots import ensure_snapshot_datasets, require_complete_snapshot
+from .snapshots import ensure_snapshot_datasets, has_uploaded_constituent_bundle, require_complete_snapshot
 
 
 def persist_calculation_records(
@@ -116,6 +117,11 @@ def persist_calculation_records(
 
     history = derived_payload.get("historical_performance", {})
     periods = history.get("periods", {})
+    history_dataset_types = (
+        ("historical_performance",)
+        if "historical_performance" in datasets_by_type
+        else ("total_return_series",)
+    )
     for row in history.get("rows", []):
         dimension = str(row.get("role") or row.get("name") or "")
         for field in ("return_1m", "return_3m", "return_6m", "return_ytd"):
@@ -128,7 +134,7 @@ def persist_calculation_records(
                 date.fromisoformat(period["period_start"]) if period.get("period_start") else None,
                 date.fromisoformat(period["period_end"]) if period.get("period_end") else None,
                 {"instrument": row.get("name"), "role": row.get("role")},
-                ("total_return_series",),
+                history_dataset_types,
             )
 
     return_periods = derived_payload.get("return_periods", {})
@@ -250,7 +256,7 @@ def persist_calculation_records(
         "footnotes": (),
     }
     module_dataset_types = {
-        "historical_performance": ("total_return_series",),
+        "historical_performance": history_dataset_types,
         "constituents_performance": ("constituent_snapshot", "constituent_period_return", "index_event"),
         "final_analytics": (
             "constituent_snapshot", "constituent_period_return", "industry_master",
@@ -310,6 +316,13 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
         raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED"})
     snapshot = db.get(DataSnapshot, report.active_snapshot_id)
     require_complete_snapshot(snapshot)
+    if snapshot.lane == Lane.PRODUCTION.value and not has_uploaded_constituent_bundle(snapshot.payload or {}):
+        raise HTTPException(status_code=422, detail={
+            "error_code": "CONSTITUENT_UPLOAD_REQUIRED",
+            "message": "Page 04 analysis requires an explicitly uploaded constituent bundle.",
+            "severity": "BLOCKING",
+            "fix_hint": "Upload and apply the HSTECH constituent identity and return data on Page 04.",
+        })
     product = resolve_product(db, report.product_code, report.report_date)
     formula_version = product.formula_profile
     derived_payload = json.loads(json.dumps(snapshot.payload))

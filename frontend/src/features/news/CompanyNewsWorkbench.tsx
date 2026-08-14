@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { DndContext, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, verticalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -11,11 +11,13 @@ import {
   type NewsSelectionDraft,
   type Report,
 } from "../../api";
+import type { RegisterPendingSave } from "../../pendingSave";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 type SnapshotNews = Record<string, unknown>;
 type SortOrder = "newest" | "oldest";
 type Importance = "" | "LOW" | "MEDIUM" | "HIGH";
+const IGNORE_PENDING_SAVE: RegisterPendingSave = () => undefined;
 
 export interface Draft extends NewsSelectionDraft {
   selectionKey: string;
@@ -90,6 +92,17 @@ export function toggleCatalogSelection(current: Draft[], item: CompanyNewsCatalo
     publishedAt: item.published_at,
     ticker: null,
   }];
+}
+
+function selectionPayload(items: Draft[]): NewsSelectionDraft[] {
+  return items.map((item, position) => ({
+    ...(item.news_item_id
+      ? { news_item_id: item.news_item_id }
+      : { provider: "DA_REPORT" as const, external_id: item.external_id }),
+    position,
+    title_override: item.title_override,
+    summary_override: item.summary_override,
+  }));
 }
 
 function manualDraft(item: Awaited<ReturnType<typeof api.addNewsCandidate>>, position: number): Draft {
@@ -224,11 +237,13 @@ export function CompanyNewsWorkbench({
   busy,
   run,
   selectedSnapshot,
+  registerPendingSave = IGNORE_PENDING_SAVE,
 }: {
   report: Report;
   busy: boolean;
   run: RunAction;
   selectedSnapshot: SnapshotNews[];
+  registerPendingSave?: RegisterPendingSave;
 }) {
   const version = report.latest_document?.version ?? 1;
   const readOnly = report.status === "FINALIZED";
@@ -255,6 +270,10 @@ export function CompanyNewsWorkbench({
   const listRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<() => void>(() => undefined);
+  const initialSelection = useMemo(
+    () => JSON.stringify(selectionPayload(draftsFromSnapshot(selectedSnapshot, report.report_date))),
+    [report.id, version],
+  );
 
   useEffect(() => {
     setSelected(draftsFromSnapshot(selectedSnapshot, report.report_date));
@@ -340,17 +359,16 @@ export function CompanyNewsWorkbench({
       items.findIndex((item) => item.selectionKey === over.id),
     ));
   };
-  const save = () => {
-    const selections: NewsSelectionDraft[] = selected.map((item, position) => ({
-      ...(item.news_item_id
-        ? { news_item_id: item.news_item_id }
-        : { provider: "DA_REPORT" as const, external_id: item.external_id }),
-      position,
-      title_override: item.title_override,
-      summary_override: item.summary_override,
-    }));
-    return run(() => api.selectNews(report.id, version, selections));
-  };
+  const persist = useCallback(
+    async () => { await api.selectNews(report.id, version, selectionPayload(selected)); },
+    [report.id, selected, version],
+  );
+  const dirty = !readOnly && JSON.stringify(selectionPayload(selected)) !== initialSelection;
+  useLayoutEffect(() => {
+    registerPendingSave(dirty ? persist : null);
+    return () => registerPendingSave(null);
+  }, [dirty, persist, registerPendingSave]);
+  const save = () => run(persist);
   const addManual = (item: NewsCandidateInput) => run(async () => {
     const created = await api.addNewsCandidate(report.id, item);
     setSelected((current) => [...current, manualDraft(created, current.length)]);
@@ -444,7 +462,7 @@ export function CompanyNewsWorkbench({
       <header className="news-panel-head">
         <div className="news-panel-title"><h3>Selected for report</h3><span>已選新聞</span></div>
         <div className="news-panel-count"><strong>{selected.length}</strong></div>
-        <button className="primary" disabled={busy || readOnly} onClick={save}><Save size={15} /> Save</button>
+        <button className="primary" disabled={busy || readOnly || !dirty} onClick={save}><Save size={15} /> Save</button>
       </header>
       <DndContext collisionDetection={closestCenter} onDragEnd={dragEnd}>
         <SortableContext items={selected.map((item) => item.selectionKey)} strategy={verticalListSortingStrategy}>

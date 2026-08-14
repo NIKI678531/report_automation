@@ -23,6 +23,7 @@ const INDUSTRY_COLOR_CLASS: Record<string, number> = {
   "industry.hsics.70": 2,
   "industry.hsics.28": 3,
   "industry.hsics.10": 4,
+  "industry.hsics.50": 5,
 };
 
 /**

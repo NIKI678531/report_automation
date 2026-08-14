@@ -28,6 +28,14 @@ interface ReportContextItem {
 	report_date: string;
 }
 
+interface InitialReportItem extends ReportContextItem {
+	version: number;
+	lane: string;
+	revision?: number;
+	status?: string;
+	created_at?: string;
+}
+
 interface ConstituentIndexIdentity {
 	constituent_index_code: string;
 }
@@ -61,4 +69,31 @@ export function reportProductTicker(report: ReportIdentity): string {
 
 export function reportsForContext<T extends ReportContextItem>(reports: T[], productCode: string, reportDate: string): T[] {
 	return reports.filter((report) => report.product_code === productCode && report.report_date === reportDate);
+}
+
+function newestReportFirst(left: InitialReportItem, right: InitialReportItem): number {
+	return (
+		(right.revision ?? 1) - (left.revision ?? 1)
+		|| right.version - left.version
+		|| String(right.created_at ?? "").localeCompare(String(left.created_at ?? ""))
+	);
+}
+
+export function selectReportForMonth<T extends InitialReportItem>(
+	reports: T[],
+	productCode: string,
+	reportDate: string,
+): T | undefined {
+	return reportsForContext(reports, productCode, reportDate)
+		.filter((report) => report.lane === "PRODUCTION" && report.status !== "ARCHIVED")
+		.sort(newestReportFirst)[0];
+}
+
+export function selectInitialReport<T extends InitialReportItem>(reports: T[], productCode: string): T | undefined {
+	return [...reports]
+		.filter((report) => report.product_code === productCode && report.lane === "PRODUCTION" && report.status !== "ARCHIVED")
+		.sort((left, right) => (
+			right.report_date.localeCompare(left.report_date)
+			|| newestReportFirst(left, right)
+		))[0];
 }

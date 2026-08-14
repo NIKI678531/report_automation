@@ -118,6 +118,16 @@ def test_display_order_comes_from_versioned_configuration_not_from_weight():
     assert [row["code"] for row in unconfigured] == ["70", "23", "28", "10"]
 
 
+def test_financials_uses_the_confirmed_hstech_code_and_stable_color_token():
+    rows = [constituent("1", "50", "Financials", "1")]
+
+    chart = calculate_snapshot({"constituents": rows, "formula_version": HSTECH_PROFILE})[0]["sector_chart"]
+
+    assert chart["series"][0]["code"] == "50"
+    assert chart["series"][0]["label"] == "Financials"
+    assert chart["series"][0]["color_token"] == "industry.hsics.50"
+
+
 def test_unconfigured_industries_sort_after_configured_ones_deterministically():
     rows = [
         constituent("1", "99", "Utilities", "0.5"),

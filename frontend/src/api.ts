@@ -1,4 +1,5 @@
 export type ReportStatus = "DRAFT" | "DATA_READY" | "EDITING" | "QA_BLOCKED" | "READY_TO_FINALIZE" | "REVIEW" | "FINALIZED" | "ARCHIVED";
+export type OutputFormat = "pdf" | "html" | "docx";
 
 export interface Product {
   id: string;
@@ -149,17 +150,37 @@ export interface ImportBatchFile {
 export interface ImportBatch {
   id: string;
   report_id: string;
-  status: "STAGING" | "INCOMPLETE" | "BLOCKED" | "READY" | "APPLIED" | "DISCARDED";
+  status: "STAGING" | "INCOMPLETE" | "BLOCKED" | "PARTIAL_READY" | "READY" | "APPLIED" | "DISCARDED";
   coverage: {
     mode?: "CANONICAL" | "SPLIT";
-    identity?: { state: "READY" | "MISSING"; import_ids: string[] };
-    returns?: { state: "READY" | "MISSING"; import_ids: string[] };
+    identity?: { state: "READY" | "MISSING"; source?: "BATCH" | "ACTIVE_SNAPSHOT" | null; import_ids: string[] };
+    returns?: { state: "READY" | "MISSING"; source?: "BATCH" | null; import_ids: string[] };
     unsupported_count?: number;
   };
   errors: Array<{ error_code?: string; severity: string; message?: string; fix_hint?: string }>;
   reason: string | null;
   applied_snapshot_id: string | null;
+  requires_reason?: boolean;
   files: ImportBatchFile[];
+  merge_preview: {
+    report_month: string | null;
+    as_of_date: string | null;
+    sources: Array<{ dataset_type: string; filename: string }>;
+    rows: Array<{
+      security_code: string;
+      name_en: string | null;
+      name_zh_hant: string | null;
+      close_price: string | number | null;
+      currency: string | null;
+      weight: string | number | null;
+      return_1m: string | number | null;
+      return_3m: string | number | null;
+      return_6m: string | number | null;
+      return_ytd: string | number | null;
+    }>;
+    unmatched_identity_codes: string[];
+    unmatched_return_codes: string[];
+  };
 }
 
 export interface NewsSelectionDraft {
@@ -186,14 +207,16 @@ export interface Report {
   version: number;
   active_snapshot_id: string | null;
   finalized_document_version: number | null;
+  created_at?: string;
+  updated_at?: string;
   latest_document?: { version: number; checksum: string; content: Record<string, unknown> } | null;
   quality_results?: Array<{ check_id: string; status: string; severity: string; fix_hint: string }>;
-  artifacts?: Array<{ id: string; format: string; size_bytes: number; checksum: string }>;
+  artifacts?: Array<{ id: string; format: OutputFormat; size_bytes: number; checksum: string }>;
 }
 
 export interface RenderJob {
   id: string;
-  format: string;
+  format: OutputFormat;
   status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED";
   progress: number;
   stage: string;
@@ -218,7 +241,8 @@ export const api = {
   createReport: (report_date: string, product_code = "3033") => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date }) }),
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
   saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PATCH", body: JSON.stringify({ version, content }) }),
-  render: (id: string) => request<RenderJob[]>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats: ["html", "pdf", "docx"] }), headers: { "Idempotency-Key": crypto.randomUUID() } }),
+  render: (id: string, formats: OutputFormat[]) => request<RenderJob[]>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats }), headers: { "Idempotency-Key": crypto.randomUUID() } }),
+  getJob: (id: string) => request<RenderJob>(`/jobs/${id}`),
   listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),
   uploadDataset: (id: string, datasetType: DatasetType, file: File) => { const body = new FormData(); body.append("dataset_type", datasetType); body.append("file", file); return request<ImportResult>(`/reports/${id}/imports`, { method: "POST", body }); },
   uploadImportBatch: (id: string, files: File[]) => { const body = new FormData(); files.forEach((file) => body.append("files", file)); return request<ImportBatch>(`/reports/${id}/import-batches`, { method: "POST", body }); },
@@ -231,7 +255,7 @@ export const api = {
   discardImport: (reportId: string, importId: string) => request(`/reports/${reportId}/imports/${importId}/discard`, { method: "POST", body: JSON.stringify({}) }),
   clearDataset: (reportId: string, datasetType: ClearableDatasetType, version: number) => request(`/reports/${reportId}/datasets/${datasetType}/clear`, { method: "POST", body: JSON.stringify({ version }) }),
   generateDraft: (id: string, version: number, user_prompt: string) => request<{ version: number }>(`/reports/${id}/ai/in-review`, { method: "POST", body: JSON.stringify({ version, user_prompt }) }),
-  review: (id: string) => request<{ ready: boolean; blocking: Array<{ check_id: string; fix_hint: string }>; warnings: unknown[] }>(`/reports/${id}/review`),
+  review: (id: string) => request<{ ready: boolean; blocking: Array<{ check_id: string; fix_hint: string }>; warnings: Array<{ check_id?: string; fix_hint?: string }> }>(`/reports/${id}/review`),
   listNewsProviders: () => request<NewsProvider[]>("/news/providers"),
   listCompanyNewsCatalog: (id: string, filters: CompanyNewsCatalogQuery = {}) => {
     const parameters = new URLSearchParams();

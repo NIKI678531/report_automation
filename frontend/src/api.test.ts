@@ -102,13 +102,24 @@ describe("FastAPI client", () => {
     fetchMock.mockRestore();
   });
 
-  it("requests all canonical output formats", async () => {
+  it("requests only the selected output formats", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 202 }));
-    await api.render("r1");
+    await api.render("r1", ["pdf", "docx"]);
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/renders", expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ formats: ["html", "pdf", "docx"] }),
+      body: JSON.stringify({ formats: ["pdf", "docx"] }),
     }));
+    fetchMock.mockRestore();
+  });
+
+  it("reads render job progress for asynchronous output generation", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      id: "job-1", format: "pdf", status: "RUNNING", progress: 40, stage: "rendering", error: null, artifact_id: null,
+    }), { status: 200 }));
+
+    await api.getJob("job-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs/job-1", expect.any(Object));
     fetchMock.mockRestore();
   });
 });

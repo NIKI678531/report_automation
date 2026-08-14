@@ -26,7 +26,7 @@ SECTOR_CHART_FORMULA_VERSION = "sector-weight-v1"
 # Industries outside the list fall back to weight-descending with an ascending-code
 # tie-breaker (SORT-001), so a newly mapped industry still lands somewhere deterministic.
 INDUSTRY_DISPLAY_ORDER = {
-    "hstech-2026.1": ["23", "70", "28", "10"],
+    "hstech-2026.1": ["23", "70", "28", "10", "50"],
 }
 
 

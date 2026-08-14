@@ -7,6 +7,9 @@ from pydantic import BaseModel
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]  # backend/
 _WORKSPACE_ROOT = _SERVICE_ROOT.parent  # repository root
 _LOCAL_DA_REPORT_CANDIDATES = (_WORKSPACE_ROOT / "da_report.sqlite", Path.home() / "Downloads" / "da_report.sqlite")
+_LOCAL_DATAWAREHOUSE_CANDIDATES = (
+    Path.home() / "Downloads" / "DB_2025" / "td_attribution_cdb_test_2025.db",
+)
 
 # Load service-local secrets (MARKETAUX_API_KEY, DOWNLOAD_SECRET, ...) before any os.getenv default
 # below. Real process environment always wins, so container/CI settings are never overwritten by a
@@ -47,6 +50,21 @@ class Settings(BaseModel):
     da_report_max_bytes: int = int(os.getenv("DA_REPORT_MAX_BYTES", str(512 * 1024 * 1024)))
     da_report_timeout_seconds: float = float(os.getenv("DA_REPORT_TIMEOUT_SECONDS", "10"))
     da_report_auto_load: bool = os.getenv("DA_REPORT_AUTO_LOAD", "true").strip().lower() in {"1", "true", "yes", "y"}
+    datawarehouse_performance_enabled: bool = os.getenv(
+        "DATAWAREHOUSE_PERFORMANCE_ENABLED", "true"
+    ).strip().lower() in {"1", "true", "yes", "y"}
+    datawarehouse_sqlite_path: Path | None = (
+        Path(os.environ["DATAWAREHOUSE_SQLITE_PATH"]).expanduser()
+        if os.getenv("DATAWAREHOUSE_SQLITE_PATH")
+        else next((path for path in _LOCAL_DATAWAREHOUSE_CANDIDATES if path.is_file()), None)
+    )
+    datawarehouse_sqlite_sha256: str | None = os.getenv("DATAWAREHOUSE_SQLITE_SHA256")
+    datawarehouse_object_url: str | None = os.getenv("DATAWAREHOUSE_OBJECT_URL")
+    datawarehouse_cache_dir: Path = Path(
+        os.getenv("DATAWAREHOUSE_CACHE_DIR", str(Path(tempfile.gettempdir()) / "commentary-datawarehouse"))
+    )
+    datawarehouse_max_bytes: int = int(os.getenv("DATAWAREHOUSE_MAX_BYTES", str(1024 * 1024 * 1024)))
+    datawarehouse_timeout_seconds: float = float(os.getenv("DATAWAREHOUSE_TIMEOUT_SECONDS", "15"))
     # The TESTING lane binds the golden fixture — data that was transcribed from an approved report
     # rather than derived from a source system. Off by default so a deployed environment cannot
     # produce a fixture-backed report by accident; local and CI turn it on deliberately.

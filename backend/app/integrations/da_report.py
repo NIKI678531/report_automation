@@ -262,12 +262,6 @@ def _validate_monthly_schema(connection) -> None:
     _validate_columns(connection, MONTHLY_REQUIRED_COLUMNS, "DA_REPORT_MONTHLY_SCHEMA_MISMATCH")
 
 
-def _missing_table_columns(connection, table_name: str) -> list[str]:
-    rows = connection.execute(text(f"PRAGMA table_info({table_name})")).mappings()
-    actual = {str(row["name"]) for row in rows}
-    return sorted(MONTHLY_REQUIRED_COLUMNS[table_name] - actual)
-
-
 def _monthly_dataset_metadata(
     path: Path,
     file_checksum: str,
@@ -305,32 +299,10 @@ def load_monthly_data(
     file_checksum = _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
     history_start = date(report_date.year - 1, 1, 1)
     month_start = report_date.replace(day=1)
-    provider_findings: list[dict[str, Any]] = []
     with _engine(str(path.resolve())).connect() as connection:
-        # Historical performance is independently releasable. Missing KPI/calendar/event tables
-        # keep the report pending, but must not hide a complete official FUND/BENCHMARK series.
-        _validate_columns(
-            connection,
-            {"total_return_series": MONTHLY_REQUIRED_COLUMNS["total_return_series"]},
-            "DA_REPORT_MONTHLY_SCHEMA_MISMATCH",
-        )
-        optional_ready: dict[str, bool] = {}
-        for table_name in ("fund_kpi_daily", "trading_calendar", "index_events"):
-            missing_columns = _missing_table_columns(connection, table_name)
-            optional_ready[table_name] = not missing_columns
-            if missing_columns:
-                provider_findings.append({
-                    "check_id": f"DA_REPORT_{table_name.upper()}_SCHEMA_MISMATCH",
-                    "error_code": f"DA_REPORT_{table_name.upper()}_SCHEMA_MISMATCH",
-                    "severity": "WARNING" if table_name == "index_events" else "BLOCKING",
-                    "status": "FAILED",
-                    "message": f"DA-Report is missing required fields in {table_name}: {', '.join(missing_columns)}.",
-                    "actual": {"missing_columns": missing_columns},
-                    "threshold": {"required_columns": sorted(MONTHLY_REQUIRED_COLUMNS[table_name])},
-                    "fix_hint": f"Publish {table_name} in the next DA-Report SQLite export; Historical Performance remains available.",
-                })
+        _validate_monthly_schema(connection)
         total_return_rows = list(connection.execute(text("""
-            SELECT id, instrument_code, trade_date, total_return_value, series_type, currency, source, updated_at
+            SELECT id, instrument_code, trade_date, total_return_value, series_type, currency, source
             FROM total_return_series
             WHERE instrument_code IN (:fund_code, :benchmark_code)
               AND trade_date BETWEEN :history_start AND :report_date
@@ -351,7 +323,7 @@ def load_monthly_data(
             "product_code": product_code,
             "month_start": month_start.isoformat(),
             "report_date": report_date.isoformat(),
-        }).mappings()) if optional_ready["fund_kpi_daily"] else []
+        }).mappings())
         calendar_rows = list(connection.execute(text("""
             SELECT id, market_code, trade_date, is_trading_day, source
             FROM trading_calendar
@@ -362,7 +334,7 @@ def load_monthly_data(
             "market_code": trading_calendar_code,
             "month_start": month_start.isoformat(),
             "report_date": report_date.isoformat(),
-        }).mappings()) if optional_ready["trading_calendar"] else []
+        }).mappings())
         event_rows = list(connection.execute(text("""
             SELECT id, index_code, event_type, announcement_date, effective_date, source
             FROM index_events
@@ -371,7 +343,7 @@ def load_monthly_data(
         """), {
             "index_code": constituent_index_code,
             "report_date": report_date.isoformat(),
-        }).mappings()) if optional_ready["index_events"] else []
+        }).mappings())
 
     roles = {
         fund_instrument_code: "FUND",
@@ -386,7 +358,6 @@ def load_monthly_data(
         "series_type": str(row["series_type"]),
         "currency": str(row["currency"]).upper(),
         "source": str(row["source"]),
-        "source_updated_at": str(row["updated_at"]),
     } for row in total_return_rows]
     series_roles = {row["instrument_role"] for row in series}
     currencies = {row["currency"] for row in series}
@@ -421,22 +392,19 @@ def load_monthly_data(
         nonnegative_kpis = all(Decimal(row["value"]) >= 0 for row in fund_kpis)
     except InvalidOperation:
         nonnegative_kpis = False
-    kpi_invalid = (
+    if (
         len(aum_rows) != 1
         or not turnover_rows
         or len(kpi_keys) != len(fund_kpis)
         or not nonnegative_kpis
         or any(row["metric_code"] not in {"AUM", "DAILY_TURNOVER"} for row in fund_kpis)
         or any(not row["unit"] or not row["currency"] for row in fund_kpis)
-    )
-    if optional_ready["fund_kpi_daily"] and kpi_invalid:
-        provider_findings.append({
-            "check_id": "DA_REPORT_FUND_KPI_INCOMPLETE", "error_code": "DA_REPORT_FUND_KPI_INCOMPLETE",
-            "severity": "BLOCKING", "status": "FAILED",
-            "message": "The DA-Report snapshot requires one report-date AUM row and report-month daily turnover rows.",
-            "actual": {"rows": len(fund_kpis)}, "threshold": "One report-date AUM and report-month turnover rows",
-            "fix_hint": "Backfill the official fund KPI rows in DA-Report and republish SQLite.",
-        })
+    ):
+        raise DaReportProviderError(
+            "DA_REPORT_FUND_KPI_INCOMPLETE",
+            "The DA-Report snapshot requires one report-date AUM row and report-month daily turnover rows.",
+            422,
+        )
 
     calendar = [{
         "_source_id": int(row["id"]),
@@ -445,15 +413,12 @@ def load_monthly_data(
         "is_trading_day": bool(row["is_trading_day"]),
         "source": str(row["source"]),
     } for row in calendar_rows]
-    calendar_valid = len({row["date"] for row in calendar}) == len(calendar) and any(row["is_trading_day"] for row in calendar)
-    if optional_ready["trading_calendar"] and not calendar_valid:
-        provider_findings.append({
-            "check_id": "DA_REPORT_TRADING_CALENDAR_INCOMPLETE", "error_code": "DA_REPORT_TRADING_CALENDAR_INCOMPLETE",
-            "severity": "BLOCKING", "status": "FAILED",
-            "message": "The DA-Report snapshot contains no report-month trading days for this product.",
-            "actual": {"rows": len(calendar)}, "threshold": "At least one report-month trading day",
-            "fix_hint": "Backfill the official market calendar in DA-Report and republish SQLite.",
-        })
+    if len({row["date"] for row in calendar}) != len(calendar) or not any(row["is_trading_day"] for row in calendar):
+        raise DaReportProviderError(
+            "DA_REPORT_TRADING_CALENDAR_INCOMPLETE",
+            "The DA-Report snapshot contains no report-month trading days for this product.",
+            422,
+        )
 
     index_events = [{
         "_source_id": int(row["id"]),
@@ -468,22 +433,19 @@ def load_monthly_data(
             path, file_checksum, "total_return_series", series,
             {"from": history_start.isoformat(), "to": report_date.isoformat()},
         ),
-    }
-    if optional_ready["fund_kpi_daily"] and not kpi_invalid:
-        datasets["fund_kpi_daily"] = _monthly_dataset_metadata(
+        "fund_kpi_daily": _monthly_dataset_metadata(
             path, file_checksum, "fund_kpi_daily", fund_kpis,
             {"from": month_start.isoformat(), "to": report_date.isoformat()},
-        )
-    if optional_ready["trading_calendar"] and calendar_valid:
-        datasets["trading_calendar"] = _monthly_dataset_metadata(
+        ),
+        "trading_calendar": _monthly_dataset_metadata(
             path, file_checksum, "trading_calendar", calendar,
             {"from": month_start.isoformat(), "to": report_date.isoformat()},
-        )
-    if optional_ready["index_events"]:
-        datasets["index_events"] = _monthly_dataset_metadata(
+        ),
+        "index_events": _monthly_dataset_metadata(
             path, file_checksum, "index_events", index_events,
             {"from": report_date.isoformat(), "to": None},
-        )
+        ),
+    }
     for rows in (series, fund_kpis, calendar, index_events):
         for row in rows:
             row.pop("_source_id", None)
@@ -494,7 +456,6 @@ def load_monthly_data(
         "index_events": index_events,
         "datasets": datasets,
         "source_checksum": file_checksum,
-        "_findings": provider_findings,
     }
 
 

@@ -64,6 +64,8 @@ def _snapshot_dataset_specs(payload: dict) -> list[tuple[str, list | dict]]:
             specs.append(("constituent_period_return", constituents))
     if payload.get("total_return_series"):
         specs.append(("total_return_series", payload["total_return_series"]))
+    elif (payload.get("historical_performance") or {}).get("rows"):
+        specs.append(("historical_performance", payload["historical_performance"]))
     if payload.get("fund_kpis"):
         specs.append(("fund_kpi_daily", payload["fund_kpis"]))
     if payload.get("trading_calendar"):
@@ -84,6 +86,7 @@ def ensure_snapshot_datasets(db: Session, snapshot: DataSnapshot) -> list[Snapsh
         candidates = {
             "constituent_snapshot": ("constituent_performance", "index_constituents"),
             "constituent_period_return": ("constituent_performance", "constituent_returns"),
+            "historical_performance": ("historical_performance", "total_return_series"),
             "index_event": ("index_events",),
         }.get(dataset_type, (dataset_type,))
         for key in candidates:
@@ -150,7 +153,9 @@ def dataset_present(payload: dict, dataset_type: str) -> bool:
             for row in constituents
         )
     if dataset_type == "total_return_series":
-        return bool(payload.get("total_return_series"))
+        return bool(payload.get("total_return_series")) or bool(
+            (payload.get("historical_performance") or {}).get("rows")
+        )
     if dataset_type == "fund_kpi_daily":
         return bool(payload.get("fund_kpis"))
     if dataset_type == "trading_calendar":
@@ -160,6 +165,23 @@ def dataset_present(payload: dict, dataset_type: str) -> bool:
     if dataset_type == "industry_master":
         return bool(payload.get("industry_master"))
     return False
+
+
+def has_uploaded_constituent_bundle(payload: dict) -> bool:
+    """Return whether Page 04 identity and return facts both come from explicit uploads.
+
+    The canonical file owns both logical datasets. The legacy split workflow is accepted only
+    when both identity and return files are uploads; mixed automatic/upload facts are rejected.
+    """
+    datasets = payload.get("datasets") or {}
+
+    def uploaded(key: str) -> bool:
+        metadata = datasets.get(key) if isinstance(datasets, dict) else None
+        return isinstance(metadata, dict) and metadata.get("source_type") == "UPLOAD"
+
+    return uploaded("constituent_performance") or (
+        uploaded("index_constituents") and uploaded("constituent_returns")
+    )
 
 
 def snapshot_dataset_type(dataset_type: str) -> str:
@@ -248,6 +270,11 @@ def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> li
         for field in spec.owns:
             if field in source:
                 row[field] = source[field]
+                missing_reason_key = f"{field}_missing_reason"
+                if missing_reason_key in source:
+                    row[missing_reason_key] = source[missing_reason_key]
+                else:
+                    row.pop(missing_reason_key, None)
     unmatched = sorted(set(by_code) - {row["security_code"] for row in constituents}, key=lambda code: int(code) if code.isdigit() else 0)
     for code in unmatched:
         findings.append({
@@ -267,6 +294,8 @@ def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> li
             "message": f"{name} ({code}) has no value from {spec.title}.",
             "fix_hint": "Cover this security with an approved sector override, or refresh the vendor file." if "sector" in spec.owns else "Refresh the Bloomberg workbook so this security is included.",
         })
+    if payload.get("return_periods"):
+        base["return_periods"] = json.loads(json.dumps(payload["return_periods"]))
     return findings
 
 
@@ -333,7 +362,10 @@ def _stage_auto_snapshot(
         and active_snapshot
         and active_snapshot.lane == Lane.PRODUCTION.value
         and upload_lineage
-        and dataset_present(active_snapshot.payload or {}, "constituent_performance")
+        and (
+            dataset_present(active_snapshot.payload or {}, "constituent_performance")
+            or dataset_present(active_snapshot.payload or {}, "index_constituents")
+        )
     ):
         active_payload = active_snapshot.payload or {}
         payload["constituents"] = json.loads(json.dumps(active_payload.get("constituents", [])))
@@ -344,11 +376,45 @@ def _stage_auto_snapshot(
             if isinstance(metadata, dict):
                 payload["datasets"][key] = json.loads(json.dumps(metadata))
 
+    # An approved-provider refresh must not silently replace an explicitly uploaded slot. Keep
+    # each uploaded direct dataset intact and refresh only the remaining automatic slots.
+    preserved_uploads: set[str] = set()
+    if preserve_constituents and active_snapshot and active_snapshot.lane == Lane.PRODUCTION.value:
+        active_payload = active_snapshot.payload or {}
+        direct_slots = {
+            "total_return_series": "total_return_series",
+            "fund_kpi_daily": "fund_kpis",
+            "trading_calendar": "trading_calendar",
+            "index_events": "index_events",
+        }
+        for dataset_key, payload_key in direct_slots.items():
+            metadata = (active_payload.get("datasets") or {}).get(dataset_key)
+            if isinstance(metadata, dict) and metadata.get("source_type") == "UPLOAD":
+                payload[payload_key] = json.loads(json.dumps(active_payload.get(payload_key, [])))
+                payload["datasets"][dataset_key] = json.loads(json.dumps(metadata))
+                preserved_uploads.add(dataset_key)
+
     fragment, provider_findings = compose_da_report_fragment(product, report.report_date)
-    for key in ("total_return_series", "fund_kpis", "trading_calendar", "index_events"):
-        if key in fragment:
-            payload[key] = fragment[key]
-    payload["datasets"].update(fragment.get("datasets", {}))
+    fragment_slots = {
+        "total_return_series": "total_return_series",
+        "historical_performance": "historical_performance",
+        "fund_kpis": "fund_kpi_daily",
+        "trading_calendar": "trading_calendar",
+        "index_events": "index_events",
+    }
+    for payload_key, dataset_key in fragment_slots.items():
+        if dataset_key not in preserved_uploads and payload_key in fragment:
+            payload[payload_key] = fragment[payload_key]
+    payload["datasets"].update({
+        key: value
+        for key, value in fragment.get("datasets", {}).items()
+        if key not in preserved_uploads
+    })
+    if (fragment.get("historical_performance") or {}).get("rows"):
+        # The warehouse period-return views are authoritative when available; retaining an older
+        # uploaded Total Return series would cause the calculation step to overwrite these values.
+        payload.pop("total_return_series", None)
+        payload["datasets"].pop("total_return_series", None)
     payload["constituent_index_code"] = report.constituent_index_code
     if payload.get("total_return_series"):
         try:
@@ -375,9 +441,12 @@ def _stage_auto_snapshot(
     ]
     valid = not missing and not blocked
     has_upload = any(
-        isinstance((payload.get("datasets") or {}).get(key), dict)
-        and payload["datasets"][key].get("source_type") == "UPLOAD"
-        for key in ("constituent_performance", "index_constituents", "constituent_returns")
+        isinstance(metadata, dict) and metadata.get("source_type") == "UPLOAD"
+        for metadata in (payload.get("datasets") or {}).values()
+    )
+    has_datawarehouse = any(
+        isinstance(metadata, dict) and metadata.get("source_type") == "DATAWAREHOUSE_SQLITE"
+        for metadata in (payload.get("datasets") or {}).values()
     )
     payload_checksum = checksum(payload)
     if (
@@ -391,12 +460,18 @@ def _stage_auto_snapshot(
             "source_checksum": (fragment.get("source_checksum") or (fragment.get("datasets", {}).get("total_return_series", {}).get("lineage", {}).get("sqlite_checksum"))),
         })
         return active_snapshot
+    source_policy = (
+        "DATAWAREHOUSE_PLUS_UPLOAD" if has_datawarehouse and has_upload
+        else "DATAWAREHOUSE_AUTO" if has_datawarehouse
+        else "DA_REPORT_PLUS_UPLOAD" if has_upload
+        else "DA_REPORT_AUTO"
+    )
     snapshot = DataSnapshot(
         report_id=report.id,
         as_of_date=report.report_date,
-        source_policy="DA_REPORT_PLUS_UPLOAD" if has_upload else "DA_REPORT_AUTO",
+        source_policy=source_policy,
         lane=Lane.PRODUCTION.value,
-        mapping_version="da-report-monthly-v1",
+        mapping_version="datawarehouse-performance-v1+da-report-monthly-v1" if has_datawarehouse else "da-report-monthly-v1",
         status=SnapshotStatus.VALID if valid else SnapshotStatus.PENDING,
         checksum=payload_checksum,
         payload=payload,
@@ -427,7 +502,8 @@ def _stage_auto_snapshot(
         "status": snapshot.status.value,
         "missing_slots": missing,
         "provider_findings": [item.get("check_id") for item in provider_findings],
-        "preserved_constituents": has_upload,
+        "preserved_constituents": upload_lineage,
+        "preserved_uploaded_slots": sorted(preserved_uploads),
     })
     return snapshot
 
@@ -584,6 +660,24 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         })
     base["constituent_index_code"] = report.constituent_index_code
     findings.extend(map_effective_hsics(db, base, report.report_date))
+    if base.get("total_return_series"):
+        try:
+            base["historical_performance"] = historical_performance(
+                base["total_return_series"], report.report_date, product.formula_profile,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail={
+                "error_code": getattr(error, "error_code", "HISTORICAL_PERIODS_INCOMPLETE"),
+                "message": str(error),
+                "field": getattr(error, "field", "total_return_series"),
+                "entity_id": getattr(error, "entity_id", None),
+                "severity": "BLOCKING",
+                "fix_hint": getattr(
+                    error,
+                    "fix_hint",
+                    "Upload common FUND and BENCHMARK endpoints for 1M, 3M, 6M and YTD.",
+                ),
+            }) from error
     metadata_payload_key = spec.payload_key or {
         "constituent_performance": "constituents",
         "index_constituents": "constituents",
@@ -621,14 +715,20 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
     if complete and blocked and data_import.dataset_type in {"constituent_performance", "constituents", "historical_performance", "final_analytics"}:
         raise HTTPException(status_code=422, detail={"error_code": "IMPORT_QUALITY_BLOCKED", "checks": blocked})
     status = SnapshotStatus.VALID if complete and not blocked else SnapshotStatus.PENDING
-    contains_da_report = any(
-        isinstance(metadata, dict) and metadata.get("source_type") == "DA_REPORT_SQLITE"
+    automatic_source_types = {
+        metadata.get("source_type")
         for metadata in (base.get("datasets") or {}).values()
+        if isinstance(metadata, dict)
+    }
+    applied_source_policy = (
+        "DATAWAREHOUSE_PLUS_UPLOAD" if "DATAWAREHOUSE_SQLITE" in automatic_source_types
+        else "DA_REPORT_PLUS_UPLOAD" if "DA_REPORT_SQLITE" in automatic_source_types
+        else "UPLOAD_OVERRIDE"
     )
     snapshot = DataSnapshot(
         report_id=report.id,
         as_of_date=report.report_date,
-        source_policy="DA_REPORT_PLUS_UPLOAD" if contains_da_report else "UPLOAD_OVERRIDE",
+        source_policy=applied_source_policy,
         # An upload layered onto testing data does not launder it back to PRODUCTION: the fixture
         # rows it did not overwrite are still in the payload.
         lane=active_snapshot.lane if active_snapshot else Lane.PRODUCTION.value,

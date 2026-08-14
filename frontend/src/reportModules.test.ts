@@ -7,6 +7,8 @@ import {
   reportPageLabel,
   reportProductTicker,
   reportsForContext,
+  selectInitialReport,
+  selectReportForMonth,
 } from "./reportModules";
 
 describe("report module page labels", () => {
@@ -51,5 +53,27 @@ describe("report module page labels", () => {
       { id: "other-fund", product_code: "9999", report_date: "2026-07-31" },
     ];
     expect(reportsForContext(reports, "3033", "2026-07-31").map(({ id }) => id)).toEqual(["july-r2", "july-r1"]);
+  });
+
+  it("opens the latest production report instead of the oldest active snapshot", () => {
+    const reports = [
+      { id: "april", product_code: "3033", report_date: "2026-04-04", version: 3, lane: "PRODUCTION" },
+      { id: "june-r5", product_code: "3033", report_date: "2026-06-30", version: 5, lane: "PRODUCTION" },
+      { id: "june-r6", product_code: "3033", report_date: "2026-06-30", version: 6, lane: "PRODUCTION" },
+      { id: "testing", product_code: "3033", report_date: "2026-07-31", version: 1, lane: "TESTING" },
+    ];
+
+    expect(selectInitialReport(reports, "3033")?.id).toBe("june-r6");
+  });
+
+  it("opens the newest non-archived production revision for a selected month", () => {
+    const reports = [
+      { id: "r1", product_code: "3033", report_date: "2025-12-31", revision: 1, version: 9, lane: "PRODUCTION", status: "FINALIZED" },
+      { id: "r2", product_code: "3033", report_date: "2025-12-31", revision: 2, version: 1, lane: "PRODUCTION", status: "DRAFT" },
+      { id: "archived", product_code: "3033", report_date: "2025-12-31", revision: 3, version: 1, lane: "PRODUCTION", status: "ARCHIVED" },
+      { id: "testing", product_code: "3033", report_date: "2025-12-31", revision: 4, version: 1, lane: "TESTING", status: "DRAFT" },
+    ];
+
+    expect(selectReportForMonth(reports, "3033", "2025-12-31")?.id).toBe("r2");
   });
 });

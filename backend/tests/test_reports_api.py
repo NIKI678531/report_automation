@@ -83,6 +83,21 @@ def test_report_golden_lifecycle_and_preview(client):
     assert artifacts[0]["content_manifest_checksum"]
 
 
+def test_unfinished_report_preview_keeps_layout_and_leaves_missing_modules_blank(client):
+    report = create_report(client)
+
+    preview = client.post(f"/api/v1/reports/{report['id']}/preview")
+
+    assert preview.status_code == 200, preview.text
+    assert preview.text.count('class="report-page"') == 4
+    assert "Historical Performance of 3033.HK" in preview.text
+    assert "Company News" in preview.text
+    assert "Add monthly market review." not in preview.text
+    assert "Add outlook." not in preview.text
+    assert "Add key drivers." not in preview.text
+    assert "No company news has been selected." not in preview.text
+
+
 def test_optimistic_lock_returns_conflict(client):
     report = create_report(client)
     detail = client.get(f"/api/v1/reports/{report['id']}").json()

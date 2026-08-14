@@ -20,6 +20,25 @@ def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[
             if period.get("period_start") and period.get("period_end"):
                 period_labels.append(f"{label} {period['period_start']} to {period['period_end']}")
         footnotes["historical"] = f"Source: {sources}; official Total Return series. {'; '.join(period_labels)}."
+    elif (payload.get("historical_performance") or {}).get("rows"):
+        history = payload["historical_performance"]
+        mapping = history.get("source_mapping") or {}
+        fields = history.get("periods") or {}
+        field_text = ", ".join(
+            f"{label}={fields.get(output, {}).get('source_field', source)}"
+            for output, source, label in (
+                ("return_1m", "returns_l1m", "1M"),
+                ("return_3m", "returns_l3m", "3M"),
+                ("return_6m", "returns_l6m", "6M"),
+                ("return_ytd", "returns_ytd", "YTD"),
+            )
+        )
+        footnotes["historical"] = (
+            f"Source: {history.get('source_name', 'CSOP Data Warehouse')}; "
+            f"{mapping.get('tradar_code', '')} / {mapping.get('class_id', '')} and "
+            f"{mapping.get('benchmark_index_ticker', '')}; as of {history.get('effective_as_of', as_of_date)}. "
+            f"Source-supplied decimal period returns ({field_text}) are displayed as percentages."
+        )
 
     datasets = payload.get("datasets", {})
     constituent_sources = []

@@ -32,7 +32,7 @@ def test_report_identity_changes_with_selected_etf(client):
 
     preview = client.post(f"/api/v1/reports/{report['id']}/preview")
     assert preview.status_code == 200, preview.text
-    assert '<div class="sector-empty">N/A</div>' in preview.text
+    assert '<div class="sector-empty" aria-hidden="true"></div>' in preview.text
     assert 'class="donut"' not in preview.text
 
 

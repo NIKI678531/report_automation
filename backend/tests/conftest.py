@@ -15,6 +15,7 @@ from app.main import create_app
 @pytest.fixture()
 def client(monkeypatch):
     monkeypatch.setattr(settings, "da_report_auto_load", False)
+    monkeypatch.setattr(settings, "datawarehouse_performance_enabled", False)
     # The golden fixture is the render pipeline's only end-to-end input, so the suite deliberately
     # opens the TESTING lane. A deployed environment leaves it shut.
     monkeypatch.setattr(settings, "allow_testing_lane", True)

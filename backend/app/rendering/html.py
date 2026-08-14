@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal
 from functools import lru_cache
@@ -37,6 +38,73 @@ def long_date(value: date) -> str:
 
 
 env.filters.update(pct=pct, price=price)
+
+
+_LEGACY_PREVIEW_PLACEHOLDERS = {
+    "Add monthly market review.",
+    "Add outlook.",
+    "Add the approved monthly market review.",
+    "Add the approved outlook.",
+}
+
+
+def _preview_document(report: Report, document: dict[str, Any]) -> dict[str, Any]:
+    """Return a render-only, structurally complete copy of an unfinished document.
+
+    Preview must be useful before every report module is populated, but it must not persist
+    invented content or weaken the release gate.  The normalizer therefore fills only container
+    shapes and identity defaults; staged uploads remain outside the document until they are
+    explicitly applied through the snapshot workflow.
+    """
+    result = deepcopy(document) if isinstance(document, dict) else {}
+    result.setdefault("report_date", report.report_date.isoformat())
+    result.setdefault("month_name", report.report_date.strftime("%B"))
+    result.setdefault("product_ticker", f"{report.product_code}.HK")
+    result.setdefault("benchmark_name", report.benchmark_code)
+
+    sections = result.get("sections")
+    if not isinstance(sections, dict):
+        sections = {}
+        result["sections"] = sections
+
+    review = sections.get("month_in_review")
+    if not isinstance(review, dict):
+        review = {}
+        sections["month_in_review"] = review
+    review.setdefault("summary", "")
+    review.setdefault("drivers", [])
+    review.setdefault("monitor", [])
+    review.setdefault("outlook", "")
+    for field in ("summary", "outlook"):
+        if review.get(field) in _LEGACY_PREVIEW_PLACEHOLDERS:
+            review[field] = ""
+    for field in ("drivers", "monitor", "blocks"):
+        if field in review and not isinstance(review[field], list):
+            review[field] = []
+
+    history = sections.get("historical_performance")
+    if not isinstance(history, dict):
+        history = {}
+        sections["historical_performance"] = history
+    if not isinstance(history.get("rows"), list):
+        history["rows"] = []
+
+    if not isinstance(sections.get("company_news"), list):
+        sections["company_news"] = []
+    if not isinstance(sections.get("constituents"), list):
+        sections["constituents"] = []
+
+    analytics = sections.get("analytics")
+    if not isinstance(analytics, dict):
+        analytics = {}
+        sections["analytics"] = analytics
+    for field in ("top10", "sectors", "top", "bottom", "portfolio"):
+        if not isinstance(analytics.get(field), list):
+            analytics[field] = []
+
+    if not isinstance(sections.get("footnotes"), dict):
+        sections["footnotes"] = {}
+    return result
 
 
 def _merge_tokens(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -172,7 +240,9 @@ def sector_chart(chart_snapshot: dict[str, Any] | None, chart_tokens: dict[str, 
     }
 
 
-def render_html(report: Report, document: dict[str, Any]) -> str:
+def render_html(report: Report, document: dict[str, Any], *, preview: bool = False) -> str:
+    if preview:
+        document = _preview_document(report, document)
     logo = base64.b64encode((ROOT / "static" / "csop-logo.png").read_bytes()).decode("ascii")
     template_version = str(document.get("template_version", "3033-v1"))
     design_token_version = str(document.get("design_token_version", "3033-v1"))

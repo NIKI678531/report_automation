@@ -143,6 +143,8 @@ def _snapshot_row_count(payload: dict, dataset_type: str) -> int:
         "trading_calendar": "trading_calendar",
         "index_events": "index_events",
     }
+    if dataset_type == "total_return_series" and not payload.get("total_return_series"):
+        return len((payload.get("historical_performance") or {}).get("rows", []))
     return len(payload.get(payload_keys.get(dataset_type, dataset_type), []))
 
 

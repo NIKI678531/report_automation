@@ -45,6 +45,33 @@ def test_total_return_series_slot_keeps_only_raw_observations():
     assert {row["instrument_role"] for row in parsed["total_return_series"]} == {"FUND", "BENCHMARK"}
 
 
+def test_total_return_upload_immediately_binds_month_relative_performance(client):
+    report = client.post(
+        "/api/v1/reports",
+        json={"product_code": "3033", "report_date": "2026-06-30"},
+    ).json()
+    staged = client.post(
+        f"/api/v1/reports/{report['id']}/imports",
+        data={"dataset_type": "total_return_series"},
+        files={"file": ("total-returns.csv", historical_csv(), "text/csv")},
+    )
+    assert staged.status_code == 201, staged.text
+
+    applied = client.post(
+        f"/api/v1/reports/{report['id']}/imports/{staged.json()['id']}/apply",
+        json={},
+    )
+    assert applied.status_code == 200, applied.text
+    performance = applied.json()["payload"]["historical_performance"]
+    assert [row["name"] for row in performance["rows"]] == ["3033.HK", "HSTECHN"]
+    assert performance["periods"]["return_1m"] == {
+        "period_start": "2026-05-29",
+        "period_end": "2026-06-30",
+    }
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    assert detail["latest_document"]["content"]["sections"]["historical_performance"] == performance
+
+
 def test_daily_kpi_calendar_and_event_slots_parse_independently():
     kpis = parse_fund_kpi_daily(
         "fund-kpis.csv",

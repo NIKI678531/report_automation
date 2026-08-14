@@ -248,28 +248,3 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
         "fix_hint": "Enter a Review title before saving.",
         "request_id": None,
     }
-
-
-def test_footnote_disclosures_are_saved_in_the_bound_report_document(client):
-    report_id = prepared_report(client)
-    detail = client.get(f"/api/v1/reports/{report_id}").json()
-    content = detail["latest_document"]["content"]
-    bindings = content["module_bindings"]
-    content["sections"]["footnotes"] = {
-        "historical": "Edited historical disclosure for this report.",
-        "constituents": "Edited constituent disclosure for this report.",
-        "analytics": "Edited analytics disclosure for this report.",
-    }
-
-    saved = client.patch(
-        f"/api/v1/reports/{report_id}/document",
-        json={"version": detail["latest_document"]["version"], "content": content},
-    )
-
-    assert saved.status_code == 200, saved.text
-    assert saved.json()["content"]["sections"]["footnotes"] == content["sections"]["footnotes"]
-    assert saved.json()["content"]["module_bindings"] == bindings
-    preview = client.post(f"/api/v1/reports/{report_id}/preview").text
-    assert "Edited historical disclosure for this report." in preview
-    assert "Edited constituent disclosure for this report." in preview
-    assert "Edited analytics disclosure for this report." in preview

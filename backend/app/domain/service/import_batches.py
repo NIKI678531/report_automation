@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from .. import ingestion
 from ..document import bind_snapshot, checksum
 from ..industry import map_effective_hsics
+from ..metrics.final_analytics import calculate_snapshot
 from ..metrics.quality_checks import snapshot_checks
 from ..models import (
     DataImport,
@@ -127,6 +128,84 @@ def _file_view(item: DataImport) -> dict[str, Any]:
     }
 
 
+def _merged_constituent_preview(items: list[DataImport], active_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Compose the reviewer-facing eight-column Page 04 table without mutating a snapshot."""
+    included = [item for item in items if item.status in {"VALIDATED", "APPLIED"}]
+    canonical = [item for item in included if item.dataset_type == "constituent_performance"]
+    identity = [item for item in included if item.dataset_type == "index_constituents"]
+    returns = [item for item in included if item.dataset_type == "constituent_returns"]
+    source_conflict = len(canonical) > 1 or len(identity) > 1 or len(returns) > 1 or bool(canonical and (identity or returns))
+    if source_conflict:
+        return {
+            "report_month": None,
+            "as_of_date": None,
+            "sources": [],
+            "rows": [],
+            "unmatched_identity_codes": [],
+            "unmatched_return_codes": [],
+        }
+
+    canonical_item = canonical[0] if len(canonical) == 1 else None
+    identity_item = canonical_item or (identity[0] if len(identity) == 1 else None)
+    return_item = canonical_item or (returns[0] if len(returns) == 1 else None)
+    use_active_identity = not identity_item and bool(return_item) and bool(active_payload)
+    identity_rows = (
+        list((identity_item.payload or {}).get("constituents", []))
+        if identity_item
+        else list((active_payload or {}).get("constituents", [])) if use_active_identity
+        else []
+    )
+    return_rows = (
+        list((return_item.payload or {}).get("constituents", []))
+        if canonical_item and return_item
+        else list((return_item.payload or {}).get("constituent_returns", [])) if return_item
+        else []
+    )
+    returns_by_code = {str(row.get("security_code")): row for row in return_rows if row.get("security_code") is not None}
+    identity_codes = {str(row.get("security_code")) for row in identity_rows if row.get("security_code") is not None}
+    preview_rows: list[dict[str, Any]] = []
+    for identity_row in identity_rows:
+        code = str(identity_row.get("security_code"))
+        return_row = returns_by_code.get(code, {})
+        preview_rows.append({
+            "security_code": code,
+            "name_en": identity_row.get("name_en"),
+            "name_zh_hant": identity_row.get("name_zh_hant"),
+            "close_price": identity_row.get("close_price"),
+            "currency": identity_row.get("currency"),
+            "weight": identity_row.get("weight"),
+            **{
+                field: identity_row.get(field) if canonical_item else return_row.get(field)
+                for field in ingestion.RETURN_FIELDS
+            },
+        })
+    as_of_dates = sorted({str(row.get("as_of_date")) for row in identity_rows if row.get("as_of_date")})
+    return_periods = (return_item.payload or {}).get("return_periods", {}) if return_item else {}
+    effective_date = str(return_periods.get("end") or (as_of_dates[0] if len(as_of_dates) == 1 else ""))
+    sources: list[tuple[str, str]] = []
+    if identity_item:
+        sources.append((identity_item.dataset_type, identity_item.original_filename))
+    elif use_active_identity:
+        active_datasets = (active_payload or {}).get("datasets") or {}
+        active_identity = active_datasets.get("index_constituents") or active_datasets.get("constituent_performance") or {}
+        sources.append(("index_constituents", str(active_identity.get("filename") or "Active Page 04 identity snapshot")))
+    if return_item:
+        sources.append((return_item.dataset_type, return_item.original_filename))
+    unique_sources = list(dict.fromkeys(sources))
+
+    def code_sort_key(code: str) -> tuple[int, int | str]:
+        return (0, int(code)) if code.isdigit() else (1, code)
+
+    return {
+        "report_month": effective_date[:7] if len(effective_date) >= 7 else None,
+        "as_of_date": effective_date or None,
+        "sources": [{"dataset_type": dataset_type, "filename": filename} for dataset_type, filename in unique_sources],
+        "rows": preview_rows,
+        "unmatched_identity_codes": sorted(identity_codes - set(returns_by_code), key=code_sort_key),
+        "unmatched_return_codes": sorted(set(returns_by_code) - identity_codes, key=code_sort_key),
+    }
+
+
 def _recompute_batch(db: Session, batch: ImportBatch) -> ImportBatch:
     items = list(db.scalars(select(DataImport).where(DataImport.batch_id == batch.id).order_by(DataImport.created_at)))
     included = [item for item in items if item.status not in {"EXCLUDED", "UNSUPPORTED", "DISCARDED"}]
@@ -161,20 +240,37 @@ def _recompute_batch(db: Session, batch: ImportBatch) -> ImportBatch:
                 "fix_hint": "Exclude all but one source; the system does not choose precedence automatically.",
             })
     canonical_ready = len(by_type["constituent_performance"]) == 1
-    identity_ready = canonical_ready or len(by_type["index_constituents"]) == 1
-    returns_ready = canonical_ready or len(by_type["constituent_returns"]) == 1
+    incoming_identity = canonical_ready or len(by_type["index_constituents"]) == 1
+    incoming_returns = canonical_ready or len(by_type["constituent_returns"]) == 1
+    report = db.get(Report, batch.report_id)
+    active = db.get(DataSnapshot, report.active_snapshot_id) if report and report.active_snapshot_id else None
+    active_payload = (active.payload or {}) if active and active.lane == Lane.PRODUCTION.value else {}
+    active_datasets = active_payload.get("datasets") or {}
+    active_split_identity = isinstance(active_datasets.get("index_constituents"), dict) and bool(active_payload.get("constituents"))
+    identity_ready = incoming_identity or (incoming_returns and active_split_identity)
+    returns_ready = incoming_returns
     if findings:
         status = "BLOCKED"
     elif identity_ready and returns_ready:
         status = "READY"
+    elif incoming_identity:
+        status = "PARTIAL_READY"
     else:
         status = "INCOMPLETE"
     batch.status = status
     batch.validation_results = findings
     batch.composition = {
         "mode": "CANONICAL" if canonical_ready else "SPLIT",
-        "identity": {"state": "READY" if identity_ready else "MISSING", "import_ids": [item.id for item in by_type["constituent_performance"] or by_type["index_constituents"]]},
-        "returns": {"state": "READY" if returns_ready else "MISSING", "import_ids": [item.id for item in by_type["constituent_performance"] or by_type["constituent_returns"]]},
+        "identity": {
+            "state": "READY" if identity_ready else "MISSING",
+            "source": "BATCH" if incoming_identity else "ACTIVE_SNAPSHOT" if active_split_identity and incoming_returns else None,
+            "import_ids": [item.id for item in by_type["constituent_performance"] or by_type["index_constituents"]],
+        },
+        "returns": {
+            "state": "READY" if returns_ready else "MISSING",
+            "source": "BATCH" if incoming_returns else None,
+            "import_ids": [item.id for item in by_type["constituent_performance"] or by_type["constituent_returns"]],
+        },
         "unsupported_count": len([item for item in items if item.status == "UNSUPPORTED"]),
     }
     db.commit()
@@ -184,6 +280,17 @@ def _recompute_batch(db: Session, batch: ImportBatch) -> ImportBatch:
 
 def batch_view(db: Session, batch: ImportBatch) -> dict[str, Any]:
     items = list(db.scalars(select(DataImport).where(DataImport.batch_id == batch.id).order_by(DataImport.created_at)))
+    report = db.get(Report, batch.report_id)
+    active = db.get(DataSnapshot, report.active_snapshot_id) if report and report.active_snapshot_id else None
+    active_payload = (active.payload or {}) if active and active.lane == Lane.PRODUCTION.value else {}
+    included_types = {item.dataset_type for item in items if item.status in {"VALIDATED", "APPLIED"}}
+    replacing = bool(active_payload) and (
+        ("constituent_performance" in included_types and (
+            dataset_present(active_payload, "index_constituents") or dataset_present(active_payload, "constituent_returns")
+        ))
+        or ("index_constituents" in included_types and dataset_present(active_payload, "index_constituents"))
+        or ("constituent_returns" in included_types and dataset_present(active_payload, "constituent_returns"))
+    )
     return {
         "id": batch.id,
         "report_id": batch.report_id,
@@ -192,7 +299,9 @@ def batch_view(db: Session, batch: ImportBatch) -> dict[str, Any]:
         "errors": batch.validation_results or [],
         "reason": batch.reason,
         "applied_snapshot_id": batch.applied_snapshot_id,
+        "requires_reason": replacing,
         "files": [_file_view(item) for item in items],
+        "merge_preview": _merged_constituent_preview(items, active_payload),
     }
 
 
@@ -292,25 +401,43 @@ def apply_import_batch(
         raise HTTPException(status_code=409, detail={"error_code": "REPORT_FINALIZED", "message": "Create a revision before applying data."})
     if report.version != expected_version:
         raise HTTPException(status_code=409, detail={"error_code": "VERSION_CONFLICT", "current_version": report.version})
-    if batch.status != "READY":
+    if batch.status not in {"READY", "PARTIAL_READY"}:
         raise HTTPException(status_code=409, detail={"error_code": "IMPORT_BATCH_NOT_READY", "status": batch.status, "coverage": batch.composition})
     active = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
-    replacing = bool(active and (dataset_present(active.payload or {}, "index_constituents") or dataset_present(active.payload or {}, "constituent_performance")))
+    items = list(db.scalars(select(DataImport).where(
+        DataImport.batch_id == batch.id,
+        DataImport.status == "VALIDATED",
+    )))
+    incoming_types = {item.dataset_type for item in items}
+    active_payload = (active.payload or {}) if active and active.lane == Lane.PRODUCTION.value else {}
+    replacing = bool(active_payload) and (
+        ("constituent_performance" in incoming_types and (
+            dataset_present(active_payload, "index_constituents") or dataset_present(active_payload, "constituent_returns")
+        ))
+        or ("index_constituents" in incoming_types and dataset_present(active_payload, "index_constituents"))
+        or ("constituent_returns" in incoming_types and dataset_present(active_payload, "constituent_returns"))
+    )
     if replacing and not reason:
         raise HTTPException(status_code=422, detail={
             "error_code": "IMPORT_REASON_REQUIRED", "message": "Replacing the active constituent data requires a reason.",
             "fix_hint": "Describe why the current constituent snapshot is being replaced.",
         })
-    base = json.loads(json.dumps(active.payload or {})) if active and active.lane == Lane.PRODUCTION.value else empty_payload(report.report_date)
-    base["constituents"] = []
-    base.pop("return_periods", None)
+    base = json.loads(json.dumps(active_payload)) if active_payload else empty_payload(report.report_date)
     datasets = base.setdefault("datasets", {})
-    for key in ("constituent_performance", *_SPLIT_TYPES):
-        datasets.pop(key, None)
-    items = list(db.scalars(select(DataImport).where(
-        DataImport.batch_id == batch.id,
-        DataImport.status == "VALIDATED",
-    )))
+    replacing_identity = bool(incoming_types & {"constituent_performance", "index_constituents"})
+    replacing_returns = "constituent_returns" in incoming_types and not replacing_identity
+    if replacing_identity:
+        base["constituents"] = []
+        base.pop("return_periods", None)
+        for key in ("constituent_performance", *_SPLIT_TYPES):
+            datasets.pop(key, None)
+    elif replacing_returns:
+        for row in base.get("constituents", []):
+            for field in ingestion.RETURN_FIELDS:
+                row.pop(field, None)
+                row.pop(f"{field}_missing_reason", None)
+        base.pop("return_periods", None)
+        datasets.pop("constituent_returns", None)
     ordered = sorted(items, key=lambda item: {"index_constituents": 0, "constituent_performance": 0, "constituent_returns": 1}.get(item.dataset_type, 9))
     findings: list[dict[str, Any]] = []
     for item in ordered:
@@ -349,6 +476,14 @@ def apply_import_batch(
     blocked = [item for item in [*results, *findings] if item.get("severity") == "BLOCKING" and item.get("status", "FAILED") != "PASSED"]
     if blocked:
         raise HTTPException(status_code=422, detail={"error_code": "IMPORT_BATCH_QUALITY_BLOCKED", "checks": blocked})
+    # Page 05 rankings and sector aggregation depend on the validated Page 04 bundle, not on
+    # Historical Performance or fund KPI slots. Bind those derived outputs immediately so a
+    # successful constituent upload is visible and useful while unrelated slots remain pending.
+    # Missing AUM and turnover remain absent; calculate_snapshot never invents substitutes.
+    base["formula_version"] = product.formula_profile
+    analytics, metrics = calculate_snapshot(base)
+    base["analytics"] = analytics
+    base["metrics"] = metrics
     missing = missing_required_slots(base)
     status = SnapshotStatus.VALID if not missing else SnapshotStatus.PENDING
     contains_da = any(isinstance(value, dict) and value.get("source_type") == "DA_REPORT_SQLITE" for value in datasets.values())

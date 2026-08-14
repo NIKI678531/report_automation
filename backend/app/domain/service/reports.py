@@ -33,7 +33,7 @@ from ..schemas import ReportCreate
 from .audit import audit
 from .catalog import resolve_product
 from .documents import latest_document
-from .snapshots import _stage_auto_snapshot, require_complete_snapshot
+from .snapshots import _stage_auto_snapshot, has_uploaded_constituent_bundle, require_complete_snapshot
 
 
 _NUMBER_TOKEN = re.compile(r"(?<![\w.])[+-]?\d[\d,]*(?:\.\d+)?%?")
@@ -200,6 +200,21 @@ def release_gate_checks(db: Session, report: Report, document: ReportDocument) -
         })
         snapshot = None
     if snapshot:
+        checks.append({
+            "check_id": "CONSTITUENT_UPLOAD_REQUIRED",
+            "severity": "BLOCKING",
+            "status": (
+                "PASSED"
+                if snapshot.lane != Lane.PRODUCTION.value or has_uploaded_constituent_bundle(snapshot.payload or {})
+                else "FAILED"
+            ),
+            "actual": {"lane": snapshot.lane, "uploaded": has_uploaded_constituent_bundle(snapshot.payload or {})},
+            "fix_hint": (
+                "Upload and apply the HSTECH constituent identity and return data on Page 04."
+                if snapshot.lane == Lane.PRODUCTION.value and not has_uploaded_constituent_bundle(snapshot.payload or {})
+                else ""
+            ),
+        })
         module_codes = set(db.scalars(select(ModuleSnapshot.module_code).where(ModuleSnapshot.snapshot_id == snapshot.id)))
         missing_modules = sorted({"historical_performance", "constituents_performance", "final_analytics", "footnotes"} - module_codes)
         checks.append({

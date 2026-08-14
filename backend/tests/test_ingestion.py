@@ -1,8 +1,10 @@
 """Logical dataset slot ingestion and immutable snapshot composition."""
 
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from openpyxl import Workbook
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ingestion"
 
@@ -36,6 +38,31 @@ def constituent_performance_csv(index_code: str = "SLOTIDX") -> bytes:
         f"{index_code},2026-06-30,1,0001.HK,Alpha,,10,HKD,50,70,2026-06-30,2026-05-29,10,,2026-03-31,11,,2025-12-31,12,,2025-12-31,13,,Official Index,Official Returns\n"
         f"{index_code},2026-06-30,2,0002.HK,Beta,,20,HKD,50,23,2026-06-30,2026-05-29,-5,,2026-03-31,-4,,2025-12-31,-3,,2025-12-31,-2,,Official Index,Official Returns\n"
     ).encode()
+
+
+def bloomberg_static_fallback_workbook() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Formula"
+    sheet.cell(2, 1, 20260630)
+    for column, value in enumerate((20260529, 20260331, 20251231, 20251231), start=2):
+        sheet.cell(2, column, value)
+    headers = ("1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)")
+    for column, value in enumerate(headers, start=2):
+        sheet.cell(4, column, value)
+    for column, value in enumerate(headers, start=7):
+        sheet.cell(4, column, value)
+    sheet.cell(5, 1, "20 HK Equity")
+    for column in range(2, 6):
+        sheet.cell(5, column, "#NAME?")
+    for column, value in enumerate((10, 11, 12, 13), start=7):
+        sheet.cell(5, column, value)
+    sheet.cell(5, 13, 20)
+    sheet.cell(5, 14, "Example")
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()
 
 
 def upload(client, report_id: str, dataset_type: str, path: Path, filename: str | None = None):
@@ -85,6 +112,66 @@ def test_import_binds_the_exact_mapping_profile_and_reports_duplicate_return_gro
     assert body["mapping_profile_id"] == profiles[0]["id"]
     assert body["mapping_version"] == 1
     assert any(item["check_id"] == "IGNORED_DUPLICATE_RETURN_GROUP" for item in body["validation_results"])
+
+
+def test_bloomberg_parser_uses_numeric_static_group_when_live_formulas_are_errors(client, report):
+    response = client.post(
+        f"/api/v1/reports/{report['id']}/imports",
+        data={"dataset_type": "constituent_returns"},
+        files={"file": ("bloomberg-static.xlsx", bloomberg_static_fallback_workbook(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "VALIDATED"
+    assert body["payload"]["return_periods"]["selected_group"] == 2
+    assert body["payload"]["return_periods"]["series_type"] == "TOTAL_RETURN"
+    assert body["payload"]["constituent_returns"][0]["return_1m"] == "0.1"
+    assert not any(item["severity"] == "BLOCKING" for item in body["validation_results"])
+
+
+def test_constituent_return_csv_preserves_approved_missing_tokens_as_na(client, report):
+    data = (
+        "security_code,name_en,period_end,period_start_1m,return_1m,period_start_3m,return_3m,period_start_6m,return_6m,period_start_ytd,return_ytd,source\n"
+        "20,Example,2026-06-30,2026-05-29,N/A,2026-03-31,11,2025-12-31,12,2025-12-31,13,Official\n"
+    ).encode()
+    response = upload_bytes(client, report["id"], "constituent_returns", data, "constituent-returns.csv")
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "VALIDATED"
+    row = body["payload"]["constituent_returns"][0]
+    assert row["return_1m"] is None
+    assert row["return_1m_missing_reason"] == "SOURCE_NA"
+    assert any(item["check_id"] == "RETURN_MISSING" and item["severity"] == "WARNING" for item in body["validation_results"])
+
+
+def test_constituent_return_csv_rejects_wrong_month_and_all_missing_values(client, report):
+    data = (
+        "security_code,name_en,period_end,period_start_1m,return_1m,period_start_3m,return_3m,period_start_6m,return_6m,period_start_ytd,return_ytd,source\n"
+        "20,Example,2026-05-30,2026-04-30,N/A,2026-02-27,#N/A,2025-11-28,NA,2025-12-31,,Official\n"
+    ).encode()
+    response = upload_bytes(client, report["id"], "constituent_returns", data, "constituent-returns.csv")
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "REJECTED"
+    check_ids = {item["check_id"] for item in body["validation_results"]}
+    assert {"REPORT_MONTH_MISMATCH", "RETURN_DATASET_NO_NUMERIC_VALUES"}.issubset(check_ids)
+
+
+def test_constituent_identity_reports_one_actionable_error_for_wrong_report_date(client):
+    april_report = client.post("/api/v1/reports", json={"product_code": "SLOT", "report_date": "2026-04-04"}).json()
+
+    response = upload(client, april_report["id"], "index_constituents", FIXTURES / "index_constituents.csv")
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "REJECTED"
+    date_findings = [item for item in body["validation_results"] if item["check_id"] == "AS_OF_AFTER_REPORT_DATE"]
+    assert len(date_findings) == 1
+    assert "2026-06 report" in date_findings[0]["fix_hint"]
+    assert not any(item["check_id"] == "DATASET_EMPTY" for item in body["validation_results"])
 
 
 def test_standard_constituent_return_csv_preserves_periods_and_explicit_percent_unit(client, report):
@@ -410,7 +497,7 @@ def test_required_logical_slots_auto_calculate_without_golden_fixture(client):
         assert downloaded.content
 
 
-def test_final_slot_rolls_back_when_automatic_calculation_fails(client):
+def test_total_return_slot_rolls_back_immediately_when_period_calculation_fails(client):
     client.post(
         "/api/v1/industry-master/import",
         files={"file": ("hsics.csv", hsics_master_csv(), "text/csv")},
@@ -430,7 +517,6 @@ def test_final_slot_rolls_back_when_automatic_calculation_fails(client):
     sources = [
         ("index_constituents", "index.csv", (FIXTURES / "index_constituents.csv").read_bytes(), "text/csv"),
         ("constituent_returns", "returns.xlsx", (FIXTURES / "bloomberg_monthly.xlsx").read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-        ("total_return_series", "total.csv", incomplete_returns, "text/csv"),
         ("fund_kpi_daily", "kpi.csv", b"metric_code,metric_date,value,unit,currency,source\nAUM,2026-06-30,1000,million,HKD,Official\nDAILY_TURNOVER,2026-06-29,50,million,HKD,Official\n", "text/csv"),
     ]
     for dataset_type, filename, data, mime in sources:
@@ -442,20 +528,20 @@ def test_final_slot_rolls_back_when_automatic_calculation_fails(client):
         applied = client.post(f"/api/v1/reports/{report_id}/imports/{uploaded['id']}/apply", json={})
         assert applied.status_code == 200, applied.text
     before = client.get(f"/api/v1/reports/{report_id}").json()
-    calendar = client.post(
+    total_return = client.post(
         f"/api/v1/reports/{report_id}/imports",
-        data={"dataset_type": "trading_calendar"},
-        files={"file": ("calendar.csv", b"market,date,is_trading_day,source\nHK,2026-06-29,true,Official\n", "text/csv")},
+        data={"dataset_type": "total_return_series"},
+        files={"file": ("total.csv", incomplete_returns, "text/csv")},
     ).json()
 
-    failed = client.post(f"/api/v1/reports/{report_id}/imports/{calendar['id']}/apply", json={})
+    failed = client.post(f"/api/v1/reports/{report_id}/imports/{total_return['id']}/apply", json={})
 
     assert failed.status_code == 422, failed.text
     assert failed.json()["error_code"] == "HISTORICAL_PERIODS_INCOMPLETE"
     after = client.get(f"/api/v1/reports/{report_id}").json()
     assert after["active_snapshot_id"] == before["active_snapshot_id"]
     imports = client.get(f"/api/v1/reports/{report_id}/imports").json()
-    assert next(item for item in imports if item["id"] == calendar["id"])["status"] == "VALIDATED"
+    assert next(item for item in imports if item["id"] == total_return["id"])["status"] == "VALIDATED"
 
 
 def test_returns_for_securities_outside_the_index_are_flagged_not_merged(client, report):

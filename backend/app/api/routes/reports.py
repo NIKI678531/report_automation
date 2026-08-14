@@ -105,4 +105,4 @@ def finalize(report_id: str, command: FinalizeRequest, db: Db, x_request_id: Req
 def preview(report_id: str, db: Db) -> Response:
     report = service.get_report(db, report_id)
     document = service.latest_document(db, report_id)
-    return Response(render_html(report, document.content), media_type="text/html")
+    return Response(render_html(report, document.content, preview=True), media_type="text/html")
