@@ -92,6 +92,16 @@ describe("FastAPI client", () => {
     fetchMock.mockRestore();
   });
 
+  it("refreshes automatic data for the selected report version", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ changed: true, snapshot: {} }), { status: 200 }));
+    await api.refreshAutomaticData("r1", 7);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/automatic-data/refresh", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ version: 7 }),
+    }));
+    fetchMock.mockRestore();
+  });
+
   it("sends a reason when replacing current data", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     await api.applyImport("r1", "i2", "Corrected source file");

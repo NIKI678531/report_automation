@@ -4,9 +4,9 @@ import { api, type DatasetSlot, type Report } from "../api";
 import { SectorDonut, sectorSlices, type SectorChartSnapshot } from "../features/analytics/SectorDonut";
 import { CompanyNewsWorkbench } from "../features/news/CompanyNewsWorkbench";
 import { legacyReviewBlocks, ReviewCanvas, type ReviewBlock } from "../features/review/ReviewCanvas";
-import { FOOTNOTE_SECTIONS, reportConstituentsTitle, reportMonthName, reportPageEyebrow, reportProductTicker, type FootnoteSectionKey, type ModuleId } from "../reportModules";
+import { FOOTNOTE_SECTIONS, reportConstituentsTitle, reportMonthName, reportPageEyebrow, reportProductTicker, reviewLegacyText, type FootnoteSectionKey, type ModuleId } from "../reportModules";
 import type { RegisterPendingSave } from "../pendingSave";
-import { MultiFileBatchUpload } from "./MultiFileBatchUpload";
+import { CsvDatasetUpload } from "./CsvDatasetUpload";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 type JsonRecord = Record<string, unknown>;
@@ -23,28 +23,10 @@ function percent(value: unknown): string {
   const numeric = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isFinite(numeric) ? new Intl.NumberFormat("en-HK", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(numeric) : "N/A";
 }
-
 function performanceValue(value: unknown): string {
   const numeric = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isFinite(numeric) ? (numeric * 100).toFixed(2) : "N/A";
 }
-
-function priceValue(value: unknown): string {
-  const numeric = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
-  return Number.isFinite(numeric) ? numeric.toFixed(2) : "N/A";
-}
-
-function constituentName(row: JsonRecord): string {
-  for (const value of [row.name_en, row.name_zh_hant]) {
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "N/A";
-}
-
-const PERFORMANCE_ROWS = [
-  { role: "FUND", label: "3033.HK" },
-  { role: "BENCHMARK", label: "HSTECHN Index" },
-] as const;
 
 function ModuleHeading({ eyebrow, title, description, actions }: { eyebrow: string; title: ReactNode; description: string; actions?: ReactNode }) {
   return <header className="module-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div>{actions && <div className="module-actions">{actions}</div>}</header>;
@@ -87,11 +69,9 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
     section.display_title = normalizedTitle;
     section.layout_schema_version = 2;
     section.blocks = blocks;
-    const plainText = (value: string) => value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    const summary = blocks.find((block) => block.block_id === "summary");
-    const outlook = blocks.find((block) => block.block_id === "outlook");
-    if (summary) section.summary = plainText(summary.content);
-    if (outlook) section.outlook = plainText(outlook.content);
+    const legacyText = reviewLegacyText(blocks);
+    section.summary = legacyText.summary;
+    section.outlook = legacyText.outlook;
     await api.saveDocument(report.id, version, next);
   }, [blocks, content, report.id, reviewTitle, version]);
   const frozen = report.status === "FINALIZED";
@@ -106,25 +86,24 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
 function PerformanceModule({ report, busy, run }: Omit<ModuleProps, "active">) {
   const performance = (sectionsOf(report).historical_performance as JsonRecord | undefined) ?? {};
   const data = rows(performance.rows);
+  const displayRows = [
+    { role: "FUND", label: "3033.HK" },
+    { role: "BENCHMARK", label: "HSTECHN Index" },
+  ];
   return <>
-    <ModuleHeading
-      eyebrow={reportPageEyebrow("performance", "CSOP data warehouse")}
-      title="Historical Performance"
-      description={`3033.HK product returns and ${report.benchmark_instrument_code} benchmark returns are read from the approved warehouse views.`}
-      actions={<button disabled={busy || report.status === "FINALIZED"} onClick={() => run(() => api.refreshAutomaticData(report.id, report.version))}><RefreshCw size={16} /> Refresh data warehouse</button>}
-    />
-    <section className="data-surface performance-table" aria-labelledby="performance-table-title">
-      <h3 id="performance-table-title" className="performance-table-title">Historical Performance of 3033.HK and Hang Seng TECH Index*</h3>
+    <ModuleHeading eyebrow={reportPageEyebrow("performance", "CDB automatic data")} title="Historical Performance" description={`Official 3033.HK and ${report.benchmark_instrument_code} period returns are loaded automatically from the read-only CDB warehouse for the selected report month.`} actions={<button disabled={busy || report.status === "FINALIZED"} onClick={() => run(() => api.refreshAutomaticData(report.id, report.version))}><RefreshCw size={16} /> Refresh data warehouse</button>} />
+    <section className="data-surface">
+      <h3>Historical Performance of 3033.HK and Hang Seng TECH Index*</h3>
       <table>
-        <colgroup><col /><col /><col /><col /><col /></colgroup>
         <thead><tr><th aria-label="Instrument"></th><th>1-month return (%)</th><th>3-month return (%)</th><th>6-month return (%)</th><th>YTD return (%)</th></tr></thead>
-        <tbody>{PERFORMANCE_ROWS.map(({ role, label }, index) => {
+        <tbody>{displayRows.map(({ role, label }, index) => {
           const row = data.find((candidate) => candidate.role === role) ?? data[index] ?? {};
           return <tr key={role}><th scope="row">{label}</th><td>{performanceValue(row.return_1m)}</td><td>{performanceValue(row.return_3m)}</td><td>{performanceValue(row.return_6m)}</td><td>{performanceValue(row.return_ytd)}</td></tr>;
         })}</tbody>
       </table>
-      {!data.length && <EmptyData message="The selected warehouse snapshot contains no matching 3033.HK and HSTECHN Index return rows." />}
+      {!data.length && <EmptyData />}
     </section>
+    <FormulaStrip title="Official period returns" formula="CDB returns_l1m · returns_l3m · returns_l6m · returns_ytd" detail="The server selects the latest common fund and benchmark observation within the chosen report month and preserves its lineage in the active immutable snapshot." />
   </>;
 }
 
@@ -134,7 +113,32 @@ function NewsModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_SA
 
 function ConstituentsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
   const data = rows(sectionsOf(report).constituents);
-  return <><ModuleHeading eyebrow={reportPageEyebrow("constituents", "Required upload")} title={reportConstituentsTitle(report)} description={data.length ? `${data.length} validated holdings are bound to the active immutable snapshot and drive Final Analytics.` : "A validated HSTECH constituent upload is mandatory before analysis. No draft or sample holdings are substituted."} /><MultiFileBatchUpload report={report} busy={busy} run={run} hasCurrentData={data.length > 0} /><section className="data-surface constituent-table"><table><thead><tr><th>Stock Code</th><th>Stock Name</th><th>Closing Price (HKD)</th><th>Weighting (%)</th><th>1-month return (%)</th><th>3-month return (%)</th><th>6-month return (%)</th><th>YTD return (%)</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.security_code)}><th scope="row"><span className="security-code">{String(row.security_code ?? "N/A")}</span></th><td><strong>{constituentName(row)}</strong></td><td>{priceValue(row.close_price)}</td><td>{performanceValue(row.weight)}</td><td>{performanceValue(row.return_1m)}</td><td>{performanceValue(row.return_3m)}</td><td>{performanceValue(row.return_6m)}</td><td>{performanceValue(row.return_ytd)}</td></tr>)}</tbody></table>{!data.length && <EmptyData message="Upload and apply Page 04 constituent identity and return data to continue." />}</section></>;
+  return <><ModuleHeading eyebrow={reportPageEyebrow("constituents", "CDB identity · FMP Total Return")} title={reportConstituentsTitle(report)} description={data.length ? `${data.length} holdings are bound to the selected ${report.report_date.slice(0, 7)} report. FMP calculates 1M, 3M, 6M and YTD from each CDB ticker for that report month.` : "Use the automatic CDB + FMP path without a file, or upload a constituent CSV as an explicit identity override."} /><ConstituentSources report={report} busy={busy} run={run} /><section className="data-surface constituent-table"><table><thead><tr><th>Code</th><th>Constituent</th><th>Price</th><th>Weight</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.security_code)}><th scope="row"><span className="security-code">{String(row.ticker ?? row.security_code)}</span></th><td><strong>{String(row.name_en ?? "")}</strong><small>{String(row.sector ?? "")}</small></td><td>{String(row.currency ?? "")} {Number(row.close_price ?? 0).toFixed(2)}</td><td>{percent(row.weight)}</td><td>{percent(row.return_1m)}</td><td>{percent(row.return_3m)}</td><td>{percent(row.return_6m)}</td><td>{percent(row.return_ytd)}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section></>;
+}
+
+function ConstituentSources({ report, busy, run }: Omit<ModuleProps, "active">) {
+  const [slots, setSlots] = useState<DatasetSlot[]>([]);
+  useEffect(() => {
+    api.listDatasets(report.id).then(setSlots).catch(() => setSlots([]));
+  }, [report.id, report.active_snapshot_id, report.version]);
+  const identity = slots.find((item) => item.key === "index_constituents");
+  const returns = slots.find((item) => item.key === "constituent_returns");
+  const fmpActive = returns?.state === "APPLIED" && returns.source_type === "FMP_API";
+  const automaticState = fmpActive ? "APPLIED" : returns?.state === "APPLIED" ? "OVERRIDDEN" : "AVAILABLE";
+  return <div className="constituent-source-grid">
+    <article className="constituent-source-card">
+      <span className="source-step">01 · CSV OVERRIDE</span>
+      <CsvDatasetUpload report={report} datasetType="index_constituents" busy={busy} run={run} allowClear />
+    </article>
+    <article className="constituent-source-card" aria-label="Automatic FMP constituent returns">
+      <div className="dataset-slot-head">
+        <div><span className="source-step">02 · AUTOMATIC</span><strong>CDB constituents + FMP returns</strong><span>No CSV is required. CDB supplies the selected month's ticker, name, price and weight; FMP supplies dividend-adjusted period returns.</span></div>
+        <span className={`dataset-state state-${automaticState === "OVERRIDDEN" ? "available" : automaticState.toLowerCase()}`}>{automaticState}</span>
+      </div>
+      <p className="dataset-current">{fmpActive ? `${returns?.rows ?? 0} FMP return rows · ${identity?.rows ?? 0} constituent identities` : returns?.state === "APPLIED" ? `Current return source: ${returns.source_name ?? returns.source_type ?? "approved override"}` : `Ready for ${report.report_date.slice(0, 7)}`}</p>
+      <div className="dataset-actions"><button className="primary" disabled={busy || report.status === "FINALIZED"} onClick={() => run(() => api.refreshAutomaticData(report.id, report.version))}><RefreshCw size={16} /> Load automatically</button></div>
+    </article>
+  </div>;
 }
 
 function AnalyticsModule({ report }: Omit<ModuleProps, "active">) {
@@ -144,11 +148,7 @@ function AnalyticsModule({ report }: Omit<ModuleProps, "active">) {
   const sectorSeries = sectorSlices(sectorChart);
   const monthName = reportMonthName(report);
   const productTicker = reportProductTicker(report);
-  return <><ModuleHeading eyebrow={reportPageEyebrow("analytics", "Calculated outputs")} title="Final Analytics" description="Derived only from the validated Page 04 upload. Top 10, sectors and performers never use draft, fixture or hard-coded fallback values." />{!top10.length && <AnalysisDependencyNotice />}<IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title="Top 10 Index Constituents" /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{String(row.issuer)}</th><td>{percent(row.weight)}</td></tr>)}</tbody></table>{!top10.length && <EmptyData message="Waiting for the validated Page 04 upload." />}</section><section className="analytics-section"><SectionTitle index="02" title="Index Sectors Breakdown" />{sectorSeries.length ? <SectorDonut chart={sectorChart} /> : <EmptyData message="The sector chart is generated from uploaded weights and effective HSICS codes." />}</section><section className="analytics-section"><SectionTitle index="03" title={`Performers in ${monthName}`} /><div className="performer-columns"><PerformerList title="Top" data={top} /><PerformerList title="Bottom" data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={`${productTicker} Portfolio Analysis`} /><dl className="portfolio-list">{portfolio.map((row) => <div key={String(row.label)}><dt>{String(row.label)}</dt><dd>{String(row.value)}</dd></div>)}</dl>{!portfolio.length && <EmptyData message="No KPI or holding facts have been validated yet." />}</section></div><FormulaStrip title="Analytics calculation set" formula="Weight ranking · HSICS aggregation · 1M performer ranking" detail="Every output is recalculated when a new Page 04 upload is applied; missing KPI values stay empty." /></>;
-}
-
-function AnalysisDependencyNotice() {
-  return <section className="analysis-dependency" role="status"><Database size={18} /><div><strong>Page 04 upload required</strong><span>Apply validated HSTECH constituents and returns before Final Analytics can be generated.</span></div></section>;
+  return <><ModuleHeading eyebrow={reportPageEyebrow("analytics", "Calculated outputs")} title="Final Analytics" description="Derived by the backend from the active constituent snapshot; fund KPI, calendar and event observations are loaded automatically." /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title="Top 10 Index Constituents" /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{String(row.issuer)}</th><td>{percent(row.weight)}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section"><SectionTitle index="02" title="Index Sectors Breakdown" />{sectorSeries.length ? <SectorDonut chart={sectorChart} /> : <EmptyData />}</section><section className="analytics-section"><SectionTitle index="03" title={`Performers in ${monthName}`} /><div className="performer-columns"><PerformerList title="Top" data={top} /><PerformerList title="Bottom" data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={`${productTicker} Portfolio Analysis`} /><dl className="portfolio-list">{portfolio.map((row) => <div key={String(row.label)}><dt>{String(row.label)}</dt><dd>{String(row.value)}</dd></div>)}</dl>{!portfolio.length && <EmptyData />}</section></div><FormulaStrip title="Analytics calculation set" formula="Weight ranking · HSICS aggregation · 1M performer ranking" detail="Every output is recalculated automatically when the active constituent snapshot becomes valid." /></>;
 }
 
 function IndustryMasterStatus({ report }: { report: Report }) {
@@ -200,4 +200,4 @@ function FootnotesModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
 }
 
 function FormulaStrip({ title, formula, detail }: { title: string; formula: string; detail: string }) { return <aside className="formula-strip"><Calculator size={20} /><div><span>{title}</span><strong>{formula}</strong><small>{detail}</small></div></aside>; }
-function EmptyData({ message = "This module is waiting for validated data." }: { message?: string }) { return <div className="empty-data"><Database size={20} /><span>{message}</span></div>; }
+function EmptyData() { return <div className="empty-data"><Database size={20} /><span>This module is waiting for validated data.</span></div>; }

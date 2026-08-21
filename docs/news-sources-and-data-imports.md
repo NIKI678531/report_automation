@@ -66,20 +66,21 @@ intermediate proxy, so it must be rotated on the same schedule as any other tran
 
 ## Monthly report data inputs
 
-The product workspace exposes one report-level upload. Historical Performance and fund-level Portfolio Analysis data are loaded automatically from the immutable DA-Report SQLite snapshot; Final Analytics is derived from the active constituent snapshot. Compatibility API slots remain readable for existing snapshots, but are not shown as user inputs.
+The product workspace exposes a constituent CSV override separately from automatic loading. Historical Performance comes from the read-only CDB warehouse. Page 04 can load HSTECH constituent identity from CDB and its returns from FMP without a CSV; Final Analytics is derived from the active constituent snapshot. Compatibility API slots remain readable for existing snapshots.
 
 | Slot | Template / accepted source | Required |
 |---|---|---|
-| `constituent_performance` | `docs/templates/constituent-performance-template.csv` | yes; only report upload |
-| `total_return_series` | DA-Report SQLite `total_return_series` | automatic |
+| `constituent_performance` / `index_constituents` | report-month CDB HSTECH identity, price, weight and HSICS data; approved CSV is an explicit override | automatic |
+| `constituent_returns` | FMP dividend-adjusted EOD history; approved upload remains an explicit override | automatic |
+| `total_return_series` | CDB fund/index performance views (`CO-CHST`, listed `CLS00178`, `HSTECHN Index`) | automatic |
 | `fund_kpi_daily` | DA-Report SQLite `fund_kpi_daily` | automatic |
 | `trading_calendar` | DA-Report SQLite `trading_calendar` | automatic |
 | `index_events` | DA-Report SQLite `index_events` | automatic; rows optional |
 | `industry_master` | centrally managed `docs/templates/industry-master-template.csv` | yes |
 
-`constituent_performance` carries `index_code`, as-of date, identity, price/currency, percent weight, HSICS industry code, a common period end, each period start, and either an explicit percent return or a missing reason. Percent fields are normalized to ratios by the backend. Once this file, automatic datasets and one report-date-effective HSICS master are present, the backend calculates Historical Performance and Final Analytics and persists dataset-specific MetricValue and ModuleSnapshot lineage. The browser does not calculate authoritative values.
+The automatic Page 04 path reads the HSTECH identity, ticker, names, price/currency, weight and HSICS codes from CDB at the same effective date used by Historical Performance. The backend then maps each `.HK` ticker (falling back to a zero-padded local code), obtains dividend-adjusted FMP EOD prices through the selected report date, resolves common 1M/3M/6M/YTD boundaries and stores decimal-ratio returns. Exact source observations and dates are retained in dataset lineage. An approved identity or return upload remains supported and is never silently overwritten. Once the identity source, return source, other automatic datasets and one report-date-effective HSICS master are present, the backend calculates Historical Performance and Final Analytics and persists dataset-specific MetricValue and ModuleSnapshot lineage. The browser does not calculate authoritative values.
 
-The first constituent application uses **Use this data** and requires no reason. Replacing it requires a replacement reason. Apply, replace, clear and automatic refresh all create new snapshots; automatic refresh preserves the effective constituent upload while replacing every SQLite-owned dataset.
+The first constituent CSV application uses **Use this data** and requires no reason. Replacing it requires a replacement reason. Apply, replace, clear and automatic refresh all create new snapshots; automatic refresh preserves an effective constituent upload, otherwise it uses CDB identity before loading FMP returns.
 
 ## Mapping profiles and HSICS
 

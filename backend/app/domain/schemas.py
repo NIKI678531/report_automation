@@ -79,6 +79,7 @@ class ReportRead(BaseModel):
     benchmark_code: str
     report_date: date
     language_mode: str
+    lane: str
     status: ReportStatus
     revision: int
     version: int
@@ -98,7 +99,8 @@ class ReportDetail(ReportRead):
 
 
 class SnapshotCreate(BaseModel):
-    source_policy: Literal["DA_REPORT_AUTO", "CDB_ONLY", "GOLDEN_FIXTURE", "UPLOAD_OVERRIDE"] = "GOLDEN_FIXTURE"
+    # Required so a request that does not name a source cannot silently select TESTING fixture data.
+    source_policy: Literal["DA_REPORT_AUTO", "CDB_ONLY", "GOLDEN_FIXTURE", "UPLOAD_OVERRIDE"]
     mapping_version: str = "hstech-v1"
 
 
@@ -108,6 +110,7 @@ class SnapshotRead(BaseModel):
     report_id: str
     as_of_date: date
     source_policy: str
+    lane: str
     mapping_version: str
     status: SnapshotStatus
     checksum: str | None
@@ -163,6 +166,17 @@ class ImportCreateRead(ImportRead):
 
 
 class ImportApply(BaseModel):
+    reason: str | None = Field(default=None, min_length=5, max_length=500)
+
+
+class AutomaticDataRefresh(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1)
+
+
+class ImportBatchApply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1)
     reason: str | None = Field(default=None, min_length=5, max_length=500)
 
 

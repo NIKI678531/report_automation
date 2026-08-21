@@ -49,13 +49,31 @@ def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[
         if isinstance(source, dict):
             constituent_sources.append(str(source.get("filename") or source.get("import_id") or dataset_type))
     if constituent_sources:
+        return_metadata = datasets.get("constituent_returns")
+        return_source = None
+        if isinstance(return_metadata, dict):
+            return_source = (
+                return_metadata.get("source_name")
+                or (return_metadata.get("lineage") or {}).get("source_system")
+                or return_metadata.get("filename")
+                or return_metadata.get("source_object")
+            )
+        return_periods = payload.get("return_periods") or {}
+        starts = return_periods.get("starts") or {}
+        period_text = ", ".join(
+            f"{label} {starts.get(field)} to {return_periods.get('end')}"
+            for field, label in (("return_1m", "1M"), ("return_3m", "3M"), ("return_6m", "6M"), ("return_ytd", "YTD"))
+            if starts.get(field) and return_periods.get("end")
+        )
         taxonomy = payload.get("industry_master") or {}
         taxonomy_text = (
             f" HSICS {taxonomy.get('version')}." if taxonomy.get("version") else ""
         )
         footnotes["constituents"] = (
-            f"Source: {', '.join(sorted(set(constituent_sources)))}; as of {as_of_date}."
-            f"{taxonomy_text} Prices, weights and returns retain their source units and periods."
+            f"Constituent source: {', '.join(sorted(set(constituent_sources)))}; as of {as_of_date}."
+            f" Return source: {return_source or return_periods.get('source') or 'not recorded'}."
+            f"{f' {period_text}.' if period_text else ''}{taxonomy_text}"
+            " Prices, weights and returns retain their source units and periods."
         )
 
     fund_kpis = payload.get("fund_kpis", [])

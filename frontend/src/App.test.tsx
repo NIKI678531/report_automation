@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { api, type Product, type Report } from "./api";
@@ -94,6 +94,7 @@ describe("3033 product scope", () => {
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockResolvedValue([july, december]);
     vi.spyOn(api, "getReport").mockImplementation(async (id) => id === december.id ? december : july);
+    vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
 
     render(<App />);
     await waitFor(() => expect(screen.getByLabelText("Report month")).toHaveProperty("value", "2026-07"));
@@ -101,6 +102,7 @@ describe("3033 product scope", () => {
     fireEvent.change(screen.getByLabelText("Report month"), { target: { value: "2025-12" } });
 
     await waitFor(() => expect(screen.getByLabelText("Report version")).toHaveProperty("value", december.id));
+    expect(api.refreshAutomaticData).toHaveBeenCalledWith(december.id, december.version);
     expect(screen.getByRole("option", { name: "2025-12-31 · r2 · DRAFT" })).toBeTruthy();
   });
 
@@ -110,6 +112,7 @@ describe("3033 product scope", () => {
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockResolvedValue([july, june]);
     vi.spyOn(api, "getReport").mockImplementation(async (id) => id === june.id ? june : july);
+    vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
     const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 2 });
 
     render(<App />);
@@ -123,11 +126,30 @@ describe("3033 product scope", () => {
     await waitFor(() => expect(screen.getByLabelText("Report version")).toHaveProperty("value", june.id));
   });
 
+  it("shows Review as ready when saved blocks exist but the legacy summary is stale", async () => {
+    const saved = report("saved-review", "2026-07-31", "EDITING");
+    const review = (saved.latest_document?.content.sections as Record<string, Record<string, unknown>>).month_in_review;
+    review.summary = "Add monthly market review.";
+    review.blocks = [
+      { block_id: "custom", type: "rich_text", title: "Commentary", content: "<p>Approved monthly commentary.</p>", x: 0, y: 0, w: 12, h: 4 },
+    ];
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "listReports").mockResolvedValue([saved]);
+    vi.spyOn(api, "getReport").mockResolvedValue(saved);
+
+    render(<App />);
+
+    const navigation = await screen.findByRole("navigation", { name: "Report modules" });
+    const reviewButton = within(navigation).getByRole("button", { name: /Review/ });
+    expect(reviewButton.querySelector(".module-state")?.classList.contains("ready")).toBe(true);
+  });
+
   it("finalizes after a passing review, then batch-generates only selected missing formats", async () => {
     let current = report("ready", "2026-07-31", "READY_TO_FINALIZE");
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockImplementation(async () => [current]);
     vi.spyOn(api, "getReport").mockImplementation(async () => current);
+    vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
     vi.spyOn(api, "review").mockResolvedValue({ ready: true, blocking: [], warnings: [] });
     const finalize = vi.spyOn(api, "finalize").mockImplementation(async () => {
       current = report("ready", "2026-07-31", "FINALIZED");
@@ -150,5 +172,21 @@ describe("3033 product scope", () => {
     fireEvent.click(screen.getByRole("button", { name: "Generate selected" }));
 
     await waitFor(() => expect(renderOutputs).toHaveBeenCalledWith("ready", ["pdf", "html"]));
+  });
+
+  it("creates another report even when the selected month already has a draft", async () => {
+    const existing = report("existing", "2026-06-30", "DRAFT");
+    const created = report("new-report", "2026-06-30", "DRAFT");
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "listReports").mockResolvedValue([existing, created]);
+    vi.spyOn(api, "getReport").mockImplementation(async (id) => id === created.id ? created : existing);
+    vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
+    const create = vi.spyOn(api, "createReport").mockResolvedValue(created);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "New report" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith("2026-06-30", "3033"));
+    await waitFor(() => expect(screen.getByLabelText("Report version")).toHaveProperty("value", created.id));
   });
 });

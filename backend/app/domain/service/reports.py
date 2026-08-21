@@ -33,7 +33,7 @@ from ..schemas import ReportCreate
 from .audit import audit
 from .catalog import resolve_product
 from .documents import latest_document
-from .snapshots import _stage_auto_snapshot, has_uploaded_constituent_bundle, require_complete_snapshot
+from .snapshots import _stage_auto_snapshot, has_approved_constituent_bundle, require_complete_snapshot
 
 
 _NUMBER_TOKEN = re.compile(r"(?<![\w.])[+-]?\d[\d,]*(?:\.\d+)?%?")
@@ -201,17 +201,17 @@ def release_gate_checks(db: Session, report: Report, document: ReportDocument) -
         snapshot = None
     if snapshot:
         checks.append({
-            "check_id": "CONSTITUENT_UPLOAD_REQUIRED",
+            "check_id": "CONSTITUENT_SOURCES_REQUIRED",
             "severity": "BLOCKING",
             "status": (
                 "PASSED"
-                if snapshot.lane != Lane.PRODUCTION.value or has_uploaded_constituent_bundle(snapshot.payload or {})
+                if snapshot.lane != Lane.PRODUCTION.value or has_approved_constituent_bundle(snapshot.payload or {})
                 else "FAILED"
             ),
-            "actual": {"lane": snapshot.lane, "uploaded": has_uploaded_constituent_bundle(snapshot.payload or {})},
+            "actual": {"lane": snapshot.lane, "approved_sources": has_approved_constituent_bundle(snapshot.payload or {})},
             "fix_hint": (
-                "Upload and apply the HSTECH constituent identity and return data on Page 04."
-                if snapshot.lane == Lane.PRODUCTION.value and not has_uploaded_constituent_bundle(snapshot.payload or {})
+                "Apply HSTECH constituent identity data and load returns from FMP or an approved upload."
+                if snapshot.lane == Lane.PRODUCTION.value and not has_approved_constituent_bundle(snapshot.payload or {})
                 else ""
             ),
         })

@@ -37,6 +37,7 @@ from .imports import stage_import
 from .snapshots import (
     dataset_present,
     empty_payload,
+    enrich_constituent_returns,
     ensure_snapshot_datasets,
     missing_required_slots,
     overlay_slot,
@@ -461,6 +462,7 @@ def apply_import_batch(
             "lineage": {"source_system": "UPLOAD", "batch_id": batch.id, "import_id": item.id, "file_checksum": item.checksum},
             "applied_at": datetime.now(timezone.utc).isoformat(),
         }
+    findings.extend(enrich_constituent_returns(base, report.report_date))
     constituent_dates = {str(row.get("as_of_date")) for row in base.get("constituents", []) if row.get("as_of_date")}
     return_end = str((base.get("return_periods") or {}).get("end") or "")
     if return_end and constituent_dates and constituent_dates != {return_end}:
@@ -486,13 +488,20 @@ def apply_import_batch(
     base["metrics"] = metrics
     missing = missing_required_slots(base)
     status = SnapshotStatus.VALID if not missing else SnapshotStatus.PENDING
-    contains_da = any(isinstance(value, dict) and value.get("source_type") == "DA_REPORT_SQLITE" for value in datasets.values())
+    source_types = {
+        value.get("source_type") for value in datasets.values() if isinstance(value, dict)
+    }
     snapshot = DataSnapshot(
         report_id=report.id,
         as_of_date=report.report_date,
-        source_policy="DA_REPORT_PLUS_UPLOAD" if contains_da else "UPLOAD_OVERRIDE",
+        source_policy=(
+            "DA_REPORT_FMP_PLUS_UPLOAD" if {"DA_REPORT_SQLITE", "FMP_API"} <= source_types
+            else "DA_REPORT_PLUS_UPLOAD" if "DA_REPORT_SQLITE" in source_types
+            else "FMP_PLUS_UPLOAD" if "FMP_API" in source_types
+            else "UPLOAD_OVERRIDE"
+        ),
         lane=Lane.PRODUCTION.value,
-        mapping_version="multi-file-batch-v1",
+        mapping_version="multi-file-batch-v1+fmp-hk-ticker-v1" if "FMP_API" in source_types else "multi-file-batch-v1",
         status=status,
         checksum=checksum(base),
         payload=base,

@@ -40,6 +40,60 @@ interface ConstituentIndexIdentity {
 	constituent_index_code: string;
 }
 
+interface ReviewBlockContent {
+	block_id?: unknown;
+	type?: unknown;
+	content?: unknown;
+}
+
+const REVIEW_PLACEHOLDERS = new Set([
+	"add monthly market review.",
+	"add outlook.",
+	"no content yet.",
+	"start writing...",
+]);
+
+export function reviewPlainText(value: unknown): string {
+	if (typeof value !== "string") return "";
+	return value
+		.replace(/<[^>]+>/g, " ")
+		.replace(/&nbsp;|&#160;/gi, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function isSubstantiveReviewText(value: unknown): boolean {
+	const text = reviewPlainText(value);
+	if (!text) return false;
+	const normalized = text.toLocaleLowerCase("en");
+	return !REVIEW_PLACEHOLDERS.has(normalized) && !normalized.startsWith("add the approved");
+}
+
+function reviewBlocks(review: Record<string, unknown>): ReviewBlockContent[] {
+	return Array.isArray(review.blocks)
+		? review.blocks.filter((block): block is ReviewBlockContent => Boolean(block) && typeof block === "object")
+		: [];
+}
+
+export function reviewHasContent(review: Record<string, unknown>): boolean {
+	const blocks = reviewBlocks(review);
+	if (blocks.length) return blocks.some((block) => isSubstantiveReviewText(block.content));
+	return isSubstantiveReviewText(review.summary);
+}
+
+export function reviewLegacyText(blocks: ReviewBlockContent[]): { summary: string; outlook: string } {
+	const substantive = blocks.filter((block) => isSubstantiveReviewText(block.content));
+	const summary = substantive.find((block) => block.block_id === "summary")
+		?? substantive.find((block) => block.type === "rich_text")
+		?? substantive[0];
+	const outlook = substantive.find((block) => block.block_id === "outlook")
+		?? substantive.find((block) => block.type === "outlook");
+	return {
+		summary: reviewPlainText(summary?.content),
+		outlook: reviewPlainText(outlook?.content),
+	};
+}
+
 export function reportPageLabel(moduleId: ModuleId): string {
 	return REPORT_MODULES.find(({ id }) => id === moduleId)?.pageLabel ?? "";
 }

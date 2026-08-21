@@ -55,6 +55,33 @@ def sanitize_review_html(value: str) -> str:
     return "".join(sanitizer.parts)
 
 
+class ReviewTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def review_plain_text(value: str) -> str:
+    extractor = ReviewTextExtractor()
+    extractor.feed(value)
+    extractor.close()
+    return " ".join(" ".join(extractor.parts).split())
+
+
+def _has_substantive_review_text(block: dict[str, Any]) -> bool:
+    text = review_plain_text(str(block.get("content", "")))
+    normalized = text.casefold()
+    return bool(text) and normalized not in {
+        "add monthly market review.",
+        "add outlook.",
+        "no content yet.",
+        "start writing...",
+    } and not normalized.startswith("add the approved")
+
+
 def review_display_title(document: dict[str, Any]) -> str:
     review = document.get("sections", {}).get("month_in_review", {})
     for field in ("display_title", "title"):
@@ -143,7 +170,22 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
             if horizontal and vertical:
                 raise ValueError(f"Review blocks {left['block_id']} and {right['block_id']} overlap")
     review["layout_schema_version"] = 2
-    review["blocks"] = sorted(normalized, key=lambda block: (block["y"], block["x"], block["block_id"]))
+    ordered = sorted(normalized, key=lambda block: (block["y"], block["x"], block["block_id"]))
+    review["blocks"] = ordered
+    substantive = [block for block in ordered if _has_substantive_review_text(block)]
+    summary = (
+        next((block for block in substantive if block["block_id"] == "summary"), None)
+        or next((block for block in substantive if block["type"] == "rich_text"), None)
+        or next(iter(substantive), None)
+    )
+    outlook = (
+        next((block for block in substantive if block["block_id"] == "outlook"), None)
+        or next((block for block in substantive if block["type"] == "outlook"), None)
+    )
+    # Blocks are canonical in layout schema v2. Keep the legacy fields synchronized so older
+    # status checks and renderers cannot retain a placeholder after the editor has saved content.
+    review["summary"] = review_plain_text(summary["content"]) if summary else ""
+    review["outlook"] = review_plain_text(outlook["content"]) if outlook else ""
     return result
 
 
@@ -204,6 +246,7 @@ def initial_document(
         "report_id": report_id,
         "template_version": template_version,
         "design_token_version": design_token_version,
+        "lane": "PRODUCTION",
         "language_mode": "EN",
         "report_date": report_date.isoformat(),
         "month_name": month,
@@ -228,18 +271,34 @@ def initial_document(
     }
 
 
-def bind_snapshot(content: dict[str, Any], snapshot_payload: dict[str, Any], include_editorial: bool = False) -> dict[str, Any]:
+def bind_snapshot(
+    content: dict[str, Any],
+    snapshot_payload: dict[str, Any],
+    *,
+    lane: str,
+    include_testing_editorial: bool = False,
+) -> dict[str, Any]:
     result = deepcopy(content)
+    # The lane travels with the facts it describes. Stamped here rather than left to the caller so
+    # a document can never carry a snapshot's numbers without carrying its lane.
+    result["lane"] = lane
     result["sections"]["constituents"] = snapshot_payload.get("constituents", [])
     result["sections"]["historical_performance"] = snapshot_payload.get("historical_performance", {"rows": []})
-    if include_editorial:
+    if include_testing_editorial and lane != "TESTING":
+        raise ValueError("Transcribed editorial may only be bound on the TESTING lane")
+    if include_testing_editorial:
         result["sections"]["company_news"] = snapshot_payload.get("company_news", [])
-    if include_editorial and snapshot_payload.get("month_in_review"):
+    if include_testing_editorial and snapshot_payload.get("month_in_review"):
         existing_review = result["sections"].get("month_in_review", {})
         incoming_review = deepcopy(snapshot_payload["month_in_review"])
         for field in ("title", "display_title", "blocks", "layout_schema_version"):
             if field in existing_review:
                 incoming_review[field] = deepcopy(existing_review[field])
+        incoming_review["provenance"] = {
+            "source": "TESTING_FIXTURE",
+            "file": "editorial.json",
+            "note": "Transcribed from the approved reference report. Not generated, not derived.",
+        }
         result["sections"]["month_in_review"] = incoming_review
     result["sections"]["analytics"] = snapshot_payload.get("analytics", result["sections"]["analytics"])
     result["sections"]["footnotes"] = snapshot_payload.get("footnotes", {})

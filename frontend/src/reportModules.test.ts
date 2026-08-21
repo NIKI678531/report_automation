@@ -7,6 +7,8 @@ import {
   reportPageLabel,
   reportProductTicker,
   reportsForContext,
+  reviewHasContent,
+  reviewLegacyText,
   selectInitialReport,
   selectReportForMonth,
 } from "./reportModules";
@@ -43,6 +45,23 @@ describe("report module page labels", () => {
   it("builds the constituent heading from the selected fund index", () => {
     expect(reportConstituentsTitle({ constituent_index_code: "HSTECH" })).toBe("The Performance of HSTECH Constituents");
     expect(reportConstituentsTitle({ constituent_index_code: "MSCI CHINA" })).toBe("The Performance of MSCI CHINA Constituents");
+  });
+
+  it("treats saved Review blocks as canonical content even when legacy summary is stale", () => {
+    const review = {
+      summary: "Add monthly market review.",
+      outlook: "Add outlook.",
+      blocks: [
+        { block_id: "custom", type: "rich_text", content: "<p>Approved monthly commentary.</p>" },
+      ],
+    };
+
+    expect(reviewHasContent(review)).toBe(true);
+    expect(reviewLegacyText(review.blocks)).toEqual({
+      summary: "Approved monthly commentary.",
+      outlook: "",
+    });
+    expect(reviewHasContent({ ...review, blocks: [{ block_id: "custom", type: "rich_text", content: "<p>Start writing...</p>" }] })).toBe(false);
   });
 
   it("keeps report revisions inside the selected fund and report date", () => {

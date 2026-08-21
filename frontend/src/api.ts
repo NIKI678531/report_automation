@@ -120,6 +120,8 @@ export interface DatasetSlot {
   latest_import_id: string | null;
   filename: string | null;
   rows: number;
+  source_type?: string | null;
+  source_name?: string | null;
   blocking: number;
   warnings: number;
 }
@@ -200,18 +202,18 @@ export interface Report {
   benchmark_instrument_code: string;
   benchmark_code: string;
   report_date: string;
-  status: ReportStatus;
   /** Whether this report's data may be distributed. TESTING artifacts are watermarked. */
   lane: "PRODUCTION" | "TESTING";
+  status: ReportStatus;
   revision: number;
   version: number;
   active_snapshot_id: string | null;
   finalized_document_version: number | null;
-  created_at?: string;
-  updated_at?: string;
   latest_document?: { version: number; checksum: string; content: Record<string, unknown> } | null;
   quality_results?: Array<{ check_id: string; status: string; severity: string; fix_hint: string }>;
   artifacts?: Array<{ id: string; format: OutputFormat; size_bytes: number; checksum: string }>;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface RenderJob {
@@ -239,6 +241,7 @@ export const api = {
   listReports: () => request<Report[]>("/reports"),
   getReport: (id: string) => request<Report>(`/reports/${id}`),
   createReport: (report_date: string, product_code = "3033") => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date }) }),
+  refreshAutomaticData: (id: string, version: number) => request<{ changed: boolean; snapshot?: unknown }>(`/reports/${id}/automatic-data/refresh`, { method: "POST", body: JSON.stringify({ version }) }),
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
   saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PATCH", body: JSON.stringify({ version, content }) }),
   render: (id: string, formats: OutputFormat[]) => request<RenderJob[]>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats }), headers: { "Idempotency-Key": crypto.randomUUID() } }),
@@ -250,7 +253,6 @@ export const api = {
   excludeImportBatchFile: (reportId: string, batchId: string, importId: string) => request<ImportBatch>(`/reports/${reportId}/import-batches/${batchId}/files/${importId}/exclude`, { method: "POST", body: JSON.stringify({}) }),
   applyImportBatch: (reportId: string, batchId: string, version: number, reason?: string) => request(`/reports/${reportId}/import-batches/${batchId}/apply`, { method: "POST", body: JSON.stringify({ version, ...(reason ? { reason } : {}) }) }),
   discardImportBatch: (reportId: string, batchId: string) => request<ImportBatch>(`/reports/${reportId}/import-batches/${batchId}/discard`, { method: "POST", body: JSON.stringify({}) }),
-  refreshAutomaticData: (reportId: string, version: number) => request<{ changed: boolean }>(`/reports/${reportId}/automatic-data/refresh`, { method: "POST", body: JSON.stringify({ version }) }),
   applyImport: (reportId: string, importId: string, reason?: string) => request(`/reports/${reportId}/imports/${importId}/apply`, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   discardImport: (reportId: string, importId: string) => request(`/reports/${reportId}/imports/${importId}/discard`, { method: "POST", body: JSON.stringify({}) }),
   clearDataset: (reportId: string, datasetType: ClearableDatasetType, version: number) => request(`/reports/${reportId}/datasets/${datasetType}/clear`, { method: "POST", body: JSON.stringify({ version }) }),

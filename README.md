@@ -49,7 +49,7 @@ The first module defaults to `<Month> in Review` in `3033-v2`. Its report title 
 
 Final Analytics takes its displayed month and fund ticker from the canonical report document. Changing the top report date navigates to the latest report for that fund and date, or opens the create-report state when none exists. Company News loads HKT report-month candidates matched to the active constituent snapshot.
 
-Report creation automatically reads official Total Return, fund KPI, trading-calendar and index-event observations from the approved DA-Report SQLite snapshot. The only report-level upload is `constituent_performance`: one CSV containing constituent identity, closing price, weight, HSICS industry code and explicit 1M/3M/6M/YTD returns and period boundaries. Applying it creates a new immutable mixed-source snapshot and derives Final Analytics on the server. Historical Performance and Final Analytics have no upload controls. Finalization generates HTML, PDF and DOCX outputs with download controls. See [docs/news-sources-and-data-imports.md](docs/news-sources-and-data-imports.md).
+Report creation loads Historical Performance directly from the read-only CDB warehouse. Page 04 can load report-month HSTECH identity, closing price, weight and HSICS codes from CDB, then calculate 1M/3M/6M/YTD returns from FMP dividend-adjusted EOD history without waiting for a CSV; a constituent CSV remains a separate explicit override. Applying or refreshing data creates a new immutable mixed-source snapshot and derives Final Analytics on the server. Finalization generates HTML, PDF and DOCX outputs with download controls. See [docs/news-sources-and-data-imports.md](docs/news-sources-and-data-imports.md).
 
 ## Verification
 

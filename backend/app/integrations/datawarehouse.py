@@ -5,14 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
-from datetime import date
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import httpx
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Engine, URL, create_engine, event, inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
@@ -21,6 +22,7 @@ from app.core.config import settings
 CLASS_MASTER = "view_ads_busi_product_fundinfo_class_f_p"
 FUND_RETURNS = "view_ads_busi_performance_class_returns_f_p"
 INDEX_RETURNS = "view_ads_busi_performance_index_returns_f_p"
+INDEX_CONSTITUENTS = "view_ads_busi_market_index_constituent_price_daily_f_p"
 RETURN_COLUMNS = {
     "return_1m": "returns_l1m",
     "return_3m": "returns_l3m",
@@ -28,10 +30,15 @@ RETURN_COLUMNS = {
     "return_ytd": "returns_ytd",
 }
 REQUIRED_COLUMNS = {
-    CLASS_MASTER: {"class_id", "tradar_code", "fund_name_en", "class_name", "class_type", "ticker", "index_ticker"},
-    FUND_RETURNS: {"trade_date", "tradar_code", "class_id", "class_name", *RETURN_COLUMNS.values()},
-    INDEX_RETURNS: {"trade_date", "class_id", "index_ticker", *RETURN_COLUMNS.values()},
+    "class_master": {"class_id", "tradar_code", "fund_name_en", "class_name", "class_type", "ticker", "index_ticker"},
+    "fund_returns": {"trade_date", "tradar_code", "class_id", "class_name", *RETURN_COLUMNS.values()},
+    "index_returns": {"trade_date", "tradar_code", "class_id", "index_ticker", *RETURN_COLUMNS.values()},
+    "index_constituents": {
+        "trade_date", "index_code", "stock_code", "stock_name", "stock_name_eng", "ccy",
+        "index_weight", "close_price", "industry_code", "industry_code2", "industry_code3", "sector",
+    },
 }
+_VIEW_NAME = re.compile(r"^[A-Za-z0-9_]+$")
 _MATERIALIZE_LOCK = threading.Lock()
 
 
@@ -42,6 +49,52 @@ class DataWarehouseProviderError(RuntimeError):
         self.message = message
         self.status_code = status_code
         self.retryable = retryable
+
+
+def _view_names() -> dict[str, str]:
+    views = {
+        "class_master": settings.datawarehouse_class_master_view,
+        "fund_returns": settings.datawarehouse_fund_returns_view,
+        "index_returns": settings.datawarehouse_index_returns_view,
+        "index_constituents": settings.datawarehouse_constituents_view,
+    }
+    invalid = sorted(name for name in views.values() if not _VIEW_NAME.fullmatch(name))
+    if invalid:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_VIEW_NAME_INVALID",
+            "A configured data-warehouse view name is not a permitted SQL identifier.",
+        )
+    return views
+
+
+def _mysql_configuration() -> dict[str, Any] | None:
+    values = {
+        "host": settings.datawarehouse_mysql_host,
+        "database": settings.datawarehouse_mysql_database,
+        "username": settings.datawarehouse_mysql_username,
+        "password": settings.datawarehouse_mysql_password,
+    }
+    if not any(values.values()):
+        return None
+    missing = sorted(key for key, value in values.items() if not value)
+    if missing:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_MYSQL_CONFIG_INCOMPLETE",
+            f"The CDB MySQL configuration is missing: {', '.join(missing)}.",
+        )
+    ssl_ca = settings.datawarehouse_mysql_ssl_ca
+    if ssl_ca and not ssl_ca.is_file():
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_MYSQL_SSL_CA_NOT_FOUND",
+            "The configured CDB MySQL CA certificate is not available.",
+        )
+    return {
+        **values,
+        "port": settings.datawarehouse_mysql_port,
+        "ssl_ca": str(ssl_ca.resolve()) if ssl_ca else None,
+        "ssl_verify_identity": settings.datawarehouse_mysql_ssl_verify_identity,
+        "timeout_seconds": settings.datawarehouse_timeout_seconds,
+    }
 
 
 @lru_cache(maxsize=4)
@@ -137,7 +190,7 @@ def _materialize_snapshot(client: httpx.Client | None = None) -> Path:
 
 
 @lru_cache(maxsize=4)
-def _engine(path: str) -> Engine:
+def _sqlite_engine(path: str) -> Engine:
     database_uri = f"file:{Path(path).resolve().as_posix()}?mode=ro"
     engine = create_engine(
         f"sqlite+pysqlite:///{database_uri}&uri=true",
@@ -153,17 +206,103 @@ def _engine(path: str) -> Engine:
     return engine
 
 
-def _validate_schema(connection) -> None:
-    for table_name, required in REQUIRED_COLUMNS.items():
-        actual = {
-            str(row["name"])
-            for row in connection.execute(text(f'PRAGMA table_info("{table_name}")')).mappings()
+@lru_cache(maxsize=4)
+def _mysql_engine(
+    host: str,
+    port: int,
+    database: str,
+    username: str,
+    password: str,
+    timeout_seconds: float,
+    ssl_ca: str | None,
+    ssl_verify_identity: bool,
+) -> Engine:
+    ssl_options: dict[str, Any] = {"check_hostname": ssl_verify_identity}
+    if ssl_ca:
+        ssl_options["ca"] = ssl_ca
+    timeout = max(1, int(round(timeout_seconds)))
+    engine = create_engine(
+        URL.create(
+            "mysql+pymysql",
+            username=username,
+            password=password,
+            host=host,
+            port=port,
+            database=database,
+        ),
+        connect_args={
+            "charset": "utf8mb4",
+            "connect_timeout": timeout,
+            "read_timeout": timeout,
+            "write_timeout": timeout,
+            "ssl": ssl_options,
+        },
+        pool_pre_ping=True,
+        pool_recycle=300,
+        pool_timeout=timeout_seconds,
+    )
+
+    @event.listens_for(engine, "connect")
+    def configure_read_only(dbapi_connection, connection_record) -> None:
+        del connection_record
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute("SET SESSION TRANSACTION READ ONLY")
+            cursor.execute(f"SET SESSION MAX_EXECUTION_TIME = {max(1000, timeout * 1000)}")
+
+    return engine
+
+
+def _data_source(views: dict[str, str]) -> tuple[Engine, dict[str, Any]]:
+    mysql = _mysql_configuration()
+    if mysql:
+        engine = _mysql_engine(
+            str(mysql["host"]),
+            int(mysql["port"]),
+            str(mysql["database"]),
+            str(mysql["username"]),
+            str(mysql["password"]),
+            float(mysql["timeout_seconds"]),
+            mysql["ssl_ca"],
+            bool(mysql["ssl_verify_identity"]),
+        )
+        return engine, {
+            "source_type": "CDB_MYSQL",
+            "source_system": "CSOP_CDB_MYSQL",
+            "source_name": "CSOP Data Warehouse",
+            "source_object": (
+                f"{mysql['database']}#"
+                f"{views['fund_returns']}+{views['index_returns']}"
+            ),
+            "file_checksum": None,
         }
+
+    path = _materialize_snapshot()
+    stat = path.stat()
+    file_checksum = _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    return _sqlite_engine(str(path.resolve())), {
+        "source_type": "DATAWAREHOUSE_SQLITE",
+        "source_system": "CSOP_DATAWAREHOUSE_SNAPSHOT",
+        "source_name": "CSOP Data Warehouse",
+        "source_object": f"{path.name}#{views['fund_returns']}+{views['index_returns']}",
+        "file_checksum": file_checksum,
+    }
+
+
+def _validate_schema(
+    connection,
+    views: dict[str, str],
+    roles: tuple[str, ...] = ("class_master", "fund_returns", "index_returns"),
+) -> None:
+    schema = inspect(connection)
+    for role in roles:
+        required = REQUIRED_COLUMNS[role]
+        table_name = views[role]
+        actual = {str(column["name"]) for column in schema.get_columns(table_name)}
         missing = sorted(required - actual)
         if missing:
             raise DataWarehouseProviderError(
                 "DATAWAREHOUSE_SCHEMA_MISMATCH",
-                f"The CSOP data-warehouse snapshot is missing fields in {table_name}: {', '.join(missing)}.",
+                f"The CSOP data warehouse is missing fields in {table_name}: {', '.join(missing)}.",
             )
 
 
@@ -205,6 +344,137 @@ def _period_rows(record: dict[str, Any], *, fund_ticker: str, benchmark_name: st
     ]
 
 
+def _security_code(raw: Any) -> str:
+    token = str(raw or "").strip().split()[0]
+    digits = re.sub(r"\D", "", token)
+    return digits.lstrip("0") or "0"
+
+
+def _clean_text(raw: Any) -> str | None:
+    value = str(raw or "").strip()
+    return value if value and "\ufffd" not in value else None
+
+
+def _hsics_codes(record: dict[str, Any]) -> dict[str, str | None]:
+    industry = _clean_text(record.get("industry_code"))
+    sector = _clean_text(record.get("industry_code2")) or _clean_text(record.get("sector"))
+    subsector = _clean_text(record.get("industry_code3"))
+    if not industry and sector and re.fullmatch(r"\d{4}", sector):
+        industry = sector[:2]
+    return {
+        "hsics_industry": industry,
+        "hsics_sector": sector,
+        "hsics_subsector": subsector,
+    }
+
+
+def load_index_constituents(
+    *,
+    index_code: str,
+    report_date: date,
+    effective_as_of: date | None = None,
+) -> dict[str, Any]:
+    """Load the report-month HSTECH identity set used as the input to FMP returns.
+
+    The Page 02 effective date is supplied when available.  This keeps the query on an exact CDB
+    partition and ensures the identity and return tables use one common report observation date.
+    """
+    views = _view_names()
+    engine, source = _data_source(views)
+    requested_date = effective_as_of or report_date
+    if requested_date > report_date or requested_date.strftime("%Y-%m") != report_date.strftime("%Y-%m"):
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_CONSTITUENT_DATE_INVALID",
+            "The CDB constituent observation must fall within the selected report month.",
+            422,
+        )
+    try:
+        with engine.connect() as connection:
+            _validate_schema(connection, views, ("index_constituents",))
+            rows = list(connection.execute(text(f"""
+                SELECT
+                    trade_date, index_code, stock_code, stock_name, stock_name_eng, ccy,
+                    index_weight, close_price, industry_code, industry_code2, industry_code3, sector
+                FROM {views['index_constituents']}
+                WHERE trade_date = :trade_date
+                  AND index_code = :index_code
+                ORDER BY index_weight DESC, stock_code
+            """), {
+                "trade_date": requested_date.isoformat(),
+                "index_code": index_code,
+            }).mappings())
+    except DataWarehouseProviderError:
+        raise
+    except SQLAlchemyError as error:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_CONSTITUENTS_QUERY_FAILED",
+            "Index constituents could not be queried from the CSOP data warehouse.",
+        ) from error
+
+    if not rows:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_CONSTITUENTS_NOT_FOUND",
+            f"The CDB contains no {index_code} constituent snapshot for {requested_date.isoformat()}.",
+            422,
+        )
+    constituents: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for record in rows:
+        code = _security_code(record["stock_code"])
+        if code in seen:
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_CONSTITUENTS_DUPLICATE",
+                f"The CDB constituent snapshot contains duplicate security {code}.",
+                422,
+            )
+        seen.add(code)
+        constituents.append({
+            "security_code": code,
+            "ticker": f"{code.zfill(4)}.HK",
+            "name_en": _clean_text(record["stock_name_eng"]) or code,
+            "name_zh_hant": _clean_text(record["stock_name"]) or "",
+            "close_price": None if record["close_price"] is None else str(record["close_price"]),
+            "currency": str(record["ccy"] or "").strip().upper(),
+            "weight": None if record["index_weight"] is None else str(record["index_weight"]),
+            "as_of_date": str(record["trade_date"]),
+            "source_codes": _hsics_codes(dict(record)),
+        })
+
+    payload = {
+        "constituents": constituents,
+        "constituent_index_code": index_code,
+        "effective_as_of": requested_date.isoformat(),
+    }
+    serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    payload_checksum = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    metadata = {
+        "source_type": source["source_type"],
+        "source_name": source["source_name"],
+        "source_object": f"{source['source_object'].split('#', 1)[0]}#{views['index_constituents']}",
+        "row_count": len(constituents),
+        "checksum": payload_checksum,
+        "mapping_version": "cdb-index-constituents-v1",
+        "lineage": {
+            "source_system": source["source_system"],
+            "source_table": views["index_constituents"],
+            "source_record_keys": [
+                f"{index_code}:{requested_date.isoformat()}:{row['security_code']}"
+                for row in constituents
+            ],
+            "requested_report_date": report_date.isoformat(),
+            "effective_as_of": requested_date.isoformat(),
+            "weight_unit": "RATIO",
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    return {
+        **payload,
+        "datasets": {"index_constituents": metadata},
+        "source_checksum": payload_checksum,
+        "_findings": [],
+    }
+
+
 def load_historical_performance(
     *,
     fund_ticker: str,
@@ -216,18 +486,17 @@ def load_historical_performance(
     """Return source-supplied 1M/3M/6M/YTD values for the latest date in each report month."""
     if month_count < 1 or month_count > 24:
         raise ValueError("month_count must be between 1 and 24")
-    path = _materialize_snapshot()
-    stat = path.stat()
-    file_checksum = _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    views = _view_names()
+    engine, source = _data_source(views)
     expected_ticker = _ticker_token(fund_ticker)
     benchmark_prefix = benchmark_instrument_code.strip().upper()
     history_start = _month_floor(report_date, month_count - 1)
     try:
-        with _engine(str(path.resolve())).connect() as connection:
-            _validate_schema(connection)
+        with engine.connect() as connection:
+            _validate_schema(connection, views)
             candidates = list(connection.execute(text(f"""
                 SELECT class_id, tradar_code, fund_name_en, class_name, class_type, ticker, index_ticker
-                FROM {CLASS_MASTER}
+                FROM {views['class_master']}
                 WHERE UPPER(class_type) = 'LISTED'
                   AND LOWER(class_name) NOT LIKE '%unlisted%'
                 ORDER BY class_id
@@ -240,39 +509,56 @@ def load_historical_performance(
                     422,
                 )
             share_class = share_classes[0]
-            source_rows = list(connection.execute(text(f"""
-                SELECT
-                    c.trade_date,
-                    c.tradar_code,
-                    c.class_id,
-                    c.class_name,
-                    i.index_ticker,
-                    c.returns_l1m AS fund_returns_l1m,
-                    c.returns_l3m AS fund_returns_l3m,
-                    c.returns_l6m AS fund_returns_l6m,
-                    c.returns_ytd AS fund_returns_ytd,
-                    i.returns_l1m AS index_returns_l1m,
-                    i.returns_l3m AS index_returns_l3m,
-                    i.returns_l6m AS index_returns_l6m,
-                    i.returns_ytd AS index_returns_ytd
-                FROM {FUND_RETURNS} c
-                LEFT JOIN {INDEX_RETURNS} i
-                  ON i.class_id = c.class_id
-                 AND i.trade_date = c.trade_date
-                WHERE c.class_id = :class_id
-                  AND c.trade_date BETWEEN :history_start AND :report_date
-                ORDER BY c.trade_date
-            """), {
+            query_parameters = {
                 "class_id": share_class["class_id"],
+                "tradar_code": share_class["tradar_code"],
                 "history_start": history_start.isoformat(),
                 "report_date": report_date.isoformat(),
-            }).mappings())
+                "benchmark_like": f"{benchmark_prefix}%",
+            }
+            fund_rows = list(connection.execute(text(f"""
+                SELECT
+                    trade_date, tradar_code, class_id, class_name,
+                    returns_l1m AS fund_returns_l1m,
+                    returns_l3m AS fund_returns_l3m,
+                    returns_l6m AS fund_returns_l6m,
+                    returns_ytd AS fund_returns_ytd
+                FROM {views['fund_returns']}
+                WHERE class_id = :class_id
+                  AND tradar_code = :tradar_code
+                  AND trade_date BETWEEN :history_start AND :report_date
+                ORDER BY trade_date
+            """), query_parameters).mappings())
+            index_rows = list(connection.execute(text(f"""
+                SELECT
+                    trade_date, tradar_code, class_id, index_ticker,
+                    returns_l1m AS index_returns_l1m,
+                    returns_l3m AS index_returns_l3m,
+                    returns_l6m AS index_returns_l6m,
+                    returns_ytd AS index_returns_ytd
+                FROM {views['index_returns']}
+                WHERE class_id = :class_id
+                  AND tradar_code = :tradar_code
+                  AND UPPER(index_ticker) LIKE :benchmark_like
+                  AND trade_date BETWEEN :history_start AND :report_date
+                ORDER BY trade_date
+            """), query_parameters).mappings())
+            index_by_key = {
+                (row["tradar_code"], row["class_id"], row["trade_date"]): dict(row)
+                for row in index_rows
+            }
+            source_rows = []
+            for fund_row in fund_rows:
+                key = (fund_row["tradar_code"], fund_row["class_id"], fund_row["trade_date"])
+                index_row = index_by_key.get(key)
+                if index_row:
+                    source_rows.append({**dict(fund_row), **index_row})
     except DataWarehouseProviderError:
         raise
     except SQLAlchemyError as error:
         raise DataWarehouseProviderError(
             "DATAWAREHOUSE_QUERY_FAILED",
-            "Historical Performance could not be queried from the CSOP data-warehouse snapshot.",
+            "Historical Performance could not be queried from the CSOP data warehouse.",
         ) from error
 
     comparable = [
@@ -283,13 +569,23 @@ def load_historical_performance(
     if not comparable:
         raise DataWarehouseProviderError(
             "DATAWAREHOUSE_PERFORMANCE_NOT_FOUND",
-            f"The configured snapshot maps {fund_ticker} to {share_class['tradar_code']} / {share_class['class_id']}, "
+            f"The configured data source maps {fund_ticker} to {share_class['tradar_code']} / {share_class['class_id']}, "
             f"but contains no product and {benchmark_prefix} benchmark return rows through {report_date.isoformat()}.",
             422,
         )
     by_month: dict[str, dict[str, Any]] = {}
     for row in comparable:
         by_month[str(row["trade_date"])[:7]] = row
+    requested_report_month = report_date.strftime("%Y-%m")
+    if requested_report_month not in by_month:
+        latest_available_month = max(by_month)
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_REPORT_MONTH_NOT_FOUND",
+            f"The configured data source contains no common {fund_ticker} and {benchmark_prefix} return row "
+            f"for the selected report month {requested_report_month}; the latest available month not later "
+            f"than the report date is {latest_available_month}.",
+            422,
+        )
     selected = [by_month[key] for key in sorted(by_month, reverse=True)[:month_count]]
     fund_name = str(share_class["fund_name_en"] or fund_ticker)
     benchmark_name = str(selected[0]["index_ticker"])
@@ -316,10 +612,10 @@ def load_historical_performance(
         "rows": current["rows"],
         "periods": periods,
         "monthly_observations": observations,
-        "requested_report_month": report_date.strftime("%Y-%m"),
+        "requested_report_month": requested_report_month,
         "effective_as_of": current["effective_as_of"],
-        "source_name": "CSOP Data Warehouse",
-        "source_tables": [FUND_RETURNS, INDEX_RETURNS],
+        "source_name": source["source_name"],
+        "source_tables": [views["fund_returns"], views["index_returns"]],
         "source_mapping": {
             "fund_ticker": fund_ticker,
             "fund_name": fund_name,
@@ -332,25 +628,28 @@ def load_historical_performance(
         "formula_version": formula_version,
     }
     serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    payload_checksum = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    source_checksum = source["file_checksum"] or payload_checksum
     metadata = {
-        "source_type": "DATAWAREHOUSE_SQLITE",
-        "source_object": f"{path.name}#{FUND_RETURNS}+{INDEX_RETURNS}",
-        "checksum": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+        "source_type": source["source_type"],
+        "source_object": source["source_object"],
+        "checksum": payload_checksum,
         "row_count": len(current["rows"]),
         "lineage": {
-            "source_system": "CSOP_DATAWAREHOUSE",
-            "sqlite_checksum": file_checksum,
-            "source_tables": [FUND_RETURNS, INDEX_RETURNS],
+            "source_system": source["source_system"],
+            "source_checksum": source_checksum,
+            "source_tables": [views["fund_returns"], views["index_returns"]],
             "source_record_keys": [
-                f"{share_class['class_id']}:{observation['effective_as_of']}"
+                f"{share_class['tradar_code']}:{share_class['class_id']}:{observation['effective_as_of']}"
                 for observation in observations
             ],
             "query_window": {"from": history_start.isoformat(), "to": report_date.isoformat()},
             "source_field_map": RETURN_COLUMNS,
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
         },
     }
     return {
         "historical_performance": payload,
         "datasets": {"historical_performance": metadata},
-        "source_checksum": file_checksum,
+        "source_checksum": source_checksum,
     }

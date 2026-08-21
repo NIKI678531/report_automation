@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-13
 - Supersedes: the Page 02 source and calculation decision in ADR-0004/ADR-0005
+- Superseded in part by: ADR-0010 for the production connection transport
 
 ## Context
 
@@ -21,8 +22,8 @@ warehouse's precomputed return fields for this page.
 Page 02 reads `returns_l1m`, `returns_l3m`, `returns_l6m`, and `returns_ytd` directly from the two
 warehouse views. Values remain decimal ratios in snapshots and are multiplied by 100 only at the
 display layer. For a selected report month, the adapter chooses the latest common product/index
-row not later than the report date and records the effective date. It also stores up to 12 monthly
-observations so reviewers can choose how many report months to inspect.
+row within that month, not a stale row from an earlier month, and records the effective date. It
+also stores up to 12 monthly observations so reviewers can choose how many report months to inspect.
 
 The source is read-only. Local development may use `DATAWAREHOUSE_SQLITE_PATH`; deployed workloads
 must use a checksummed `DATAWAREHOUSE_OBJECT_URL` backed by TOS and an ephemeral cache. No PVC or
@@ -36,8 +37,8 @@ auditable provider finding.
 
 - Period start dates are not invented because the warehouse views do not expose the selected
   underlying start observations; lineage records the exact source field and effective end date.
-- The current `td_attribution_cdb_test_2025.db` contains the 3033 master mapping but no 3033 rows in
-  either performance table, so Page 02 correctly reports missing warehouse coverage until a
-  complete snapshot is published.
+- The refreshed 2026-08-17 `td_attribution_cdb_test_2025.db` contains 2025 coverage for the listed
+  `CO-CHST / CLS00178` class and its `HSTECHN Index` benchmark in both performance tables. The
+  unlisted `CLS00199` sibling remains explicitly excluded.
 - The official Total Return CSV parser remains available only as a compatibility fallback when the
   warehouse performance route is explicitly disabled.

@@ -1,6 +1,6 @@
 # Implementation status against V2.1
 
-Last verified: 2026-08-11
+Last verified: 2026-08-21
 
 ## Implemented and tested
 
@@ -34,7 +34,7 @@ Last verified: 2026-08-11
 - Company News opens directly against the complete DA Regional Corporate catalog without requiring an active report snapshot. It supports server-side filters, infinite cursor loading, visible retry errors, bilingual enrichment metadata, manual additions and a retained right-side report editor. Saved DA rows retain external lineage, survive data recalculation, and render source/date/URL across formats; cross-period selection is allowed with a non-blocking post-report-date warning under ADR-0002.
 - Legacy combined imports, GICS/sector-override uploads, the old React report module, pnpm files and OneDrive `*-AZ-AI-WS-07*` source/configuration copies have been removed.
 - V2.1 lifecycle states, calculation-before-finalize gating, QC-008 AI number binding, dynamic lineage footnotes, and canonical cross-format content manifests for QC-010 comparison.
-- Single `constituent_performance` CSV workflow: identity, price, weight, HSICS code, returns, explicit period boundaries and source lineage are validated and applied as one immutable bundle. Historical Performance and Final Analytics no longer expose uploads in the frontend.
+- Page 04 exposes two distinct paths: an explicit constituent CSV identity override and automatic CDB HSTECH identity plus FMP 1M/3M/6M/YTD returns. Both paths produce immutable source lineage; Historical Performance and Final Analytics do not expose manual calculation inputs.
 - Effective-dated ProductCatalog bindings for fund Total Return instrument, fund KPI product and trading calendar, with reversible migration and fail-closed validation.
 - Read-only DA-Report monthly-data provider for official FUND/BENCHMARK Total Return, report-month KPI/calendar and future index events. Report creation can stage a `DA_REPORT_AUTO` snapshot; one constituent upload advances it to `DA_REPORT_PLUS_UPLOAD`, and refresh preserves the upload checksum.
 - MetricValue and ModuleSnapshot source IDs now follow an explicit dependency graph instead of referencing every snapshot dataset. Constituent periods are independent from Historical common TR periods.
@@ -43,7 +43,7 @@ Last verified: 2026-08-11
 
 ## Incomplete or environment-dependent
 
-- Production CDB logical views and credentials are unavailable; `CDB_ONLY` intentionally fails closed. The adapter/configuration must be completed against approved physical views.
+- The live read-only CDB adapter and approved performance/constituent views have been verified for 3033/HSTECH coverage from 2024 through the latest available 2026 observation. Deployment still requires injecting the database secret and TLS configuration through the company secret store.
 - The DA-Report upstream repository is not present in this workspace. Its MySQL schema/ETL and dump-to-SQLite converter still need to produce `total_return_series`, `fund_kpi_daily`, `trading_calendar` and `index_events`; the 2026-08-07 SQLite snapshot does not contain them, so production automatic monthly snapshots correctly remain PENDING until that external delivery lands.
 - Microsoft Entra token signature, issuer, audience, and group validation requires tenant/application configuration. Local mode enforces roles using test headers; deployed `ENTRA` mode currently enforces bearer presence and must be connected to the company identity configuration before production.
 - Azure OpenAI deployment is unavailable. The current assisted draft is deterministic and MetricValue-bound; DA-Report snapshot news and manual approved news ingestion are implemented.
@@ -53,8 +53,8 @@ Last verified: 2026-08-11
 - The output passes four-page A4 validation and page-4 donut/text structure checks but does not meet the specification's recommended 0.5% pixel-difference target against the supplied reference PDF. The latest page-4 difference is 12.0464%; evidence is under `var/artifacts/visual/latest/manifest.json`.
 - Formal Marketing, Business, Data Steward, Security, and UAT approvals are external gates and have not been claimed.
 - The business-approved full CSOP listed-fund CSV has not been supplied. The production catalog therefore contains only the confirmed 3033 baseline; test-only products are never seeded by migrations.
-- The FMP adapter was removed; DA-Report is the default provider and Marketaux is the only remaining remote vendor. Automated provider tests use an HTTP mock and no real credential.
+- Page 04 constituent identity can be loaded automatically from the report-month-effective CDB HSTECH view; 1M/3M/6M/YTD returns are loaded from FMP's dividend-adjusted EOD endpoint using each normalized Hong Kong ticker. An explicit constituent CSV remains an override, and provider tests use HTTP mocks without committed credentials.
 - Review v2 currently supports rich-text blocks, creation/deletion, drag and resize. Dedicated image/data-table block property editors, bilingual block editing, undo/redo history, and DOCX fidelity for complex staggered rows remain incomplete.
-- Production CDB views, the formal report-date 112-subindustry HSICS file, complete KPI/calendar/event feeds, and TOS credentials/object publication remain environment inputs. The code fails closed or marks QA blocked rather than copying facts from the PDF.
+- The formal report-date 112-subindustry HSICS file, complete KPI/calendar/event feeds, and TOS credentials/object publication remain environment inputs. CDB/FMP credentials also remain deployment secrets. The code fails closed or marks QA blocked rather than copying facts from the PDF.
 
 This file is an implementation ledger, not a waiver. Items above remain part of the active V2.1 objective.

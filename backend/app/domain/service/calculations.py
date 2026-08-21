@@ -34,7 +34,7 @@ from ..models import (
 from .audit import audit
 from .catalog import resolve_product
 from .documents import latest_document
-from .snapshots import ensure_snapshot_datasets, has_uploaded_constituent_bundle, require_complete_snapshot
+from .snapshots import ensure_snapshot_datasets, has_approved_constituent_bundle, require_complete_snapshot
 
 
 def persist_calculation_records(
@@ -316,12 +316,12 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
         raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED"})
     snapshot = db.get(DataSnapshot, report.active_snapshot_id)
     require_complete_snapshot(snapshot)
-    if snapshot.lane == Lane.PRODUCTION.value and not has_uploaded_constituent_bundle(snapshot.payload or {}):
+    if snapshot.lane == Lane.PRODUCTION.value and not has_approved_constituent_bundle(snapshot.payload or {}):
         raise HTTPException(status_code=422, detail={
-            "error_code": "CONSTITUENT_UPLOAD_REQUIRED",
-            "message": "Page 04 analysis requires an explicitly uploaded constituent bundle.",
+            "error_code": "CONSTITUENT_SOURCES_REQUIRED",
+            "message": "Page 04 analysis requires approved constituent identity and return sources.",
             "severity": "BLOCKING",
-            "fix_hint": "Upload and apply the HSTECH constituent identity and return data on Page 04.",
+            "fix_hint": "Apply the HSTECH constituent identity data and load returns from FMP or an approved upload.",
         })
     product = resolve_product(db, report.product_code, report.report_date)
     formula_version = product.formula_profile

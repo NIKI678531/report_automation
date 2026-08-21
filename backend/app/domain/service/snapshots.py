@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.integrations.fmp import FmpProviderError, load_constituent_returns
 from .. import ingestion
 from ..document import bind_snapshot, checksum
 from ..industry import map_effective_hsics
@@ -85,7 +86,7 @@ def ensure_snapshot_datasets(db: Session, snapshot: DataSnapshot) -> list[Snapsh
     def metadata_for(dataset_type: str) -> dict:
         candidates = {
             "constituent_snapshot": ("constituent_performance", "index_constituents"),
-            "constituent_period_return": ("constituent_performance", "constituent_returns"),
+            "constituent_period_return": ("constituent_returns", "constituent_performance"),
             "historical_performance": ("historical_performance", "total_return_series"),
             "index_event": ("index_events",),
         }.get(dataset_type, (dataset_type,))
@@ -182,6 +183,76 @@ def has_uploaded_constituent_bundle(payload: dict) -> bool:
     return uploaded("constituent_performance") or (
         uploaded("index_constituents") and uploaded("constituent_returns")
     )
+
+
+def has_approved_constituent_bundle(payload: dict) -> bool:
+    """Return whether Page 04 identity and returns have approved, dataset-level lineage."""
+    constituents = payload.get("constituents") or []
+    if not constituents or not all(
+        all(row.get(field) is not None or row.get(f"{field}_missing_reason") for field in ingestion.RETURN_FIELDS)
+        for row in constituents
+    ):
+        return False
+    datasets = payload.get("datasets") or {}
+    canonical = datasets.get("constituent_performance")
+    identity = datasets.get("index_constituents") or canonical
+    returns = datasets.get("constituent_returns") or canonical
+    approved = {"UPLOAD", "CDB", "CDB_MYSQL", "DA_REPORT_SQLITE", "DATAWAREHOUSE_SQLITE", "FMP_API"}
+    return (
+        isinstance(identity, dict)
+        and isinstance(returns, dict)
+        and identity.get("source_type") in approved
+        and returns.get("source_type") in approved
+    )
+
+
+def enrich_constituent_returns(payload: dict, report_date: date) -> list[dict]:
+    """Replace only the automatic Page 04 return slot with an FMP-derived version.
+
+    Explicitly uploaded return facts stay authoritative. Identity may come from an upload because
+    the two logical datasets retain separate source metadata and lineage.
+    """
+    constituents = payload.get("constituents") or []
+    if not constituents or not settings.fmp_constituent_returns_enabled:
+        return []
+    datasets = payload.setdefault("datasets", {})
+    canonical = datasets.get("constituent_performance")
+    returns = datasets.get("constituent_returns")
+    # A dedicated uploaded return slot is always authoritative.  The legacy canonical upload owns
+    # both identity and returns, but older/current identity-only files can legitimately carry N/A
+    # placeholders in all four return columns.  In that case it is an identity source in practice,
+    # and FMP should fill the complete return slot instead of being skipped solely because the
+    # canonical file itself was uploaded.
+    canonical_has_return_values = (
+        isinstance(canonical, dict)
+        and canonical.get("source_type") == "UPLOAD"
+        and any(
+            row.get(field) is not None
+            for row in constituents
+            for field in ingestion.RETURN_FIELDS
+        )
+    )
+    if canonical_has_return_values or (
+        isinstance(returns, dict) and returns.get("source_type") == "UPLOAD"
+    ):
+        return []
+    try:
+        fragment = load_constituent_returns(constituents, report_date)
+    except FmpProviderError as error:
+        return [{
+            "check_id": error.code,
+            "error_code": error.code,
+            "severity": "BLOCKING",
+            "status": "FAILED",
+            "message": error.message,
+            "actual": None,
+            "threshold": "FMP dividend-adjusted EOD coverage for the selected report month",
+            "fix_hint": "Verify the FMP API key, entitlement, ticker mapping and provider availability, then refresh Page 04.",
+        }]
+    findings = list(fragment.pop("_findings", []))
+    findings.extend(overlay_slot(payload, ingestion.REGISTRY["constituent_returns"], fragment))
+    datasets.update(fragment.get("datasets") or {})
+    return findings
 
 
 def snapshot_dataset_type(dataset_type: str) -> str:
@@ -405,10 +476,14 @@ def _stage_auto_snapshot(
     for payload_key, dataset_key in fragment_slots.items():
         if dataset_key not in preserved_uploads and payload_key in fragment:
             payload[payload_key] = fragment[payload_key]
+    if not upload_lineage and fragment.get("constituents"):
+        payload["constituents"] = json.loads(json.dumps(fragment["constituents"]))
+        payload["as_of_date"] = str(fragment.get("effective_as_of") or report.report_date.isoformat())
     payload["datasets"].update({
         key: value
         for key, value in fragment.get("datasets", {}).items()
         if key not in preserved_uploads
+        and not (upload_lineage and key in {"constituent_performance", "index_constituents", "constituent_returns"})
     })
     if (fragment.get("historical_performance") or {}).get("rows"):
         # The warehouse period-return views are authoritative when available; retaining an older
@@ -416,6 +491,7 @@ def _stage_auto_snapshot(
         payload.pop("total_return_series", None)
         payload["datasets"].pop("total_return_series", None)
     payload["constituent_index_code"] = report.constituent_index_code
+    provider_findings.extend(enrich_constituent_returns(payload, report.report_date))
     if payload.get("total_return_series"):
         try:
             payload["historical_performance"] = historical_performance(
@@ -445,7 +521,12 @@ def _stage_auto_snapshot(
         for metadata in (payload.get("datasets") or {}).values()
     )
     has_datawarehouse = any(
-        isinstance(metadata, dict) and metadata.get("source_type") == "DATAWAREHOUSE_SQLITE"
+        isinstance(metadata, dict)
+        and metadata.get("source_type") in {"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"}
+        for metadata in (payload.get("datasets") or {}).values()
+    )
+    has_fmp = any(
+        isinstance(metadata, dict) and metadata.get("source_type") == "FMP_API"
         for metadata in (payload.get("datasets") or {}).values()
     )
     payload_checksum = checksum(payload)
@@ -461,8 +542,11 @@ def _stage_auto_snapshot(
         })
         return active_snapshot
     source_policy = (
-        "DATAWAREHOUSE_PLUS_UPLOAD" if has_datawarehouse and has_upload
+        "DATAWAREHOUSE_FMP_PLUS_UPLOAD" if has_datawarehouse and has_fmp and has_upload
+        else "DATAWAREHOUSE_PLUS_UPLOAD" if has_datawarehouse and has_upload
+        else "DATAWAREHOUSE_FMP_AUTO" if has_datawarehouse and has_fmp
         else "DATAWAREHOUSE_AUTO" if has_datawarehouse
+        else "DA_REPORT_FMP_PLUS_UPLOAD" if has_fmp and has_upload
         else "DA_REPORT_PLUS_UPLOAD" if has_upload
         else "DA_REPORT_AUTO"
     )
@@ -471,7 +555,15 @@ def _stage_auto_snapshot(
         as_of_date=report.report_date,
         source_policy=source_policy,
         lane=Lane.PRODUCTION.value,
-        mapping_version="datawarehouse-performance-v1+da-report-monthly-v1" if has_datawarehouse else "da-report-monthly-v1",
+        mapping_version=(
+            "datawarehouse-performance-v1+cdb-index-constituents-v1+da-report-monthly-v1+fmp-hk-ticker-v1"
+            if has_datawarehouse and has_fmp
+            else "datawarehouse-performance-v1+cdb-index-constituents-v1+da-report-monthly-v1"
+            if has_datawarehouse
+            else "da-report-monthly-v1+fmp-hk-ticker-v1"
+            if has_fmp
+            else "da-report-monthly-v1"
+        ),
         status=SnapshotStatus.VALID if valid else SnapshotStatus.PENDING,
         checksum=payload_checksum,
         payload=payload,
@@ -704,6 +796,7 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         },
         "applied_at": datetime.now(timezone.utc).isoformat(),
     }
+    findings.extend(enrich_constituent_returns(base, report.report_date))
     results = snapshot_checks(base, product.expected_constituent_count)
     missing = missing_required_slots(base)
     blocked = [item for item in results if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
@@ -721,8 +814,15 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         if isinstance(metadata, dict)
     }
     applied_source_policy = (
-        "DATAWAREHOUSE_PLUS_UPLOAD" if "DATAWAREHOUSE_SQLITE" in automatic_source_types
+        "DATAWAREHOUSE_FMP_PLUS_UPLOAD"
+        if "FMP_API" in automatic_source_types
+        and bool({"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"} & automatic_source_types)
+        else "DATAWAREHOUSE_PLUS_UPLOAD"
+        if bool({"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"} & automatic_source_types)
+        else "DA_REPORT_FMP_PLUS_UPLOAD"
+        if {"DA_REPORT_SQLITE", "FMP_API"} <= automatic_source_types
         else "DA_REPORT_PLUS_UPLOAD" if "DA_REPORT_SQLITE" in automatic_source_types
+        else "FMP_PLUS_UPLOAD" if "FMP_API" in automatic_source_types
         else "UPLOAD_OVERRIDE"
     )
     snapshot = DataSnapshot(

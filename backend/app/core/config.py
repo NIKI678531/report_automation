@@ -2,16 +2,17 @@ from pathlib import Path
 import os
 import tempfile
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]  # backend/
 _WORKSPACE_ROOT = _SERVICE_ROOT.parent  # repository root
 _LOCAL_DA_REPORT_CANDIDATES = (_WORKSPACE_ROOT / "da_report.sqlite", Path.home() / "Downloads" / "da_report.sqlite")
 _LOCAL_DATAWAREHOUSE_CANDIDATES = (
+    Path.home() / "Downloads" / "td_attribution_cdb_test_2025" / "td_attribution_cdb_test_2025.db",
     Path.home() / "Downloads" / "DB_2025" / "td_attribution_cdb_test_2025.db",
 )
 
-# Load service-local secrets (MARKETAUX_API_KEY, DOWNLOAD_SECRET, ...) before any os.getenv default
+# Load service-local secrets (DATAWAREHOUSE_MYSQL_PASSWORD, MARKETAUX_API_KEY, ...) before defaults
 # below. Real process environment always wins, so container/CI settings are never overwritten by a
 # stray .env.
 load_dotenv(_SERVICE_ROOT / ".env", override=False)
@@ -53,6 +54,39 @@ class Settings(BaseModel):
     datawarehouse_performance_enabled: bool = os.getenv(
         "DATAWAREHOUSE_PERFORMANCE_ENABLED", "true"
     ).strip().lower() in {"1", "true", "yes", "y"}
+    # Production Historical Performance reads the approved CDB views through a dedicated read-only
+    # MySQL identity.  Keep credentials in the process secret store; the SQLite settings below are
+    # an offline/test fallback and are used only when no MySQL host is configured.
+    datawarehouse_mysql_host: str | None = os.getenv("DATAWAREHOUSE_MYSQL_HOST")
+    datawarehouse_mysql_port: int = int(os.getenv("DATAWAREHOUSE_MYSQL_PORT", "3306"))
+    datawarehouse_mysql_database: str | None = os.getenv("DATAWAREHOUSE_MYSQL_DATABASE")
+    datawarehouse_mysql_username: str | None = os.getenv("DATAWAREHOUSE_MYSQL_USERNAME")
+    datawarehouse_mysql_password: str | None = Field(
+        default=os.getenv("DATAWAREHOUSE_MYSQL_PASSWORD"), repr=False,
+    )
+    datawarehouse_mysql_ssl_ca: Path | None = (
+        Path(os.environ["DATAWAREHOUSE_MYSQL_SSL_CA"]).expanduser()
+        if os.getenv("DATAWAREHOUSE_MYSQL_SSL_CA")
+        else None
+    )
+    datawarehouse_mysql_ssl_verify_identity: bool = os.getenv(
+        "DATAWAREHOUSE_MYSQL_SSL_VERIFY_IDENTITY", "true"
+    ).strip().lower() in {"1", "true", "yes", "y"}
+    datawarehouse_class_master_view: str = os.getenv(
+        "DATAWAREHOUSE_CLASS_MASTER_VIEW", "view_ads_busi_product_fundinfo_class_f_p"
+    )
+    datawarehouse_fund_returns_view: str = os.getenv(
+        "DATAWAREHOUSE_FUND_RETURNS_VIEW", "view_ads_busi_performance_class_returns_f_p"
+    )
+    datawarehouse_index_returns_view: str = os.getenv(
+        "DATAWAREHOUSE_INDEX_RETURNS_VIEW", "view_ads_busi_performance_index_returns_f_p"
+    )
+    datawarehouse_constituents_enabled: bool = os.getenv(
+        "DATAWAREHOUSE_CONSTITUENTS_ENABLED", "true"
+    ).strip().lower() in {"1", "true", "yes", "y"}
+    datawarehouse_constituents_view: str = os.getenv(
+        "DATAWAREHOUSE_CONSTITUENTS_VIEW", "view_ads_busi_market_index_constituent_price_daily_f_p"
+    )
     datawarehouse_sqlite_path: Path | None = (
         Path(os.environ["DATAWAREHOUSE_SQLITE_PATH"]).expanduser()
         if os.getenv("DATAWAREHOUSE_SQLITE_PATH")
@@ -65,6 +99,17 @@ class Settings(BaseModel):
     )
     datawarehouse_max_bytes: int = int(os.getenv("DATAWAREHOUSE_MAX_BYTES", str(1024 * 1024 * 1024)))
     datawarehouse_timeout_seconds: float = float(os.getenv("DATAWAREHOUSE_TIMEOUT_SECONDS", "15"))
+    fmp_constituent_returns_enabled: bool = os.getenv(
+        "FMP_CONSTITUENT_RETURNS_ENABLED", "true"
+    ).strip().lower() in {"1", "true", "yes", "y"}
+    fmp_api_key: str | None = os.getenv("FMP_API_KEY")
+    fmp_base_url: str = os.getenv("FMP_BASE_URL", "https://financialmodelingprep.com/stable")
+    fmp_timeout_seconds: float = float(os.getenv("FMP_TIMEOUT_SECONDS", "20"))
+    fmp_boundary_lookback_days: int = int(os.getenv("FMP_BOUNDARY_LOOKBACK_DAYS", "14"))
+    fmp_allowed_hosts: tuple[str, ...] = tuple(filter(None, (
+        item.strip().lower()
+        for item in os.getenv("FMP_ALLOWED_HOSTS", "financialmodelingprep.com").split(",")
+    )))
     # The TESTING lane binds the golden fixture — data that was transcribed from an approved report
     # rather than derived from a source system. Off by default so a deployed environment cannot
     # produce a fixture-backed report by accident; local and CI turn it on deliberately.

@@ -4,7 +4,7 @@ import { api, type OutputFormat, type Product, type RenderJob, type Report } fro
 import { type ModuleId, ModuleNav } from "./components/ModuleNav";
 import { ReportModule } from "./components/ReportModulesV2";
 import type { PendingSave, RegisterPendingSave } from "./pendingSave";
-import { FOOTNOTE_SECTIONS, reportsForContext, selectInitialReport, selectReportForMonth } from "./reportModules";
+import { FOOTNOTE_SECTIONS, reportsForContext, reviewHasContent, selectInitialReport, selectReportForMonth } from "./reportModules";
 import "./styles.css";
 
 const PRODUCT_CODE = "3033";
@@ -37,6 +37,21 @@ function formatLabel(format: OutputFormat): string {
 
 function isTerminal(job: RenderJob): boolean {
   return ["SUCCEEDED", "FAILED", "CANCELED"].includes(job.status);
+}
+
+function sectionRows(report: Report, section: "historical_performance" | "constituents"): unknown[] {
+  const sections = report.latest_document?.content.sections;
+  if (!sections || typeof sections !== "object") return [];
+  const value = (sections as Record<string, unknown>)[section];
+  if (section === "constituents") return Array.isArray(value) ? value : [];
+  if (!value || typeof value !== "object") return [];
+  const rows = (value as Record<string, unknown>).rows;
+  return Array.isArray(rows) ? rows : [];
+}
+
+export function needsAutomaticBackfill(report: Report): boolean {
+  return report.status === "DRAFT"
+    && (!sectionRows(report, "historical_performance").length || !sectionRows(report, "constituents").length);
 }
 
 interface ReviewResult {
@@ -78,6 +93,15 @@ function App() {
     return detail;
   }, []);
 
+  const loadSelectedReport = useCallback(async (reportId: string): Promise<Report> => {
+    let detail = await api.getReport(reportId);
+    if (needsAutomaticBackfill(detail)) {
+      await api.refreshAutomaticData(detail.id, detail.version);
+      detail = await api.getReport(reportId);
+    }
+    return detail;
+  }, []);
+
   useEffect(() => {
     let active = true;
     void api.listReports()
@@ -86,7 +110,7 @@ function App() {
         const initialDate = initial?.report_date ?? currentHongKongMonthEnd();
         const [productItems, detail] = await Promise.all([
           api.listProducts(initialDate),
-          initial ? api.getReport(initial.id) : Promise.resolve(null),
+          initial ? loadSelectedReport(initial.id) : Promise.resolve(null),
         ]);
         if (!active) return;
         setReports(reportItems);
@@ -96,7 +120,7 @@ function App() {
       })
       .catch((caught) => { if (active) setError(String(caught)); });
     return () => { active = false; };
-  }, []);
+  }, [loadSelectedReport]);
 
   useEffect(() => {
     if (!renderJobs.some((job) => !isTerminal(job))) return;
@@ -168,7 +192,7 @@ function App() {
       await flushPendingEdits();
       const [reportItems, productItems] = await Promise.all([api.listReports(), api.listProducts(nextDate)]);
       const next = selectReportForMonth(reportItems, PRODUCT_CODE, nextDate);
-      const detail = next ? await api.getReport(next.id) : null;
+      const detail = next ? await loadSelectedReport(next.id) : null;
       resetTransientState();
       setReports(reportItems);
       setProducts(productItems.filter((item) => item.product_code === PRODUCT_CODE));
@@ -217,6 +241,7 @@ function App() {
     setBusy(true);
     setError("");
     try {
+      await flushPendingEdits();
       const created = await api.createReport(reportDate, PRODUCT_CODE);
       resetTransientState();
       await refreshReport(created.id);
@@ -312,6 +337,7 @@ function App() {
           {selected && productReports.length > 0 && <label>Report version<select value={selected.id} onChange={(event) => void changeReport(event.target.value)} disabled={busy}>{productReports.map((report) => <option key={report.id} value={report.id}>{report.report_date} · r{report.revision} · {report.status}</option>)}</select></label>}
           {!selected && <button className="primary" disabled={busy || !product} onClick={() => void createReport()}><Plus size={17} /> Create report</button>}
           {selected && <>
+            <button disabled={busy || !product} onClick={() => void createReport()}><Plus size={17} /> New report</button>
             <button title="Open canonical preview" disabled={busy} onClick={() => void openPreview()}><Eye size={17} /> Preview</button>
             <button className="primary" disabled={busy || selected.status === "FINALIZED"} onClick={() => void reviewAndFinalize()}><FileCheck2 size={17} /> {selected.status === "FINALIZED" ? "Finalized" : "Review & finalize"}</button>
             <button disabled={busy || selected.status !== "FINALIZED"} onClick={() => setOutputsOpen(true)}><Download size={17} /> Downloads</button>
@@ -369,7 +395,7 @@ function getModuleStates(report: Report): Partial<Record<ModuleId, "ready" | "at
   const performance = (sections.historical_performance ?? {}) as Record<string, unknown>;
   const analytics = (sections.analytics ?? {}) as Record<string, unknown>;
   const footnotes = (sections.footnotes ?? {}) as Record<string, unknown>;
-  const reviewReady = Boolean(String(review.summary ?? "").trim()) && !String(review.summary ?? "").startsWith("Add ");
+  const reviewReady = reviewHasContent(review);
   return {
     review: reviewReady ? "ready" : "attention",
     performance: Array.isArray(performance.rows) && performance.rows.length ? "ready" : "empty",

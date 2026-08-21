@@ -177,6 +177,39 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
     assert rejected.json()["error_code"] == "REVIEW_LAYOUT_INVALID"
 
 
+def test_review_layout_replaces_stale_legacy_placeholders_on_save(client):
+    report_id = prepared_report(client)
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    content = detail["latest_document"]["content"]
+    review = content["sections"]["month_in_review"]
+    review["summary"] = "Add monthly market review."
+    review["outlook"] = "Add outlook."
+    review["blocks"] = [
+        {
+            "block_id": "custom-commentary",
+            "type": "rich_text",
+            "title": "Monthly commentary",
+            "content": "<p>Approved monthly commentary.</p>",
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 4,
+        },
+    ]
+
+    saved = client.patch(
+        f"/api/v1/reports/{report_id}/document",
+        json={"version": detail["latest_document"]["version"], "content": content},
+    )
+
+    assert saved.status_code == 200, saved.text
+    saved_review = saved.json()["content"]["sections"]["month_in_review"]
+    assert saved_review["summary"] == "Approved monthly commentary."
+    assert saved_review["outlook"] == ""
+    verdict = client.get(f"/api/v1/reports/{report_id}/review").json()
+    assert next(item for item in verdict["checks"] if item["check_id"] == "QC-009")["status"] == "PASSED"
+
+
 def test_review_blocks_render_to_html_and_editable_docx(client):
     report_id = prepared_report(client)
     detail = client.get(f"/api/v1/reports/{report_id}").json()
