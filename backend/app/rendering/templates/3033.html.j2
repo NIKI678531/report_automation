@@ -20,13 +20,17 @@
     h3 { margin:1.5mm 0 1mm; color:var(--deep); font-size:12pt; }
     p { margin:0 0 1.4mm; }
     .columns-2 { display:grid; grid-template-columns:1fr 1fr; gap:8mm; }
-    .review-layout { display:grid; grid-template-columns:repeat(12,1fr); grid-auto-rows:minmax(8mm,auto); gap:2mm; margin-bottom:2mm; }
-    .review-layout-block { min-width:0; padding:1.5mm 2mm; border-left:.8mm solid var(--blue); background:#f7f9fc; overflow:visible; }
-    .review-layout-block h3 { margin:0 0 1mm; font-size:10.5pt; }
-    .review-layout-content { font-size:8.7pt; line-height:1.18; }
+    .review-layout { display:grid; grid-template-columns:repeat(12,1fr); grid-auto-rows:minmax(8mm,auto); column-gap:8mm; row-gap:3mm; margin-bottom:2mm; }
+    .review-layout-block { min-width:0; padding:0; border-left:0; background:transparent; overflow:visible; }
+    .review-layout-block h3 { margin:0 0 1.2mm; color:var(--deep); font-size:14pt; line-height:1.1; }
+    .review-layout-content { font-size:10pt; line-height:1.22; }
     .review-layout-content p { margin:0 0 .8mm; }
     .review-layout-content ul,.review-layout-content ol { margin:0; padding-left:5mm; }
     .review-layout-content li { margin-bottom:.5mm; }
+    .review-layout-block.align-left { text-align:left; }
+    .review-layout-block.align-center { text-align:center; }
+    .review-layout-block.align-right { text-align:right; }
+    .review-layout-block.align-justify { text-align:justify; }
     ol { margin:0; padding-left:6mm; } li { padding-left:1mm; margin-bottom:1mm; }
     .history { margin-top:3mm; }
     table { width:100%; border-collapse:collapse; }
@@ -96,12 +100,12 @@
   {{ chrome(1) }}
   <main class="page-body">
     <h1>{{ report.product_name }}</h1>
-    <h2>{{ review_title }}</h2>
     {% if enable_review_layout and sections.month_in_review.get('blocks') %}
     <div class="review-layout">
-      {% for block in sections.month_in_review.blocks %}<section class="review-layout-block" data-block-id="{{ block.block_id }}" style="grid-column:{{ block.x + 1 }} / span {{ block.w }};grid-row:{{ block.y + 1 }} / span {{ block.h }}"><h3>{{ block.title }}</h3><div class="review-layout-content">{{ block.content|safe }}</div></section>{% endfor %}
+      {% for block in sections.month_in_review.blocks %}<section class="review-layout-block align-{{ block.text_align|default('left', true) }}" data-block-id="{{ block.block_id }}" style="grid-column:{{ block.x + 1 }} / span {{ block.w }};grid-row:{{ block.y + 1 }} / span {{ block.h }}"><h3>{{ block.title }}</h3><div class="review-layout-content">{{ block.content|safe }}</div></section>{% endfor %}
     </div>
     {% else %}
+      <h2>{{ review_title }}</h2>
       <p>{{ sections.month_in_review.get('summary', '') }}</p>
       <div class="columns-2">
         <section><h2>Key Drivers of the Correction</h2><ol>{% for item in sections.month_in_review.get('drivers', []) %}<li><strong>{{ item.get('title', '') }}</strong><br>{{ item.get('body', '') }}</li>{% endfor %}</ol></section>
@@ -118,7 +122,7 @@
 </section>
 
 <section class="report-page" data-page="3" data-section-key="constituents">
-  {{ chrome(3) }}<main class="page-body"><h2 class="center constituent-title">The Performance of {{ report.constituent_index_code|default(report.benchmark_code, true) }} Constituents</h2><p class="center">(*Next Rebalancing Date: {{ doc.next_rebalancing_date|default('N/A', true) }})</p>
+  {{ chrome(3) }}<main class="page-body"><h2 class="center constituent-title">The Performance of {{ report.constituent_index_code|default(report.benchmark_code, true) }} Constituents</h2><p class="center">(*Next Rebalancing Date: {{ doc.next_rebalancing_date|rebalancing_date }})</p>
   <table class="constituents"><colgroup><col style="width:6%"><col style="width:17%"><col style="width:12%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:14%"></colgroup><thead><tr><th>Stock<br>Code</th><th>Stock Name</th><th>Closing Price<br>(HKD)</th><th>Weighting<br>(%)</th><th>1-month<br>return (%)</th><th>3-month<br>return (%)</th><th>6-month<br>return (%)</th><th>YTD return<br>(%)</th></tr></thead><tbody>{% for row in sections.constituents %}<tr><td class="code">{{ row.get('security_code', '') }}</td><td class="name">{{ row.get('name_en') or row.get('name_zh_hant', '') }}</td><td>{{ row.get('close_price')|price }}</td><td>{{ row.get('weight')|pct }}</td><td>{{ row.get('return_1m')|pct }}</td><td>{{ row.get('return_3m')|pct }}</td><td>{{ row.get('return_6m')|pct }}</td><td>{{ row.get('return_ytd')|pct }}</td></tr>{% endfor %}</tbody></table></main><div class="footnote">{{ sections.footnotes.constituents|default('') }}</div>
 </section>
 

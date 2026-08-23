@@ -83,9 +83,10 @@ describe("3033 product scope", () => {
     await waitFor(() => expect(screen.getByLabelText("Fund 3033")).toBeTruthy());
     expect(screen.getByText("CSOP Hang Seng TECH Index ETF")).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "Fund" })).toBeNull();
-    expect(screen.getByLabelText("Report month").getAttribute("type")).toBe("month");
-    expect(screen.getByLabelText("Report month").getAttribute("min")).toBeNull();
-    expect(screen.getByLabelText("Report month").getAttribute("max")).toBeNull();
+    expect(screen.getByLabelText("Report year").getAttribute("type")).toBe("number");
+    expect(screen.getByLabelText("Report year").getAttribute("min")).toBe("1000");
+    expect(screen.getByLabelText("Report year").getAttribute("max")).toBe("9999");
+    expect(screen.getByLabelText("Report month").tagName).toBe("SELECT");
   });
 
   it("switches directly to the newest production draft for any selected month", async () => {
@@ -97,9 +98,12 @@ describe("3033 product scope", () => {
     vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
 
     render(<App />);
-    await waitFor(() => expect(screen.getByLabelText("Report month")).toHaveProperty("value", "2026-07"));
+    await waitFor(() => expect(screen.getByLabelText("Report year")).toHaveProperty("value", "2026"));
+    expect(screen.getByLabelText("Report month")).toHaveProperty("value", "07");
 
-    fireEvent.change(screen.getByLabelText("Report month"), { target: { value: "2025-12" } });
+    fireEvent.change(screen.getByLabelText("Report year"), { target: { value: "2025" } });
+    await waitFor(() => expect(api.listProducts).toHaveBeenCalledWith("2025-07-31"));
+    fireEvent.change(screen.getByLabelText("Report month"), { target: { value: "12" } });
 
     await waitFor(() => expect(screen.getByLabelText("Report version")).toHaveProperty("value", december.id));
     expect(api.refreshAutomaticData).toHaveBeenCalledWith(december.id, december.version);
@@ -120,7 +124,7 @@ describe("3033 product scope", () => {
     fireEvent.click(screen.getByRole("button", { name: /Footnotes & Disclosures/ }));
     const footnote = await screen.findByLabelText("Historical footnote");
     fireEvent.change(footnote, { target: { value: "Reviewed disclosure" } });
-    fireEvent.change(screen.getByLabelText("Report month"), { target: { value: "2026-06" } });
+    fireEvent.change(screen.getByLabelText("Report month"), { target: { value: "06" } });
 
     await waitFor(() => expect(saveDocument).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByLabelText("Report version")).toHaveProperty("value", june.id));

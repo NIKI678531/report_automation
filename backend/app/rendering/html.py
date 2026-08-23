@@ -37,7 +37,17 @@ def long_date(value: date) -> str:
     return value.strftime("%B %d, %Y").replace(" 0", " ")
 
 
-env.filters.update(pct=pct, price=price)
+def rebalancing_date_text(value: Any) -> str:
+    if not value:
+        return "N/A"
+    try:
+        parsed = date.fromisoformat(str(value))
+    except ValueError:
+        return "N/A"
+    return f"{parsed.day} {parsed.strftime('%B')} {parsed.year}"
+
+
+env.filters.update(pct=pct, price=price, rebalancing_date=rebalancing_date_text)
 
 
 _LEGACY_PREVIEW_PLACEHOLDERS = {

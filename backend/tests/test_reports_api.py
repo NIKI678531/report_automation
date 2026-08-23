@@ -41,11 +41,13 @@ def test_report_golden_lifecycle_and_preview(client):
     assert preview.status_code == 200
     assert preview.text.count('class="report-page"') == 4
     assert "The Performance of HSTECH Constituents" in preview.text
-    assert "June Technology Review" in preview.text
+    assert "June Technology Review" not in preview.text
     assert "Market Context" in preview.text
     assert '<svg class="donut"' in preview.text
     assert preview.text.count('data-sector-slice=') >= 3
     assert "conic-gradient" not in preview.text
+    assert "border-left:.8mm solid var(--blue)" not in preview.text
+    assert "background:#f7f9fc" not in preview.text
 
     finalized = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": saved.json()["version"]})
     assert finalized.status_code == 200, finalized.text
@@ -75,12 +77,67 @@ def test_report_golden_lifecycle_and_preview(client):
             pdf = pdfium.PdfDocument(download.content)
             assert len(pdf) == 4
             first_page_text = pdf[0].get_textpage().get_text_range()
-            assert "June Technology Review" in first_page_text
+            assert "June Technology Review" not in first_page_text
             assert "Market Context" in first_page_text
             assert "Forward View" in first_page_text
     artifacts = client.get(f"/api/v1/reports/{report['id']}").json()["artifacts"]
     assert len({item["content_manifest_checksum"] for item in artifacts}) == 1
     assert artifacts[0]["content_manifest_checksum"]
+
+
+def test_recalculation_replaces_existing_final_analytics_snapshot(client):
+    from copy import deepcopy
+
+    from sqlalchemy import select
+
+    from app.domain.document import checksum
+    from app.domain.models import DataSnapshot, ModuleSnapshot
+
+    report = create_report(client)
+    created_snapshot = client.post(
+        f"/api/v1/reports/{report['id']}/snapshots",
+        json={"source_policy": "GOLDEN_FIXTURE", "mapping_version": "hstech-v1"},
+    )
+    assert created_snapshot.status_code == 201, created_snapshot.text
+    first_calculation = client.post(f"/api/v1/reports/{report['id']}/calculations")
+    assert first_calculation.status_code == 200, first_calculation.text
+    before = client.get(f"/api/v1/reports/{report['id']}").json()
+    snapshot_id = before["active_snapshot_id"]
+
+    with client.app.state.testing_sessionmaker() as session:
+        previous = session.scalar(select(ModuleSnapshot).where(
+            ModuleSnapshot.snapshot_id == snapshot_id,
+            ModuleSnapshot.module_code == "final_analytics",
+        ))
+        assert previous is not None
+        previous_id = previous.id
+        previous_checksum = previous.checksum
+        previous_payload = deepcopy(previous.payload)
+
+        snapshot = session.get(DataSnapshot, snapshot_id)
+        assert snapshot is not None
+        changed_payload = deepcopy(snapshot.payload)
+        changed_payload["constituents"][0]["return_1m"] = 0.999
+        snapshot.payload = changed_payload
+        snapshot.checksum = checksum(changed_payload)
+        session.commit()
+
+    recalculated = client.post(f"/api/v1/reports/{report['id']}/calculations")
+    assert recalculated.status_code == 200, recalculated.text
+    after = client.get(f"/api/v1/reports/{report['id']}").json()
+    binding = after["latest_document"]["content"]["module_bindings"]["final_analytics"]
+
+    with client.app.state.testing_sessionmaker() as session:
+        refreshed = session.scalar(select(ModuleSnapshot).where(
+            ModuleSnapshot.snapshot_id == snapshot_id,
+            ModuleSnapshot.module_code == "final_analytics",
+        ))
+        assert refreshed is not None
+        assert refreshed.id == previous_id
+        assert refreshed.checksum != previous_checksum
+        assert refreshed.payload != previous_payload
+        assert refreshed.payload == after["latest_document"]["content"]["sections"]["analytics"]
+        assert binding == {"module_snapshot_id": refreshed.id, "checksum": refreshed.checksum}
 
 
 def test_unfinished_report_preview_keeps_layout_and_leaves_missing_modules_blank(client):

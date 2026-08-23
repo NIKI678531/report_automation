@@ -226,6 +226,14 @@ export interface RenderJob {
   artifact_id: string | null;
 }
 
+export interface CalculationResult {
+  snapshot_id: string;
+  formula_version: string;
+  metrics: Record<string, unknown>;
+  quality_results: Array<Record<string, unknown>>;
+  document_version: number;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isForm = init?.body instanceof FormData;
   const response = await fetch(`/api/v1${path}`, {
@@ -242,6 +250,7 @@ export const api = {
   getReport: (id: string) => request<Report>(`/reports/${id}`),
   createReport: (report_date: string, product_code = "3033") => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date }) }),
   refreshAutomaticData: (id: string, version: number) => request<{ changed: boolean; snapshot?: unknown }>(`/reports/${id}/automatic-data/refresh`, { method: "POST", body: JSON.stringify({ version }) }),
+  calculate: (id: string) => request<CalculationResult>(`/reports/${id}/calculations`, { method: "POST", body: JSON.stringify({}) }),
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
   saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PATCH", body: JSON.stringify({ version, content }) }),
   render: (id: string, formats: OutputFormat[]) => request<RenderJob[]>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats }), headers: { "Idempotency-Key": crypto.randomUUID() } }),

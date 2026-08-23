@@ -53,18 +53,20 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
   const version = report.latest_document?.version ?? 1;
   const content = report.latest_document?.content as JsonRecord | undefined;
   const review = (sectionsOf(report).month_in_review as JsonRecord | undefined) ?? {};
-  const [blocks, setBlocks] = useState<ReviewBlock[]>(() => legacyReviewBlocks(review));
-  const [reviewTitle, setReviewTitle] = useState(() => reviewTitleOf(report, review));
-  const initialBlocks = useMemo(() => legacyReviewBlocks(review), [report.id, version]);
-  const initialTitle = useMemo(() => reviewTitleOf(report, review), [report.id, version]);
+  const defaultReviewTitle = reviewTitleOf(report, review);
+  const [blocks, setBlocks] = useState<ReviewBlock[]>(() => legacyReviewBlocks(review, defaultReviewTitle));
+  const initialBlocks = useMemo(() => legacyReviewBlocks(review, defaultReviewTitle), [report.id, version]);
   useEffect(() => {
-    setBlocks(legacyReviewBlocks(review));
-    setReviewTitle(reviewTitleOf(report, review));
+    setBlocks(legacyReviewBlocks(review, reviewTitleOf(report, review)));
   }, [report.id, version]);
   const persist = useCallback(async () => {
     const next = structuredClone(content ?? {}) as JsonRecord;
-    const section = (next.sections as JsonRecord).month_in_review as JsonRecord;
-    const normalizedTitle = reviewTitle.trim();
+    const nextSections = (next.sections as JsonRecord | undefined) ?? {};
+    next.sections = nextSections;
+    const section = (nextSections.month_in_review as JsonRecord | undefined) ?? {};
+    nextSections.month_in_review = section;
+    const summaryBlock = blocks.find((block) => block.block_id === "summary") ?? blocks.find((block) => block.type === "rich_text");
+    const normalizedTitle = summaryBlock?.title.trim() || defaultReviewTitle;
     section.title = normalizedTitle;
     section.display_title = normalizedTitle;
     section.layout_schema_version = 2;
@@ -73,14 +75,14 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
     section.summary = legacyText.summary;
     section.outlook = legacyText.outlook;
     await api.saveDocument(report.id, version, next);
-  }, [blocks, content, report.id, reviewTitle, version]);
+  }, [blocks, content, defaultReviewTitle, report.id, version]);
   const frozen = report.status === "FINALIZED";
-  const dirty = !frozen && (reviewTitle !== initialTitle || JSON.stringify(blocks) !== JSON.stringify(initialBlocks));
+  const dirty = !frozen && JSON.stringify(blocks) !== JSON.stringify(initialBlocks);
   useLayoutEffect(() => {
     registerPendingSave(dirty ? persist : null);
     return () => registerPendingSave(null);
   }, [dirty, persist, registerPendingSave]);
-  return <><ModuleHeading eyebrow={reportPageEyebrow("review", "Free layout")} title={<input className="review-title-input" aria-label="Page 1 review title" value={reviewTitle} maxLength={200} required disabled={frozen} onChange={(event) => setReviewTitle(event.target.value)} />} description="Build the opening page on a controlled 12-column canvas. Drag, resize and edit blocks without changing bound financial facts." actions={<><button disabled={busy || !report.active_snapshot_id || frozen} onClick={() => run(() => api.generateDraft(report.id, version, "Complete the outlook after reviewer confirmation."))}><Sparkles size={16} /> Assisted draft</button><button className="primary" disabled={busy || frozen || !reviewTitle.trim() || !dirty} onClick={() => run(persist)}><Save size={16} /> Save layout</button></>} /><ReviewCanvas initialBlocks={blocks} disabled={frozen} onChange={setBlocks} /></>;
+  return <><ModuleHeading eyebrow={reportPageEyebrow("review", "Free layout")} title="Month in Review" description="Build the opening page on a controlled 12-column canvas. Drag, resize, align and edit blocks without changing bound financial facts." actions={<><button disabled={busy || !report.active_snapshot_id || frozen} onClick={() => run(() => api.generateDraft(report.id, version, "Complete the outlook after reviewer confirmation."))}><Sparkles size={16} /> Assisted draft</button><button className="primary" disabled={busy || frozen || !dirty} onClick={() => run(persist)}><Save size={16} /> Save layout</button></>} /><ReviewCanvas initialBlocks={blocks} disabled={frozen} onChange={setBlocks} /></>;
 }
 
 function PerformanceModule({ report, busy, run }: Omit<ModuleProps, "active">) {
@@ -111,9 +113,34 @@ function NewsModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_SA
   return <><ModuleHeading eyebrow={reportPageEyebrow("news", "DA-Report catalog")} title="Company News" description="Browse the complete Regional Corporate catalog, then order and edit selected stories before saving." /><CompanyNewsWorkbench key={report.id} report={report} busy={busy} run={run} selectedSnapshot={rows(sectionsOf(report).company_news)} registerPendingSave={registerPendingSave} /></>;
 }
 
-function ConstituentsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
+function displayRebalancingDate(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "N/A";
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(parsed.getTime()) ? "N/A" : new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(parsed);
+}
+
+function ConstituentsModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_SAVE }: Omit<ModuleProps, "active">) {
+  const version = report.latest_document?.version ?? 1;
+  const content = report.latest_document?.content as JsonRecord | undefined;
+  const initialDate = useMemo(() => typeof content?.next_rebalancing_date === "string" ? content.next_rebalancing_date : "", [report.id, version]);
+  const [rebalancingDate, setRebalancingDate] = useState(initialDate);
+  useEffect(() => setRebalancingDate(typeof content?.next_rebalancing_date === "string" ? content.next_rebalancing_date : ""), [report.id, version]);
+  const persist = useCallback(async () => {
+    const next = structuredClone(content ?? {}) as JsonRecord;
+    next.next_rebalancing_date = rebalancingDate;
+    next.next_rebalancing_date_source = "MANUAL";
+    await api.saveDocument(report.id, version, next);
+  }, [content, rebalancingDate, report.id, version]);
+  const frozen = report.status === "FINALIZED";
+  const dirty = !frozen && rebalancingDate !== initialDate;
+  useLayoutEffect(() => {
+    registerPendingSave(dirty && rebalancingDate ? persist : null);
+    return () => registerPendingSave(null);
+  }, [dirty, persist, rebalancingDate, registerPendingSave]);
   const data = rows(sectionsOf(report).constituents);
-  return <><ModuleHeading eyebrow={reportPageEyebrow("constituents", "CDB identity · FMP Total Return")} title={reportConstituentsTitle(report)} description={data.length ? `${data.length} holdings are bound to the selected ${report.report_date.slice(0, 7)} report. FMP calculates 1M, 3M, 6M and YTD from each CDB ticker for that report month.` : "Use the automatic CDB + FMP path without a file, or upload a constituent CSV as an explicit identity override."} /><ConstituentSources report={report} busy={busy} run={run} /><section className="data-surface constituent-table"><table><thead><tr><th>Code</th><th>Constituent</th><th>Price</th><th>Weight</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.security_code)}><th scope="row"><span className="security-code">{String(row.ticker ?? row.security_code)}</span></th><td><strong>{String(row.name_en ?? "")}</strong><small>{String(row.sector ?? "")}</small></td><td>{String(row.currency ?? "")} {Number(row.close_price ?? 0).toFixed(2)}</td><td>{percent(row.weight)}</td><td>{percent(row.return_1m)}</td><td>{percent(row.return_3m)}</td><td>{percent(row.return_6m)}</td><td>{percent(row.return_ytd)}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section></>;
+  return <><ModuleHeading eyebrow={reportPageEyebrow("constituents", "CDB identity · FMP Total Return")} title={reportConstituentsTitle(report)} description={data.length ? `${data.length} holdings are bound to the selected ${report.report_date.slice(0, 7)} report. FMP calculates 1M, 3M, 6M and YTD from each CDB ticker for that report month.` : "Use the automatic CDB + FMP path without a file, or upload a constituent CSV as an explicit identity override."} actions={<button className="primary" disabled={busy || frozen || !dirty || !rebalancingDate} onClick={() => run(persist)}><Save size={16} /> Save date</button>} />
+    <section className="rebalancing-editor" aria-label="Next rebalancing date editor"><label><span>Next Rebalancing Date</span><input aria-label="Next rebalancing date" type="date" value={rebalancingDate} disabled={frozen} onChange={(event) => setRebalancingDate(event.target.value)} /></label><p>(*Next Rebalancing Date: {displayRebalancingDate(rebalancingDate)})</p></section>
+    <ConstituentSources report={report} busy={busy} run={run} /><section className="data-surface constituent-table"><table><thead><tr><th>Code</th><th>Constituent</th><th>Price</th><th>Weight</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.security_code)}><th scope="row"><span className="security-code">{String(row.ticker ?? row.security_code)}</span></th><td><strong>{String(row.name_en ?? "")}</strong><small>{String(row.sector ?? "")}</small></td><td>{String(row.currency ?? "")} {Number(row.close_price ?? 0).toFixed(2)}</td><td>{percent(row.weight)}</td><td>{percent(row.return_1m)}</td><td>{percent(row.return_3m)}</td><td>{percent(row.return_6m)}</td><td>{percent(row.return_ytd)}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section></>;
 }
 
 function ConstituentSources({ report, busy, run }: Omit<ModuleProps, "active">) {
@@ -141,14 +168,14 @@ function ConstituentSources({ report, busy, run }: Omit<ModuleProps, "active">) 
   </div>;
 }
 
-function AnalyticsModule({ report }: Omit<ModuleProps, "active">) {
+function AnalyticsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
   const analytics = (sectionsOf(report).analytics as JsonRecord | undefined) ?? {};
   const top10 = rows(analytics.top10); const top = rows(analytics.top); const bottom = rows(analytics.bottom); const portfolio = rows(analytics.portfolio);
   const sectorChart = analytics.sector_chart as SectorChartSnapshot | undefined;
   const sectorSeries = sectorSlices(sectorChart);
   const monthName = reportMonthName(report);
   const productTicker = reportProductTicker(report);
-  return <><ModuleHeading eyebrow={reportPageEyebrow("analytics", "Calculated outputs")} title="Final Analytics" description="Derived by the backend from the active constituent snapshot; fund KPI, calendar and event observations are loaded automatically." /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title="Top 10 Index Constituents" /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{String(row.issuer)}</th><td>{percent(row.weight)}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section"><SectionTitle index="02" title="Index Sectors Breakdown" />{sectorSeries.length ? <SectorDonut chart={sectorChart} /> : <EmptyData />}</section><section className="analytics-section"><SectionTitle index="03" title={`Performers in ${monthName}`} /><div className="performer-columns"><PerformerList title="Top" data={top} /><PerformerList title="Bottom" data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={`${productTicker} Portfolio Analysis`} /><dl className="portfolio-list">{portfolio.map((row) => <div key={String(row.label)}><dt>{String(row.label)}</dt><dd>{String(row.value)}</dd></div>)}</dl>{!portfolio.length && <EmptyData />}</section></div><FormulaStrip title="Analytics calculation set" formula="Weight ranking · HSICS aggregation · 1M performer ranking" detail="Every output is recalculated automatically when the active constituent snapshot becomes valid." /></>;
+  return <><ModuleHeading eyebrow={reportPageEyebrow("analytics", "Calculated outputs")} title="Final Analytics" description="Derived by the backend from the active constituent snapshot; fund KPI, calendar and event observations are loaded automatically." actions={<button className="primary" disabled={busy || report.status === "FINALIZED" || !report.active_snapshot_id} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> Refresh analytics</button>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title="Top 10 Index Constituents" /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{String(row.issuer)}</th><td>{percent(row.weight)}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section"><SectionTitle index="02" title="Index Sectors Breakdown" />{sectorSeries.length ? <SectorDonut chart={sectorChart} /> : <EmptyData />}</section><section className="analytics-section"><SectionTitle index="03" title={`Performers in ${monthName}`} /><div className="performer-columns"><PerformerList title="Top" data={top} /><PerformerList title="Bottom" data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={`${productTicker} Portfolio Analysis`} /><dl className="portfolio-list">{portfolio.map((row) => <div key={String(row.label)}><dt>{String(row.label)}</dt><dd>{String(row.value)}</dd></div>)}</dl>{!portfolio.length && <EmptyData />}</section></div><FormulaStrip title="Analytics calculation set" formula="Weight ranking · HSICS aggregation · 1M performer ranking" detail="Every output is recalculated automatically when the active constituent snapshot becomes valid." /></>;
 }
 
 function IndustryMasterStatus({ report }: { report: Report }) {

@@ -13,9 +13,26 @@ const OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string }> = [
   { value: "html", label: "HTML" },
   { value: "docx", label: "Word (.docx)" },
 ];
+const MONTH_OPTIONS = [
+  { value: "01", label: "January" },
+  { value: "02", label: "February" },
+  { value: "03", label: "March" },
+  { value: "04", label: "April" },
+  { value: "05", label: "May" },
+  { value: "06", label: "June" },
+  { value: "07", label: "July" },
+  { value: "08", label: "August" },
+  { value: "09", label: "September" },
+  { value: "10", label: "October" },
+  { value: "11", label: "November" },
+  { value: "12", label: "December" },
+];
 
 function reportMonthEnd(value: string): string {
   const [year, month] = value.split("-").map(Number);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || year < 1000 || month < 1 || month > 12) {
+    throw new Error("Enter a valid four-digit report year and month.");
+  }
   const day = new Date(Date.UTC(year, month, 0)).getUTCDate();
   return `${value}-${String(day).padStart(2, "0")}`;
 }
@@ -65,6 +82,7 @@ function App() {
   const [reports, setReports] = useState<Report[]>([]);
   const [selected, setSelected] = useState<Report | null>(null);
   const [reportDate, setReportDate] = useState(currentHongKongMonthEnd);
+  const [reportYearInput, setReportYearInput] = useState(() => currentHongKongMonthEnd().slice(0, 4));
   const [activeModule, setActiveModule] = useState<ModuleId>("review");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -141,6 +159,10 @@ function App() {
     if (outputsOpen) outputPanel.current?.focus();
   }, [outputsOpen]);
 
+  useEffect(() => {
+    setReportYearInput(reportDate.slice(0, 4));
+  }, [reportDate]);
+
   async function flushPendingEdits(report = selected): Promise<Report | null> {
     const save = pendingSave.current;
     if (!save) return report;
@@ -184,7 +206,13 @@ function App() {
 
   async function changeMonth(value: string) {
     if (!value) return;
-    const nextDate = reportMonthEnd(value);
+    let nextDate: string;
+    try {
+      nextDate = reportMonthEnd(value);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      return;
+    }
     if (nextDate === reportDate) return;
     setBusy(true);
     setError("");
@@ -204,6 +232,20 @@ function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function changeReportPeriod(year: string, month: string) {
+    if (!/^\d{4}$/.test(year) || !MONTH_OPTIONS.some((item) => item.value === month)) {
+      setError("Enter a valid four-digit report year and month.");
+      return;
+    }
+    await changeMonth(`${year}-${month}`);
+  }
+
+  function changeReportYear(value: string) {
+    const normalized = value.replace(/\D/g, "").slice(0, 4);
+    setReportYearInput(normalized);
+    if (normalized.length === 4) void changeReportPeriod(normalized, reportDate.slice(5, 7));
   }
 
   async function changeReport(reportId: string) {
@@ -333,7 +375,8 @@ function App() {
           <p>{product ? `${product.ticker} · ${product.benchmark_name ?? product.benchmark_code} · ${product.currency}` : "3033.HK · Hang Seng TECH Index · HKD"}</p>
         </div>
         <div className="report-controls">
-          <label>Report month<input type="month" value={reportDate.slice(0, 7)} onChange={(event) => void changeMonth(event.target.value)} disabled={busy} /></label>
+          <label>Report year<input type="number" inputMode="numeric" min="1000" max="9999" step="1" value={reportYearInput} onChange={(event) => changeReportYear(event.target.value)} onBlur={() => { if (!/^\d{4}$/.test(reportYearInput)) setError("Enter a valid four-digit report year."); }} disabled={busy} /></label>
+          <label>Report month<select value={reportDate.slice(5, 7)} onChange={(event) => void changeReportPeriod(reportYearInput, event.target.value)} disabled={busy || !/^\d{4}$/.test(reportYearInput)}>{MONTH_OPTIONS.map((month) => <option key={month.value} value={month.value}>{month.label}</option>)}</select></label>
           {selected && productReports.length > 0 && <label>Report version<select value={selected.id} onChange={(event) => void changeReport(event.target.value)} disabled={busy}>{productReports.map((report) => <option key={report.id} value={report.id}>{report.report_date} · r{report.revision} · {report.status}</option>)}</select></label>}
           {!selected && <button className="primary" disabled={busy || !product} onClick={() => void createReport()}><Plus size={17} /> Create report</button>}
           {selected && <>

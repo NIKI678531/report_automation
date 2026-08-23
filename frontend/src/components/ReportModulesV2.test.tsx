@@ -28,6 +28,8 @@ const report: Report = {
     version: 4,
     checksum: "document-checksum",
     content: {
+      next_rebalancing_date: "2026-09-04",
+      next_rebalancing_date_source: "SNAPSHOT",
       sections: {
         historical_performance: {
           rows: [
@@ -133,12 +135,59 @@ describe("report module data responsibilities", () => {
   });
   it("renders Final Analytics from the bound Page 04 results and sector donut", async () => {
     vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const calculate = vi.spyOn(api, "calculate").mockResolvedValue({
+      snapshot_id: "snapshot-1", formula_version: "hstech-2026.1", metrics: {}, document_version: 5, quality_results: [],
+    });
 
     render(<ReportModule report={report} active="analytics" busy={false} run={run} />);
 
     expect(screen.queryByRole("button", { name: /Upload file/i })).toBeNull();
     expect(screen.getByRole("img", { name: /Index Sectors Breakdown/i })).toBeTruthy();
     expect(screen.getByText(/Derived by the backend from the active constituent snapshot/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh analytics" }));
+    await waitFor(() => expect(calculate).toHaveBeenCalledWith(report.id));
+  });
+
+  it("uses the selected month as the summary title and saves block alignment without a duplicate title field", async () => {
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+
+    render(<ReportModule report={report} active="review" busy={false} run={run} />);
+
+    expect(screen.queryByLabelText("Month in Review title")).toBeNull();
+    expect(screen.getByLabelText("Title for summary block")).toHaveProperty("value", "June in Review");
+    fireEvent.click(screen.getAllByTitle("Align center")[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Save layout" }));
+
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledWith(
+      report.id,
+      report.latest_document?.version,
+      expect.objectContaining({
+        sections: expect.objectContaining({
+          month_in_review: expect.objectContaining({
+            title: "June in Review",
+            display_title: "June in Review",
+            blocks: expect.arrayContaining([expect.objectContaining({ block_id: "summary", text_align: "center" })]),
+          }),
+        }),
+      }),
+    ));
+  });
+
+  it("edits and saves the next rebalancing date as a manual document override", async () => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+
+    render(<ReportModule report={report} active="constituents" busy={false} run={run} />);
+
+    expect(screen.getByText("(*Next Rebalancing Date: 4 September 2026)")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Next rebalancing date"), { target: { value: "2026-10-15" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save date" }));
+
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledWith(
+      report.id,
+      report.latest_document?.version,
+      expect.objectContaining({ next_rebalancing_date: "2026-10-15", next_rebalancing_date_source: "MANUAL" }),
+    ));
   });
 
   it("edits the three report-backed disclosures and identifies their bound modules", async () => {

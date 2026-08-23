@@ -154,20 +154,23 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
     content["sections"]["month_in_review"]["display_title"] = "June Market Reset"
     content["sections"]["month_in_review"]["title"] = "June Market Reset"
     content["sections"]["month_in_review"]["blocks"] = [
-        {"block_id": "summary", "type": "rich_text", "title": "Summary", "content": '<p>Approved</p><script>alert(1)</script><a href="javascript:bad">bad</a>', "x": 0, "y": 0, "w": 12, "h": 4},
+        {"block_id": "summary", "type": "rich_text", "title": "Summary", "content": '<p>Approved</p><script>alert(1)</script><a href="javascript:bad">bad</a>', "x": 0, "y": 0, "w": 12, "h": 4, "text_align": "center"},
         {"block_id": "outlook", "type": "outlook", "title": "Outlook", "content": "<p>Outlook</p>", "x": 0, "y": 4, "w": 6, "h": 4},
     ]
     saved = client.patch(f"/api/v1/reports/{report_id}/document", json={"version": version, "content": content})
     assert saved.status_code == 200, saved.text
     review = saved.json()["content"]["sections"]["month_in_review"]
-    assert review["title"] == "June Market Reset"
-    assert review["display_title"] == "June Market Reset"
+    assert review["title"] == "Summary"
+    assert review["display_title"] == "Summary"
     assert "<script>" not in review["blocks"][0]["content"]
     assert "javascript:" not in review["blocks"][0]["content"]
+    assert review["blocks"][0]["text_align"] == "center"
     preview = client.post(f"/api/v1/reports/{report_id}/preview")
     assert preview.status_code == 200
-    assert ">June Market Reset</h2>" in preview.text
+    assert ">June Market Reset</h2>" not in preview.text
+    assert ">Summary</h3>" in preview.text
     assert 'data-block-id="summary"' in preview.text
+    assert 'class="review-layout-block align-center"' in preview.text
     assert "<script>" not in preview.text
 
     invalid_content = saved.json()["content"]
@@ -175,6 +178,31 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
     rejected = client.patch(f"/api/v1/reports/{report_id}/document", json={"version": saved.json()["version"], "content": invalid_content})
     assert rejected.status_code == 422
     assert rejected.json()["error_code"] == "REVIEW_LAYOUT_INVALID"
+
+
+def test_manual_next_rebalancing_date_is_rendered_and_survives_recalculation(client):
+    report_id = prepared_report(client)
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    content = detail["latest_document"]["content"]
+    assert content["next_rebalancing_date"] == "2026-09-04"
+    content["next_rebalancing_date"] = "2026-10-15"
+    content["next_rebalancing_date_source"] = "MANUAL"
+
+    saved = client.patch(
+        f"/api/v1/reports/{report_id}/document",
+        json={"version": detail["latest_document"]["version"], "content": content},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["content"]["next_rebalancing_date_source"] == "MANUAL"
+    preview = client.post(f"/api/v1/reports/{report_id}/preview")
+    assert preview.status_code == 200
+    assert "(*Next Rebalancing Date: 15 October 2026)" in preview.text
+
+    recalculated = client.post(f"/api/v1/reports/{report_id}/calculations")
+    assert recalculated.status_code == 200, recalculated.text
+    refreshed = client.get(f"/api/v1/reports/{report_id}").json()["latest_document"]["content"]
+    assert refreshed["next_rebalancing_date"] == "2026-10-15"
+    assert refreshed["next_rebalancing_date_source"] == "MANUAL"
 
 
 def test_review_layout_replaces_stale_legacy_placeholders_on_save(client):
@@ -243,7 +271,8 @@ def test_review_blocks_render_to_html_and_editable_docx(client):
         [paragraph.text for paragraph in docx.paragraphs]
         + [cell.text for table in docx.tables for row in table.rows for cell in row.cells]
     )
-    assert "Custom June Review" in text
+    assert "Summary" in text
+    assert "Custom June Review" not in text
     assert "Editable custom review content" in text
 
 

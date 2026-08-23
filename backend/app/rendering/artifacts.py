@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.core.storage import storage
 from app.domain.document import render_content_manifest, review_display_title
 from app.domain.models import RenderArtifact, Report, ReportDocument
-from .html import pct, price, render_html, testing_banner
+from .html import pct, price, rebalancing_date_text, render_html, testing_banner
 
 
 MIME = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
@@ -114,7 +114,6 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     document.add_heading(report.product_name, 0)
     review = sections["month_in_review"]
     enable_review_layout = content.get("template_version") != "3033-v1"
-    document.add_heading(review_display_title(content), 1)
     if enable_review_layout and review.get("blocks"):
         grouped: dict[int, list[dict]] = {}
         for block in sorted(review["blocks"], key=lambda item: (item["y"], item["x"], item["block_id"])):
@@ -128,8 +127,17 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
                 run = heading.add_run(block["title"])
                 run.bold = True
                 run.font.color.rgb = RGBColor(34, 50, 127)
-                cell.add_paragraph(_plain_html(block["content"]))
+                alignment = {
+                    "left": WD_ALIGN_PARAGRAPH.LEFT,
+                    "center": WD_ALIGN_PARAGRAPH.CENTER,
+                    "right": WD_ALIGN_PARAGRAPH.RIGHT,
+                    "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+                }.get(block.get("text_align"), WD_ALIGN_PARAGRAPH.LEFT)
+                heading.alignment = alignment
+                body = cell.add_paragraph(_plain_html(block["content"]))
+                body.alignment = alignment
     else:
+        document.add_heading(review_display_title(content), 1)
         document.add_paragraph(review["summary"])
         document.add_heading("Key Drivers of the Correction", 1)
         for item in review["drivers"]:
@@ -158,7 +166,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 3, banner)
     heading = document.add_heading(f"The Performance of {getattr(report, 'constituent_index_code', report.benchmark_code)} Constituents", 1)
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    document.add_paragraph(f"(*Next Rebalancing Date: {content.get('next_rebalancing_date') or 'N/A'})").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document.add_paragraph(f"(*Next Rebalancing Date: {rebalancing_date_text(content.get('next_rebalancing_date'))})").alignment = WD_ALIGN_PARAGRAPH.CENTER
     constituents = sections["constituents"]
     _table(document, ["Stock Code", "Stock Name", "Closing Price (HKD)", "Weighting (%)", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[str(x.get("security_code", "")), str(x.get("name_en") or x.get("name_zh_hant") or ""), price(x.get("close_price")), pct(x.get("weight")), pct(x.get("return_1m")), pct(x.get("return_3m")), pct(x.get("return_6m")), pct(x.get("return_ytd"))] for x in constituents], blue_first=True)
     document.add_paragraph(sections["footnotes"].get("constituents", ""), style="Caption")

@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 
 REVIEW_BLOCK_TYPES = {"rich_text", "heading", "bullet_list", "key_drivers", "areas_to_monitor", "outlook", "metric_callout", "image", "data_table", "page_break"}
+REVIEW_TEXT_ALIGNMENTS = {"left", "center", "right", "justify"}
+REBALANCING_DATE_SOURCES = {"SNAPSHOT", "MANUAL"}
 
 
 class DocumentValidationError(ValueError):
@@ -120,6 +122,28 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
         )
     review["title"] = title
     review["display_title"] = title
+    rebalancing_date = result.get("next_rebalancing_date")
+    if rebalancing_date is None or rebalancing_date == "":
+        result["next_rebalancing_date"] = None
+    else:
+        try:
+            result["next_rebalancing_date"] = date.fromisoformat(str(rebalancing_date)).isoformat()
+        except ValueError as error:
+            raise DocumentValidationError(
+                "NEXT_REBALANCING_DATE_INVALID",
+                "Next rebalancing date must be a valid calendar date.",
+                "next_rebalancing_date",
+                "Choose a valid date before saving.",
+            ) from error
+    source = str(result.get("next_rebalancing_date_source") or "SNAPSHOT").upper()
+    if source not in REBALANCING_DATE_SOURCES:
+        raise DocumentValidationError(
+            "NEXT_REBALANCING_DATE_SOURCE_INVALID",
+            "Next rebalancing date source is invalid.",
+            "next_rebalancing_date_source",
+            "Use the calculated snapshot date or save a manual date in the editor.",
+        )
+    result["next_rebalancing_date_source"] = source
     blocks = review.get("blocks")
     if blocks is None:
         return result
@@ -147,6 +171,9 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
         if len(content_html) > 50_000:
             raise ValueError(f"Review block {block_id} content is too long")
         block_title = str(raw.get("title", "")).strip()
+        text_align = str(raw.get("text_align", "left")).strip().lower()
+        if text_align not in REVIEW_TEXT_ALIGNMENTS:
+            raise ValueError(f"Review block {block_id} has an unsupported text alignment")
         if not block_title or len(block_title) > 200:
             raise DocumentValidationError(
                 "REVIEW_BLOCK_TITLE_INVALID",
@@ -161,6 +188,7 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
             "type": block_type,
             "title": block_title,
             "content": sanitize_review_html(content_html),
+            "text_align": text_align,
             "x": x, "y": y, "w": width, "h": height,
         })
     for index, left in enumerate(normalized):
@@ -172,6 +200,10 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
     review["layout_schema_version"] = 2
     ordered = sorted(normalized, key=lambda block: (block["y"], block["x"], block["block_id"]))
     review["blocks"] = ordered
+    title_block = next((block for block in ordered if block["block_id"] == "summary"), None)
+    if title_block:
+        review["title"] = title_block["title"]
+        review["display_title"] = title_block["title"]
     substantive = [block for block in ordered if _has_substantive_review_text(block)]
     summary = (
         next((block for block in substantive if block["block_id"] == "summary"), None)
@@ -253,6 +285,7 @@ def initial_document(
         "product_ticker": product_ticker,
         "benchmark_name": benchmark_name,
         "next_rebalancing_date": None,
+        "next_rebalancing_date_source": "SNAPSHOT",
         "sections": {
             "month_in_review": {
                 "title": f"{month} in Review",
@@ -302,5 +335,7 @@ def bind_snapshot(
         result["sections"]["month_in_review"] = incoming_review
     result["sections"]["analytics"] = snapshot_payload.get("analytics", result["sections"]["analytics"])
     result["sections"]["footnotes"] = snapshot_payload.get("footnotes", {})
-    result["next_rebalancing_date"] = snapshot_payload.get("next_rebalancing_date")
+    if result.get("next_rebalancing_date_source") != "MANUAL":
+        result["next_rebalancing_date"] = snapshot_payload.get("next_rebalancing_date")
+        result["next_rebalancing_date_source"] = "SNAPSHOT"
     return result

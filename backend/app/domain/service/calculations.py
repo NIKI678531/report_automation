@@ -184,45 +184,60 @@ def persist_calculation_records(
             MetricValue.dimension_key == dimension_key,
             MetricValue.formula_version == formula_version,
         ))
-        if existing:
-            metric_rows.append(existing)
-            continue
         unit = spec["unit"]
         try:
             numeric = Decimal(str(raw)) if unit not in {"TEXT", "SECURITY_CODE"} and raw is not None and not isinstance(raw, bool) else None
         except InvalidOperation:
             numeric = None
-        item = MetricValue(
-            snapshot_id=snapshot.id,
-            metric_code=metric_code,
-            dimension_key=dimension_key,
-            value=numeric,
-            raw_value="" if raw is None else str(raw),
-            unit=unit,
-            period_start=spec["period_start"],
-            period_end=spec["period_end"],
-            formula_version=formula_version,
-            lineage={
-                "source_system": snapshot.source_policy,
-                "snapshot_id": snapshot.id,
-                "snapshot_dataset_ids": metric_dataset_ids,
-                "snapshot_dataset_types": list(spec["dataset_types"]),
-                "formula_version": formula_version,
-                "input_checksum": snapshot.checksum,
-                **spec["lineage"],
-            },
-        )
-        db.add(item)
+        lineage = {
+            "source_system": snapshot.source_policy,
+            "snapshot_id": snapshot.id,
+            "snapshot_dataset_ids": metric_dataset_ids,
+            "snapshot_dataset_types": list(spec["dataset_types"]),
+            "formula_version": formula_version,
+            "input_checksum": snapshot.checksum,
+            **spec["lineage"],
+        }
+        if existing:
+            existing.value = numeric
+            existing.raw_value = "" if raw is None else str(raw)
+            existing.unit = unit
+            existing.period_start = spec["period_start"]
+            existing.period_end = spec["period_end"]
+            existing.lineage = lineage
+            item = existing
+        else:
+            item = MetricValue(
+                snapshot_id=snapshot.id,
+                metric_code=metric_code,
+                dimension_key=dimension_key,
+                value=numeric,
+                raw_value="" if raw is None else str(raw),
+                unit=unit,
+                period_start=spec["period_start"],
+                period_end=spec["period_end"],
+                formula_version=formula_version,
+                lineage=lineage,
+            )
+            db.add(item)
         metric_rows.append(item)
     db.flush()
 
     for result in results:
         entity_id = str(result.get("entity_id") or "")
         result_key = f"{result['check_id']}:{entity_id}"
-        if db.scalar(select(QualityCheckResult).where(
+        existing = db.scalar(select(QualityCheckResult).where(
             QualityCheckResult.snapshot_id == snapshot.id,
             QualityCheckResult.result_key == result_key,
-        )):
+        ))
+        if existing:
+            existing.check_id = result["check_id"]
+            existing.severity = result["severity"]
+            existing.status = result["status"]
+            existing.entity_id = entity_id or None
+            existing.actual = result.get("actual")
+            existing.threshold = result.get("threshold")
+            existing.fix_hint = result.get("fix_hint", "")
             continue
         db.add(QualityCheckResult(
             snapshot_id=snapshot.id,
@@ -271,39 +286,47 @@ def persist_calculation_records(
             ModuleSnapshot.formula_version == formula_version,
             ModuleSnapshot.template_version == report.template_version,
         ))
-        if existing:
-            modules[module_code] = existing
-            continue
         prefixes = module_metric_prefixes[module_code]
         metric_ids = sorted(
             item.id for item in metric_rows
             if prefixes and any(item.metric_code.startswith(prefix) for prefix in prefixes)
         )
         source_dataset_ids = dataset_ids_for(module_dataset_types[module_code])
-        item = ModuleSnapshot(
-            snapshot_id=snapshot.id,
-            module_code=module_code,
-            formula_version=formula_version,
-            template_version=report.template_version,
-            source_dataset_ids=source_dataset_ids,
-            metric_value_ids=metric_ids,
-            payload=payload,
-            display_format={},
-            footnote_bindings=list((derived_payload.get("footnotes") or {}).keys()),
-            checksum=checksum(payload),
-            input_checksum=checksum({
-                "source_datasets": [
-                    {
-                        "id": item_id,
-                        "checksum": next(dataset.checksum for dataset in datasets if dataset.id == item_id),
-                    }
-                    for item_id in source_dataset_ids
-                ],
-                "formula_version": formula_version,
-                "module_code": module_code,
-            }),
-        )
-        db.add(item)
+        input_checksum = checksum({
+            "source_datasets": [
+                {
+                    "id": item_id,
+                    "checksum": next(dataset.checksum for dataset in datasets if dataset.id == item_id),
+                }
+                for item_id in source_dataset_ids
+            ],
+            "formula_version": formula_version,
+            "module_code": module_code,
+        })
+        if existing:
+            existing.source_dataset_ids = source_dataset_ids
+            existing.metric_value_ids = metric_ids
+            existing.payload = payload
+            existing.display_format = {}
+            existing.footnote_bindings = list((derived_payload.get("footnotes") or {}).keys())
+            existing.checksum = checksum(payload)
+            existing.input_checksum = input_checksum
+            item = existing
+        else:
+            item = ModuleSnapshot(
+                snapshot_id=snapshot.id,
+                module_code=module_code,
+                formula_version=formula_version,
+                template_version=report.template_version,
+                source_dataset_ids=source_dataset_ids,
+                metric_value_ids=metric_ids,
+                payload=payload,
+                display_format={},
+                footnote_bindings=list((derived_payload.get("footnotes") or {}).keys()),
+                checksum=checksum(payload),
+                input_checksum=input_checksum,
+            )
+            db.add(item)
         modules[module_code] = item
     db.flush()
     return modules

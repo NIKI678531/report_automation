@@ -210,6 +210,7 @@ def client(monkeypatch):
         ])
         session.commit()
     app = create_app()
+    app.state.testing_sessionmaker = TestingSession
 
     def override_db():
         with TestingSession() as session:
