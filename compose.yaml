@@ -38,6 +38,8 @@ services:
       DATAWAREHOUSE_CLASS_MASTER_VIEW: ${DATAWAREHOUSE_CLASS_MASTER_VIEW:-view_ads_busi_product_fundinfo_class_f_p}
       DATAWAREHOUSE_FUND_RETURNS_VIEW: ${DATAWAREHOUSE_FUND_RETURNS_VIEW:-view_ads_busi_performance_class_returns_f_p}
       DATAWAREHOUSE_INDEX_RETURNS_VIEW: ${DATAWAREHOUSE_INDEX_RETURNS_VIEW:-view_ads_busi_performance_index_returns_f_p}
+      DATAWAREHOUSE_FUND_AUM_VIEW: ${DATAWAREHOUSE_FUND_AUM_VIEW:-view_ads_busi_valuation_nav_fund_level_exposure_1_f_p}
+      DATAWAREHOUSE_FUND_KPI_VIEW: ${DATAWAREHOUSE_FUND_KPI_VIEW:-}
       DATAWAREHOUSE_SQLITE_PATH: ${DATAWAREHOUSE_SQLITE_PATH:-}
       DATAWAREHOUSE_SQLITE_SHA256: ${DATAWAREHOUSE_SQLITE_SHA256:-}
       DATAWAREHOUSE_OBJECT_URL: ${DATAWAREHOUSE_OBJECT_URL:-}
@@ -69,6 +71,8 @@ services:
       DATAWAREHOUSE_CLASS_MASTER_VIEW: ${DATAWAREHOUSE_CLASS_MASTER_VIEW:-view_ads_busi_product_fundinfo_class_f_p}
       DATAWAREHOUSE_FUND_RETURNS_VIEW: ${DATAWAREHOUSE_FUND_RETURNS_VIEW:-view_ads_busi_performance_class_returns_f_p}
       DATAWAREHOUSE_INDEX_RETURNS_VIEW: ${DATAWAREHOUSE_INDEX_RETURNS_VIEW:-view_ads_busi_performance_index_returns_f_p}
+      DATAWAREHOUSE_FUND_AUM_VIEW: ${DATAWAREHOUSE_FUND_AUM_VIEW:-view_ads_busi_valuation_nav_fund_level_exposure_1_f_p}
+      DATAWAREHOUSE_FUND_KPI_VIEW: ${DATAWAREHOUSE_FUND_KPI_VIEW:-}
     volumes: ["./var/output:/app/var/output"]
     depends_on: { db: { condition: service_healthy }, redis: { condition: service_started } }
   web:
