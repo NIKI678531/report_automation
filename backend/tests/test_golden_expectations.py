@@ -99,7 +99,7 @@ def test_sector_breakdown_matches_the_published_donut(derived):
 
 @pytest.mark.parametrize("block", ["top", "bottom"])
 def test_performer_tables_match_the_published_returns(derived, block):
-    """Selection and display order are separate steps, and the report pins both."""
+    """Top is descending and Bottom ascending by the published one-month return."""
     actual = derived["sections"]["analytics"][block]
     expected = EXPECTED["analytics"][block]
     assert [row["security_code"] for row in actual] == [row["security_code"] for row in expected]
@@ -108,7 +108,14 @@ def test_performer_tables_match_the_published_returns(derived, block):
 
 def test_portfolio_analysis_matches_the_published_block(derived):
     """Including the formatting: the report prints turnover with no decimals and AUM with two."""
-    assert derived["sections"]["analytics"]["portfolio"] == EXPECTED["analytics"]["portfolio"]
+    actual = [
+        {"label": row["label"], "value": row["display_value"]}
+        for row in derived["sections"]["analytics"]["portfolio"]
+    ]
+    assert actual == EXPECTED["analytics"]["portfolio"]
+    assert [row["metric_code"] for row in derived["sections"]["analytics"]["portfolio"]] == [
+        "AUM", "AVERAGE_DAILY_TURNOVER", "NUMBER_OF_HOLDINGS",
+    ]
 
 
 def test_next_rebalancing_date_is_derived_from_the_index_event(derived):

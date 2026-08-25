@@ -7,6 +7,7 @@ import {
   TableProperties,
 } from "lucide-react";
 import { REPORT_MODULES, type ModuleId } from "../reportModules";
+import { useLocale } from "../i18n";
 
 const moduleIcons = {
   review: LayoutDashboard,
@@ -26,9 +27,14 @@ interface ModuleNavProps {
 }
 
 export function ModuleNav({ active, onSelect, states }: ModuleNavProps) {
+  const { t } = useLocale();
+  const labels: Record<ModuleId, string> = {
+    review: t("review"), performance: t("historicalPerformance"), news: t("companyNews"),
+    constituents: t("constituentPerformance"), analytics: t("finalAnalytics"), footnotes: t("footnotes"),
+  };
   return (
-    <nav className="module-nav" aria-label="Report modules">
-      <div className="module-nav-heading">Report modules</div>
+    <nav className="module-nav" aria-label={t("reportModules")}>
+      <div className="module-nav-heading">{t("reportModules")}</div>
       {REPORT_MODULES.map(({ id, label, pageLabel }) => {
         const Icon = moduleIcons[id];
         return (
@@ -40,7 +46,7 @@ export function ModuleNav({ active, onSelect, states }: ModuleNavProps) {
           >
             <span className="module-index">{pageLabel}</span>
             <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
-            <span>{label}</span>
+            <span>{labels[id] ?? label}</span>
             <i className={`module-state ${states[id] ?? "empty"}`} aria-hidden="true" />
           </button>
         );

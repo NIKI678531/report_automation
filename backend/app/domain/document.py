@@ -7,6 +7,8 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlparse
 
+from .localization import is_zh_hans, month_name
+
 
 REVIEW_BLOCK_TYPES = {"rich_text", "heading", "bullet_list", "key_drivers", "areas_to_monitor", "outlook", "metric_callout", "image", "data_table", "page_break"}
 REVIEW_TEXT_ALIGNMENTS = {"left", "center", "right", "justify"}
@@ -255,6 +257,7 @@ def render_content_manifest(content: dict[str, Any]) -> dict[str, Any]:
     }
     manifest = {
         "document_checksum": checksum(content),
+        "language_mode": content.get("language_mode", "EN"),
         "module_bindings": content.get("module_bindings", {}),
         "section_checksums": {key: checksum(value) for key, value in facts.items()},
         "module_order": [
@@ -265,6 +268,25 @@ def render_content_manifest(content: dict[str, Any]) -> dict[str, Any]:
     return {**manifest, "checksum": checksum(manifest)}
 
 
+def content_manifests_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Compare canonical render content across manifest schema revisions.
+
+    Manifests created before language variants were introduced do not have a
+    ``language_mode`` field. Those artifacts are necessarily English, so normalize
+    that one legacy omission before comparing the canonical manifest payload. The
+    stored checksum itself is excluded because it changes whenever the manifest
+    envelope gains a field; every content-bearing field remains part of the
+    comparison, including any fields added in future revisions.
+    """
+
+    def comparable(manifest: dict[str, Any]) -> dict[str, Any]:
+        payload = {key: value for key, value in manifest.items() if key != "checksum"}
+        payload.setdefault("language_mode", "EN")
+        return payload
+
+    return comparable(left) == comparable(right)
+
+
 def initial_document(
     report_id: str,
     report_date: date,
@@ -272,28 +294,36 @@ def initial_document(
     design_token_version: str,
     product_ticker: str,
     benchmark_name: str,
+    language_mode: str = "EN",
 ) -> dict[str, Any]:
-    month = report_date.strftime("%B")
+    month = month_name(report_date, language_mode)
+    review_title = f"{month}月度回顾" if is_zh_hans(language_mode) else f"{month} in Review"
     return {
         "report_id": report_id,
         "template_version": template_version,
         "design_token_version": design_token_version,
         "lane": "PRODUCTION",
-        "language_mode": "EN",
+        "language_mode": language_mode,
         "report_date": report_date.isoformat(),
         "month_name": month,
         "product_ticker": product_ticker,
         "benchmark_name": benchmark_name,
+        "terminology_overrides": {
+            "product_name": "",
+            "benchmark_name": "",
+            "securities": {},
+            "industries": {},
+        },
         "next_rebalancing_date": None,
         "next_rebalancing_date_source": "SNAPSHOT",
         "sections": {
             "month_in_review": {
-                "title": f"{month} in Review",
-                "display_title": f"{month} in Review",
-                "summary": "Add monthly market review.",
+                "title": review_title,
+                "display_title": review_title,
+                "summary": "" if is_zh_hans(language_mode) else "Add monthly market review.",
                 "drivers": [],
                 "monitor": [],
-                "outlook": "Add outlook.",
+                "outlook": "" if is_zh_hans(language_mode) else "Add outlook.",
             },
             "historical_performance": {"rows": []},
             "company_news": [],

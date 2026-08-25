@@ -18,23 +18,33 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.storage import storage
-from app.domain.document import render_content_manifest, review_display_title
+from app.domain.document import content_manifests_match, render_content_manifest, review_display_title
+from app.domain.localization import is_zh_hans, localized_portfolio_value, term
+from app.domain.metrics.final_analytics import normalize_portfolio_rows
 from app.domain.models import RenderArtifact, Report, ReportDocument
-from .html import pct, price, rebalancing_date_text, render_html, testing_banner
+from .html import localized_document, pct, price, rebalancing_date_text, render_html, testing_banner
 
 
 MIME = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+
+
+def renderer_version_for(format_name: str) -> str:
+    return (
+        f"{settings.renderer_version}-paged-i18n-v2" if format_name == "pdf"
+        else "html-continuous-i18n-v2" if format_name == "html"
+        else "docx-paged-i18n-v2"
+    )
 
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _page_setup(section, page_number: int, banner: dict | None = None) -> None:
+def _page_setup(section, page_number: int, language_mode: str, banner: dict | None = None) -> None:
     section.page_width, section.page_height = Cm(21), Cm(29.7)
     section.top_margin, section.right_margin, section.bottom_margin, section.left_margin = Cm(0.7), Cm(1), Cm(1.5), Cm(1)
     header = section.header.paragraphs[0]
-    header.text = "Monthly Commentary"
+    header.text = term("monthly_commentary", language_mode)
     header.style = "Header"
     if banner:
         # DOCX has no cheap full-page watermark, so the lane rides in the running header, which
@@ -81,6 +91,19 @@ def _table(document: Document, headers: list[str], rows: list[list[str]], blue_f
     return table
 
 
+def _set_east_asian_font(document: Document, font_name: str = "Noto Sans CJK SC") -> None:
+    for style in document.styles:
+        if not getattr(style, "font", None):
+            continue
+        style.font.name = font_name
+        rpr = style.element.get_or_add_rPr()
+        fonts = rpr.rFonts
+        if fonts is None:
+            fonts = OxmlElement("w:rFonts")
+            rpr.append(fonts)
+        fonts.set(qn("w:eastAsia"), font_name)
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -101,8 +124,12 @@ def _plain_html(value: str) -> str:
 
 
 def render_docx(report: Report, content: dict, destination: Path) -> None:
+    language_mode = str(content.get("language_mode") or report.language_mode or "EN")
+    content = localized_document(content, language_mode)
     sections = content["sections"]
     banner = testing_banner(content)
+    if banner and is_zh_hans(language_mode):
+        banner = {**banner, "label": term("testing_label", language_mode)}
     document = Document()
     styles = document.styles
     styles["Normal"].font.name = "Calibri"
@@ -110,8 +137,10 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     for style_name in ["Title", "Heading 1", "Heading 2"]:
         styles[style_name].font.name = "Calibri"
         styles[style_name].font.color.rgb = RGBColor(34, 50, 127)
-    _page_setup(document.sections[0], 1, banner)
-    document.add_heading(report.product_name, 0)
+    if is_zh_hans(language_mode):
+        _set_east_asian_font(document)
+    _page_setup(document.sections[0], 1, language_mode, banner)
+    document.add_heading((content.get("terminology_overrides") or {}).get("product_name") or report.product_name, 0)
     review = sections["month_in_review"]
     enable_review_layout = content.get("template_version") != "3033-v1"
     if enable_review_layout and review.get("blocks"):
@@ -139,53 +168,71 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     else:
         document.add_heading(review_display_title(content), 1)
         document.add_paragraph(review["summary"])
-        document.add_heading("Key Drivers of the Correction", 1)
+        document.add_heading(term("key_drivers", language_mode), 1)
         for item in review["drivers"]:
             document.add_paragraph(f"{item['title']}\n{item['body']}", style="List Number")
-        document.add_heading("Key Areas to Monitor", 1)
+        document.add_heading(term("areas_to_monitor", language_mode), 1)
         for item in review["monitor"]:
             document.add_paragraph(f"{item['title']}\n{item['body']}", style="List Number")
-        document.add_heading("Outlook", 1)
+        document.add_heading(term("outlook", language_mode), 1)
         document.add_paragraph(review["outlook"])
-    document.add_heading(f"Historical Performance of {content['product_ticker']} and {content['benchmark_name']}*", 1)
+    benchmark_name = (content.get("terminology_overrides") or {}).get("benchmark_name") or content["benchmark_name"]
+    document.add_heading(term("historical_performance", language_mode, product=content["product_ticker"], benchmark=benchmark_name), 1)
     history = sections["historical_performance"]["rows"]
-    _table(document, ["", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[x["name"], pct(x["return_1m"]), pct(x["return_3m"]), pct(x["return_6m"]), pct(x["return_ytd"])] for x in history])
+    _table(document, ["", term("return_1m", language_mode), term("return_3m", language_mode), term("return_6m", language_mode), term("return_ytd", language_mode)], [[x["name"], pct(x["return_1m"], language_mode), pct(x["return_3m"], language_mode), pct(x["return_6m"], language_mode), pct(x["return_ytd"], language_mode)] for x in history])
     document.add_paragraph(sections["footnotes"].get("historical", ""), style="Caption")
 
-    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 2, banner)
-    document.add_heading("Company News", 1)
+    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 2, language_mode, banner)
+    document.add_heading(term("company_news", language_mode), 1)
     for item in sections["company_news"]:
+        if not any(str(item.get(field) or "").strip() for field in ("title", "summary", "source_name")):
+            continue
         paragraph = document.add_paragraph(style="List Bullet")
         run = paragraph.add_run(item["title"])
         run.bold = True; run.font.color.rgb = RGBColor(38, 96, 173)
-        metadata = " · ".join(value for value in (item.get("source_name"), item.get("published_at_hkt") or str(item.get("published_at", ""))[:10], item.get("source_url")) if value)
-        if metadata:
-            paragraph.add_run("\n" + metadata)
+        source_name = item.get("source_name")
+        if source_name:
+            paragraph.add_run("\n" + source_name)
         paragraph.add_run("\n" + item["summary"])
 
-    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 3, banner)
-    heading = document.add_heading(f"The Performance of {getattr(report, 'constituent_index_code', report.benchmark_code)} Constituents", 1)
+    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 3, language_mode, banner)
+    heading = document.add_heading(term("constituent_performance", language_mode, index=getattr(report, "constituent_index_code", report.benchmark_code)), 1)
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    document.add_paragraph(f"(*Next Rebalancing Date: {rebalancing_date_text(content.get('next_rebalancing_date'))})").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document.add_paragraph(f"({term('next_rebalancing_date', language_mode, date=rebalancing_date_text(content.get('next_rebalancing_date'), language_mode))})").alignment = WD_ALIGN_PARAGRAPH.CENTER
     constituents = sections["constituents"]
-    _table(document, ["Stock Code", "Stock Name", "Closing Price (HKD)", "Weighting (%)", "1-month return (%)", "3-month return (%)", "6-month return (%)", "YTD return (%)"], [[str(x.get("security_code", "")), str(x.get("name_en") or x.get("name_zh_hant") or ""), price(x.get("close_price")), pct(x.get("weight")), pct(x.get("return_1m")), pct(x.get("return_3m")), pct(x.get("return_6m")), pct(x.get("return_ytd"))] for x in constituents], blue_first=True)
+    _table(document, [term("stock_code", language_mode), term("stock_name", language_mode), term("closing_price_hkd", language_mode), term("weighting_pct", language_mode), term("return_1m", language_mode), term("return_3m", language_mode), term("return_6m", language_mode), term("return_ytd", language_mode)], [[str(x.get("security_code", "")), str(x.get("display_name") or ""), price(x.get("close_price"), language_mode), pct(x.get("weight"), language_mode), pct(x.get("return_1m"), language_mode), pct(x.get("return_3m"), language_mode), pct(x.get("return_6m"), language_mode), pct(x.get("return_ytd"), language_mode)] for x in constituents], blue_first=True)
     document.add_paragraph(sections["footnotes"].get("constituents", ""), style="Caption")
 
-    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 4, banner)
+    _page_setup(document.add_section(WD_SECTION.NEW_PAGE), 4, language_mode, banner)
     analytics = sections["analytics"]
-    document.add_heading("Top 10 Index Constituents* (%)", 1)
-    _table(document, ["Issuer", "Weight (%)"], [[x["issuer"], pct(x["weight"])] for x in analytics["top10"]])
-    document.add_heading("Index Sectors Breakdown*", 1)
+    document.add_heading(f"{term('top10', language_mode)} (%)", 1)
+    _table(document, [term("issuer", language_mode), term("weight", language_mode)], [[x.get("display_issuer", ""), pct(x["weight"], language_mode)] for x in analytics["top10"]])
+    document.add_heading(term("sector_breakdown", language_mode), 1)
     # Same chart snapshot the HTML/PDF donut reads, so the three formats can never drift apart
     # on order or precision. `display_value` already carries the "%" sign.
     sector_series = (analytics.get("sector_chart") or {}).get("series") or []
-    _table(document, ["Sector", "Weight"], [[x["label"], x["display_value"]] for x in sector_series])
-    document.add_heading(f"Top Performers in {content['month_name']}", 1)
-    _table(document, ["Issuer", "Return (%)"], [[x["issuer"], pct(x["return"])] for x in analytics["top"]])
-    document.add_heading(f"Bottom Performers in {content['month_name']}", 1)
-    _table(document, ["Issuer", "Return (%)"], [[x["issuer"], pct(x["return"])] for x in analytics["bottom"]])
-    document.add_heading(f"{content['product_ticker']} Portfolio Analysis", 1)
-    _table(document, ["Measure", "Value"], [[x["label"], x["value"]] for x in analytics["portfolio"]])
+    industry_overrides = content.get("_industry_overrides") or {}
+    _table(document, [term("sector", language_mode), term("weight", language_mode)], [[
+        industry_overrides.get(str(x.get("code") or ""))
+        or (x.get("label_zh_hans") if is_zh_hans(language_mode) else x.get("label"))
+        or "",
+        x["display_value"],
+    ] for x in sector_series])
+    document.add_heading(term("top_performers", language_mode, month=content["month_name"]), 1)
+    _table(document, [term("issuer", language_mode), term("return", language_mode)], [[x.get("display_issuer", ""), pct(x["return"], language_mode)] for x in analytics["top"]])
+    document.add_heading(term("bottom_performers", language_mode, month=content["month_name"]), 1)
+    _table(document, [term("issuer", language_mode), term("return", language_mode)], [[x.get("display_issuer", ""), pct(x["return"], language_mode)] for x in analytics["bottom"]])
+    document.add_heading(term("portfolio_analysis", language_mode, product=content["product_ticker"]), 1)
+    portfolio_rows = normalize_portfolio_rows(analytics.get("portfolio"), "HKD")
+    if is_zh_hans(language_mode):
+        labels = {"AUM": "资产管理规模（百万港元）^", "AVERAGE_DAILY_TURNOVER": "平均每日成交额（百万港元）^^", "NUMBER_OF_HOLDINGS": "持仓数量"}
+        for row in portfolio_rows:
+            row["label"] = labels.get(row.get("metric_code"), row.get("label", ""))
+            if row.get("display_value") == "N/A":
+                row["display_value"] = term("no_data", language_mode)
+            else:
+                row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
+    _table(document, [term("measure", language_mode), term("value", language_mode)], [[x["label"], x["display_value"]] for x in portfolio_rows])
     document.add_paragraph(sections["footnotes"].get("analytics", ""), style="Caption")
     document.save(destination)
 
@@ -193,18 +240,27 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
 def build_artifact(db: Session, report: Report, document: ReportDocument, format_name: str) -> RenderArtifact:
     if format_name not in MIME:
         raise ValueError(f"Unsupported format: {format_name}")
+    content_manifest = render_content_manifest(document.content)
+    existing = list(db.scalars(select(RenderArtifact).where(
+        RenderArtifact.report_id == report.id,
+        RenderArtifact.document_version == document.version,
+    )))
+    if any(not content_manifests_match(item.content_manifest, content_manifest) for item in existing):
+        raise ValueError("QC-010: canonical content manifest differs across output formats")
     directory = settings.output_root / format_name
     directory.mkdir(parents=True, exist_ok=True)
     # The lane is part of the file's identity, not only of its contents: an artifact copied out of
     # the tool loses its database row but keeps its name.
     lane_prefix = "TESTING-" if str(document.content.get("lane", "PRODUCTION")) == "TESTING" else ""
-    destination = directory / f"{lane_prefix}{report.product_code}_{report.report_date.isoformat()}_v{document.version}.{format_name}"
-    html = render_html(report, document.content)
+    language_tag = "ZH-HANS" if report.language_mode == "ZH_HANS" else report.language_mode.replace("_", "-")
+    destination = directory / f"{lane_prefix}{report.product_code}_{report.report_date.isoformat()}_{language_tag}_v{document.version}.{format_name}"
     if format_name == "html":
+        html = render_html(report, document.content, layout_mode="continuous")
         destination.write_text(html, encoding="utf-8")
     elif format_name == "docx":
         render_docx(report, document.content, destination)
     else:
+        html = render_html(report, document.content, layout_mode="paged")
         with TemporaryDirectory() as temp:
             source = Path(temp) / "report.html"
             source.write_text(html, encoding="utf-8")
@@ -239,13 +295,6 @@ def build_artifact(db: Session, report: Report, document: ReportDocument, format
                 browser.close()
     object_key = f"{format_name}/{destination.name}"
     stored = storage.put_file(destination, object_key)
-    content_manifest = render_content_manifest(document.content)
-    existing = list(db.scalars(select(RenderArtifact).where(
-        RenderArtifact.report_id == report.id,
-        RenderArtifact.document_version == document.version,
-    )))
-    if any(item.content_manifest.get("checksum") != content_manifest["checksum"] for item in existing):
-        raise ValueError("QC-010: canonical content manifest differs across output formats")
     artifact = RenderArtifact(
         report_id=report.id,
         document_version=document.version,
@@ -255,7 +304,7 @@ def build_artifact(db: Session, report: Report, document: ReportDocument, format
         size_bytes=stored.size_bytes,
         checksum=stored.checksum,
         template_version=document.template_version,
-        renderer_version=settings.renderer_version if format_name == "pdf" else f"{format_name}-v1",
+        renderer_version=renderer_version_for(format_name),
         content_manifest=content_manifest,
     )
     db.add(artifact)

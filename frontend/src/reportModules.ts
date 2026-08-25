@@ -26,6 +26,7 @@ interface ReportIdentity {
 interface ReportContextItem {
 	product_code: string;
 	report_date: string;
+	language_mode?: string;
 }
 
 interface InitialReportItem extends ReportContextItem {
@@ -137,15 +138,16 @@ export function selectReportForMonth<T extends InitialReportItem>(
 	reports: T[],
 	productCode: string,
 	reportDate: string,
+	languageMode?: string,
 ): T | undefined {
 	return reportsForContext(reports, productCode, reportDate)
-		.filter((report) => report.lane === "PRODUCTION" && report.status !== "ARCHIVED")
+		.filter((report) => report.lane === "PRODUCTION" && report.status !== "ARCHIVED" && (!languageMode || (report.language_mode ?? "EN") === languageMode))
 		.sort(newestReportFirst)[0];
 }
 
-export function selectInitialReport<T extends InitialReportItem>(reports: T[], productCode: string): T | undefined {
+export function selectInitialReport<T extends InitialReportItem>(reports: T[], productCode: string, languageMode?: string): T | undefined {
 	return [...reports]
-		.filter((report) => report.product_code === productCode && report.lane === "PRODUCTION" && report.status !== "ARCHIVED")
+		.filter((report) => report.product_code === productCode && report.lane === "PRODUCTION" && report.status !== "ARCHIVED" && (!languageMode || (report.language_mode ?? "EN") === languageMode))
 		.sort((left, right) => (
 			right.report_date.localeCompare(left.report_date)
 			|| newestReportFirst(left, right)

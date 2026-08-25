@@ -8,11 +8,23 @@ from datetime import date
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 from app.domain.document import review_display_title
+from app.domain.localization import (
+    ZH_HANS,
+    is_zh_hans,
+    localized_row_name,
+    localized_portfolio_value,
+    long_date as localized_long_date,
+    month_name,
+    short_date,
+    term,
+    traditional_to_simplified,
+)
+from app.domain.metrics.final_analytics import normalize_portfolio_rows
 from app.domain.models import Report
 
 ROOT = Path(__file__).resolve().parent
@@ -23,28 +35,28 @@ env = Environment(
 )
 
 
-def pct(value: Decimal | float | int | str | None) -> str:
-    return "N/A" if value is None else f"{Decimal(str(value)) * Decimal('100'):.2f}"
+def pct(value: Decimal | float | int | str | None, language_mode: str = "EN") -> str:
+    return term("no_data", language_mode) if value is None else f"{Decimal(str(value)) * Decimal('100'):.2f}"
 
 
-def price(value: Decimal | float | int | str | None) -> str:
+def price(value: Decimal | float | int | str | None, language_mode: str = "EN") -> str:
     if value is None:
-        return "N/A"
+        return term("no_data", language_mode)
     return f"{Decimal(str(value)):.2f}".rstrip("0").rstrip(".")
 
 
-def long_date(value: date) -> str:
-    return value.strftime("%B %d, %Y").replace(" 0", " ")
+def long_date(value: date, language_mode: str = "EN") -> str:
+    return localized_long_date(value, language_mode)
 
 
-def rebalancing_date_text(value: Any) -> str:
+def rebalancing_date_text(value: Any, language_mode: str = "EN") -> str:
     if not value:
-        return "N/A"
+        return term("no_data", language_mode)
     try:
         parsed = date.fromisoformat(str(value))
     except ValueError:
-        return "N/A"
-    return f"{parsed.day} {parsed.strftime('%B')} {parsed.year}"
+        return term("no_data", language_mode)
+    return short_date(parsed, language_mode)
 
 
 env.filters.update(pct=pct, price=price, rebalancing_date=rebalancing_date_text)
@@ -137,6 +149,47 @@ def _render_tokens(version: str) -> dict[str, Any]:
     return _merge_tokens(_render_tokens(str(parent)), tokens) if parent else tokens
 
 
+@lru_cache(maxsize=1)
+def _embedded_cjk_font_css() -> str:
+    """Embed Noto Sans SC so downloaded HTML stays self-contained and PDF uses the same face."""
+    candidates = (
+        # Developer/CI Windows image.  This variable font covers regular through bold.
+        (Path("C:/Windows/Fonts/NotoSansSC-VF.ttf"), None),
+        # Debian's fonts-noto-cjk package, installed by backend/Dockerfile.
+        (
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+        ),
+        (
+            Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+            Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"),
+        ),
+    )
+    for regular_path, bold_path in candidates:
+        if not regular_path.is_file():
+            continue
+        regular = base64.b64encode(regular_path.read_bytes()).decode("ascii")
+        regular_format = "truetype" if regular_path.suffix.lower() == ".ttf" else "collection"
+        if bold_path is None:
+            return (
+                '@font-face{font-family:"Embedded Noto Sans CJK SC";'
+                f'src:url("data:font/ttf;base64,{regular}") format("{regular_format}");'
+                'font-style:normal;font-weight:100 900;font-display:block;}'
+            )
+        if not bold_path.is_file():
+            continue
+        bold = base64.b64encode(bold_path.read_bytes()).decode("ascii")
+        return (
+            '@font-face{font-family:"Embedded Noto Sans CJK SC";'
+            f'src:url("data:font/collection;base64,{regular}") format("{regular_format}");'
+            'font-style:normal;font-weight:400;font-display:block;}'
+            '@font-face{font-family:"Embedded Noto Sans CJK SC";'
+            f'src:url("data:font/collection;base64,{bold}") format("{regular_format}");'
+            'font-style:normal;font-weight:700;font-display:block;}'
+        )
+    return ""
+
+
 # The lane mark is a control, not decoration, so it must survive a token file that forgets it.
 # The tokens decide how it looks; this decides that it exists at all.
 _TESTING_BANNER_FALLBACK = {
@@ -182,7 +235,12 @@ def _donut_path(center: float, outer_radius: float, inner_radius: float, start: 
     )
 
 
-def sector_chart(chart_snapshot: dict[str, Any] | None, chart_tokens: dict[str, Any]) -> dict[str, Any]:
+def sector_chart(
+    chart_snapshot: dict[str, Any] | None,
+    chart_tokens: dict[str, Any],
+    language_mode: str = "EN",
+    overrides: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Lay out the `industry_breakdown` chart snapshot.
 
     Ordering, the zero-weight filter, the display string and the colour token are all decided
@@ -210,8 +268,15 @@ def sector_chart(chart_snapshot: dict[str, Any] | None, chart_tokens: dict[str, 
         order = int(row.get("sort_order") or len(rows) + 1)
         token = str(row.get("color_token") or "")
         middle = (start + end) / 2
+        if is_zh_hans(language_mode):
+            sector_name = str(row.get("label_zh_hans") or "")
+            if not sector_name and row.get("label_zh_hant"):
+                sector_name = traditional_to_simplified(row.get("label_zh_hant"))
+        else:
+            sector_name = str(row.get("label") or "")
+        sector_name = str((overrides or {}).get(str(row.get("code") or "")) or sector_name)
         chart_row = {
-            "sector": str(row.get("label") or ""),
+            "sector": sector_name,
             "display_value": str(row.get("display_value") or ""),
             "color": color_tokens.get(token, palette[(order - 1) % len(palette)]),
             "path": _donut_path(center, outer_radius, inner_radius, start, end),
@@ -241,34 +306,110 @@ def sector_chart(chart_snapshot: dict[str, Any] | None, chart_tokens: dict[str, 
         chart_row["label_x"], chart_row["label_y"] = round(text_x, 3), round(elbow_y + 1.4, 3)
         chart_row["label_anchor"] = "end" if side < 0 else "start"
 
+    localized_summary = ", ".join(
+        f"{item['sector']} {item['display_value']}" for item in rows
+    )
     return {
         "has_data": True,
         "view_box": view_box,
         "box_mm": float(chart_tokens["boxWidthMm"]),
         "rows": rows,
-        "alt_text": str((chart_snapshot or {}).get("alt_text") or ""),
+        "alt_text": (
+            f"指数行业分布：{localized_summary}"
+            if is_zh_hans(language_mode)
+            else str((chart_snapshot or {}).get("alt_text") or "")
+        ),
     }
 
 
-def render_html(report: Report, document: dict[str, Any], *, preview: bool = False) -> str:
+def localized_document(document: dict[str, Any], language_mode: str) -> dict[str, Any]:
+    result = deepcopy(document)
+    overrides = result.get("terminology_overrides") or {}
+    securities = overrides.get("securities") or {}
+    industries = overrides.get("industries") or {}
+    sections = result.get("sections") or {}
+    for row in sections.get("constituents") or []:
+        name, source = localized_row_name(row, language_mode)
+        row["display_name"] = str(securities.get(str(row.get("security_code") or "")) or name)
+        row["display_name_source"] = "MANUAL_OVERRIDE" if securities.get(str(row.get("security_code") or "")) else source
+    analytics = sections.get("analytics") or {}
+    for key in ("top10", "top", "bottom"):
+        for row in analytics.get(key) or []:
+            name, source = localized_row_name(row, language_mode)
+            row["display_issuer"] = str(securities.get(str(row.get("security_code") or "")) or name)
+            row["display_name_source"] = "MANUAL_OVERRIDE" if securities.get(str(row.get("security_code") or "")) else source
+    for row in analytics.get("portfolio") or []:
+        if is_zh_hans(language_mode):
+            labels = {
+                "AUM": "资产管理规模（百万港元）^",
+                "AVERAGE_DAILY_TURNOVER": "平均每日成交额（百万港元）^^",
+                "NUMBER_OF_HOLDINGS": "持仓数量",
+            }
+            row["label"] = labels.get(str(row.get("metric_code") or ""), row.get("label", ""))
+            if row.get("display_value") == "N/A":
+                row["display_value"] = term("no_data", language_mode)
+                row["value"] = term("no_data", language_mode)
+            else:
+                row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
+                row["value"] = row["display_value"]
+    result["month_name"] = month_name(date.fromisoformat(str(result.get("report_date"))), language_mode)
+    result["_industry_overrides"] = industries
+    return result
+
+
+def render_html(
+    report: Report,
+    document: dict[str, Any],
+    *,
+    preview: bool = False,
+    layout_mode: Literal["continuous", "paged"] = "continuous",
+) -> str:
     if preview:
         document = _preview_document(report, document)
+    language_mode = str(document.get("language_mode") or report.language_mode or "EN")
+    document = localized_document(document, language_mode)
     logo = base64.b64encode((ROOT / "static" / "csop-logo.png").read_bytes()).decode("ascii")
     template_version = str(document.get("template_version", "3033-v1"))
     design_token_version = str(document.get("design_token_version", "3033-v1"))
     tokens = _render_tokens(design_token_version)
     sections = document["sections"]
+    banner = testing_banner(document)
+    if banner and is_zh_hans(language_mode):
+        banner = {**banner, "label": term("testing_label", language_mode), "watermark": term("testing_watermark", language_mode)}
+    portfolio = normalize_portfolio_rows(sections.get("analytics", {}).get("portfolio"), "HKD")
+    if is_zh_hans(language_mode):
+        labels = {
+            "AUM": "资产管理规模（百万港元）^",
+            "AVERAGE_DAILY_TURNOVER": "平均每日成交额（百万港元）^^",
+            "NUMBER_OF_HOLDINGS": "持仓数量",
+        }
+        for row in portfolio:
+            row["label"] = labels.get(row.get("metric_code"), row.get("label", ""))
+            if row.get("display_value") == "N/A":
+                row["display_value"] = term("no_data", language_mode)
+            else:
+                row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
     return env.get_template("3033.html.j2").render(
         report=report,
         doc=document,
         sections=sections,
-        report_date_long=long_date(report.report_date),
+        language_mode=language_mode,
+        html_language="zh-CN" if is_zh_hans(language_mode) else "en",
+        cjk_font_css=_embedded_cjk_font_css() if is_zh_hans(language_mode) else "",
+        layout_mode=layout_mode,
+        t=lambda key, **values: term(key, language_mode, **values),
+        product_display_name=(document.get("terminology_overrides") or {}).get("product_name") or report.product_name,
+        benchmark_display_name=(document.get("terminology_overrides") or {}).get("benchmark_name") or document.get("benchmark_name") or report.benchmark_code,
+        report_date_long=long_date(report.report_date, language_mode),
         logo_data=logo,
         review_title=review_display_title(document),
         enable_review_layout=template_version != "3033-v1",
-        testing_banner=testing_banner(document),
+        testing_banner=banner,
+        portfolio_analysis=portfolio,
         sector_chart=sector_chart(
             sections.get("analytics", {}).get("sector_chart"),
             tokens["chart"]["sectorDonut"],
+            language_mode,
+            document.get("_industry_overrides") or {},
         ),
     )

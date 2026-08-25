@@ -17,11 +17,20 @@ REFERENCE = Path(__file__).parent / "fixtures" / "3033_202606" / "reference.pdf"
 # recorded value" is what turns this suite red on a regression while staying honest about
 # the gap that remains. Measured from this exact deterministic path -- do not copy numbers
 # from a hand-edited document version.
-PIXEL_DIFFERENCE_BASELINE = {1: 0.266693, 2: 0.212917, 3: 0.162226, 4: 0.105307}
+PIXEL_DIFFERENCE_BASELINE = {1: 0.266693, 2: 0.212917, 3: 0.162226, 4: 0.105378}
 
 # A ratchet only works in one direction, so every raise is recorded with its cause. Editing a
 # number here without adding an entry is how a real regression gets absorbed silently.
 BASELINE_RAISES = [
+    {
+        "date": "2026-08-24",
+        "previous": {1: 0.266693, 2: 0.212917, 3: 0.162226, 4: 0.105307},
+        "reason": (
+            "Page 4 now displays Bottom Performers in ascending one-month-return order "
+            "(worst first), as required by the product owner. The approved reference PDF used "
+            "the reverse display order, so only the positions of those three intended rows differ."
+        ),
+    },
     {
         "date": "2026-08-12",
         "previous": {1: 0.266646, 2: 0.212917, 3: 0.160804, 4: 0.105307},
@@ -52,6 +61,14 @@ BASELINE_RAISES = [
 
 # The reference prints sector weights as on-chart data labels with one decimal place.
 PAGE4_REQUIRED_LABELS = ("47.8%", "49.3%", "1.7%", "1.3%")
+PAGE4_REQUIRED_PORTFOLIO = (
+    "Asset Under Management (HKD)^",
+    "67,536.55 million",
+    "Average Daily Turnover (HKD)^^",
+    "12,882 million",
+    "Number of holdings",
+    "30",
+)
 
 
 def render_golden_pdf(client, destination: Path) -> Path:
@@ -127,3 +144,11 @@ def test_page4_prints_sector_weights_as_on_chart_labels(client, tmp_path):
     # Two decimals belong to the return and price columns, never to the sector breakdown.
     assert "47.75%" not in text
     assert "49.27%" not in text
+
+
+def test_page4_prints_all_three_portfolio_analysis_metrics(client, tmp_path):
+    actual = render_golden_pdf(client, tmp_path / "actual.pdf")
+    text = pdfium.PdfDocument(str(actual))[3].get_textpage().get_text_bounded()
+
+    missing = [value for value in PAGE4_REQUIRED_PORTFOLIO if value not in text]
+    assert not missing, f"page 4 is missing Portfolio Analysis values: {missing}"

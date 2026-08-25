@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Download, Eye, FileCheck2, FileOutput, LoaderCircle, Plus } from "lucide-react";
+import { AlertTriangle, ChevronDown, Download, Eye, FileCheck2, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { api, type OutputFormat, type Product, type RenderJob, type Report } from "./api";
 import { type ModuleId, ModuleNav } from "./components/ModuleNav";
 import { ReportModule } from "./components/ReportModulesV2";
 import type { PendingSave, RegisterPendingSave } from "./pendingSave";
 import { FOOTNOTE_SECTIONS, reportsForContext, reviewHasContent, selectInitialReport, selectReportForMonth } from "./reportModules";
+import { useLocale, type Locale } from "./i18n";
 import "./styles.css";
 
 const PRODUCT_CODE = "3033";
@@ -13,20 +14,7 @@ const OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string }> = [
   { value: "html", label: "HTML" },
   { value: "docx", label: "Word (.docx)" },
 ];
-const MONTH_OPTIONS = [
-  { value: "01", label: "January" },
-  { value: "02", label: "February" },
-  { value: "03", label: "March" },
-  { value: "04", label: "April" },
-  { value: "05", label: "May" },
-  { value: "06", label: "June" },
-  { value: "07", label: "July" },
-  { value: "08", label: "August" },
-  { value: "09", label: "September" },
-  { value: "10", label: "October" },
-  { value: "11", label: "November" },
-  { value: "12", label: "December" },
-];
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, "0"));
 
 function reportMonthEnd(value: string): string {
   const [year, month] = value.split("-").map(Number);
@@ -48,10 +36,6 @@ function currentHongKongMonthEnd(): string {
   return reportMonthEnd(`${year ?? "1970"}-${month ?? "01"}`);
 }
 
-function formatLabel(format: OutputFormat): string {
-  return OUTPUT_FORMATS.find((item) => item.value === format)?.label ?? format.toUpperCase();
-}
-
 function isTerminal(job: RenderJob): boolean {
   return ["SUCCEEDED", "FAILED", "CANCELED"].includes(job.status);
 }
@@ -67,17 +51,50 @@ function sectionRows(report: Report, section: "historical_performance" | "consti
 }
 
 export function needsAutomaticBackfill(report: Report): boolean {
-  return report.status === "DRAFT"
-    && (!sectionRows(report, "historical_performance").length || !sectionRows(report, "constituents").length);
-}
-
-interface ReviewResult {
-  ready: boolean;
-  blocking: Array<{ check_id: string; fix_hint: string }>;
-  warnings: Array<{ check_id?: string; fix_hint?: string }>;
+  const constituentsReady = sectionRows(report, "constituents").length > 0;
+  const sections = report.latest_document?.content.sections;
+  const analytics = sections && typeof sections === "object"
+    ? (sections as Record<string, unknown>).analytics
+    : null;
+  const top10 = analytics && typeof analytics === "object"
+    ? (analytics as Record<string, unknown>).top10
+    : null;
+  const portfolio = analytics && typeof analytics === "object"
+    ? (analytics as Record<string, unknown>).portfolio
+    : null;
+  const portfolioCodes = new Set(
+    (Array.isArray(portfolio) ? portfolio : [])
+      .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
+      .map((row) => String(row.metric_code ?? "")),
+  );
+  const portfolioLabels = new Set(
+    (Array.isArray(portfolio) ? portfolio : [])
+      .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
+      .map((row) => String(row.label ?? "")),
+  );
+  const hasPortfolioMetric = (code: string, label: string) => (
+    portfolioCodes.has(code) || portfolioLabels.has(label)
+  );
+  const hasAum = (
+    hasPortfolioMetric("AUM", "Asset Under Management")
+    || [...portfolioLabels].some((label) => label.startsWith("Asset Under Management ("))
+  );
+  const hasTurnover = (
+    hasPortfolioMetric("AVERAGE_DAILY_TURNOVER", "Average Daily Turnover")
+    || [...portfolioLabels].some((label) => label.startsWith("Average Daily Turnover ("))
+  );
+  const hasHoldings = hasPortfolioMetric("NUMBER_OF_HOLDINGS", "Number of holdings");
+  const portfolioMissing = constituentsReady && (!hasAum || !hasTurnover || !hasHoldings);
+  const finalAnalyticsMissing = constituentsReady
+    && ((!Array.isArray(top10) || top10.length === 0) || portfolioMissing);
+  const sourceDataMissing = report.status === "DRAFT"
+    && (!sectionRows(report, "historical_performance").length || !constituentsReady);
+  return report.status !== "FINALIZED" && report.status !== "ARCHIVED"
+    && (sourceDataMissing || finalAnalyticsMissing);
 }
 
 function App() {
+  const { locale, languageMode, setLocale, t, statusLabel } = useLocale();
   const [products, setProducts] = useState<Product[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [selected, setSelected] = useState<Report | null>(null);
@@ -86,12 +103,9 @@ function App() {
   const [activeModule, setActiveModule] = useState<ModuleId>("review");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [review, setReview] = useState<ReviewResult | null>(null);
-  const [renderJobs, setRenderJobs] = useState<RenderJob[]>([]);
-  const [selectedFormats, setSelectedFormats] = useState<OutputFormat[]>(["pdf"]);
-  const [outputsOpen, setOutputsOpen] = useState(false);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [downloadingFormat, setDownloadingFormat] = useState<OutputFormat | null>(null);
   const pendingSave = useRef<PendingSave | null>(null);
-  const outputPanel = useRef<HTMLElement>(null);
 
   const registerPendingSave = useCallback<RegisterPendingSave>((save) => {
     pendingSave.current = save;
@@ -99,9 +113,8 @@ function App() {
 
   const resetTransientState = useCallback(() => {
     pendingSave.current = null;
-    setReview(null);
-    setRenderJobs([]);
-    setOutputsOpen(false);
+    setDownloadsOpen(false);
+    setDownloadingFormat(null);
   }, []);
 
   const refreshReport = useCallback(async (reportId: string): Promise<Report> => {
@@ -124,7 +137,7 @@ function App() {
     let active = true;
     void api.listReports()
       .then(async (reportItems) => {
-        const initial = selectInitialReport(reportItems, PRODUCT_CODE);
+        const initial = selectInitialReport(reportItems, PRODUCT_CODE, languageMode);
         const initialDate = initial?.report_date ?? currentHongKongMonthEnd();
         const [productItems, detail] = await Promise.all([
           api.listProducts(initialDate),
@@ -139,25 +152,6 @@ function App() {
       .catch((caught) => { if (active) setError(String(caught)); });
     return () => { active = false; };
   }, [loadSelectedReport]);
-
-  useEffect(() => {
-    if (!renderJobs.some((job) => !isTerminal(job))) return;
-    let canceled = false;
-    const timer = window.setTimeout(() => {
-      void Promise.all(renderJobs.map((job) => isTerminal(job) ? job : api.getJob(job.id)))
-        .then(async (jobs) => {
-          if (canceled) return;
-          setRenderJobs(jobs);
-          if (jobs.every(isTerminal) && selected?.id) await refreshReport(selected.id);
-        })
-        .catch((caught) => { if (!canceled) setError(String(caught)); });
-    }, 1000);
-    return () => { canceled = true; window.clearTimeout(timer); };
-  }, [refreshReport, renderJobs, selected?.id]);
-
-  useEffect(() => {
-    if (outputsOpen) outputPanel.current?.focus();
-  }, [outputsOpen]);
 
   useEffect(() => {
     setReportYearInput(reportDate.slice(0, 4));
@@ -187,22 +181,21 @@ function App() {
 
   const productReports = useMemo(
     () => reportsForContext(reports, PRODUCT_CODE, reportDate)
-      .filter((report) => report.lane === "PRODUCTION" && report.status !== "ARCHIVED")
+      .filter((report) => (report.language_mode ?? "EN") === languageMode && report.lane === "PRODUCTION" && report.status !== "ARCHIVED")
       .sort((left, right) => (
         right.revision - left.revision
         || right.version - left.version
         || String(right.created_at ?? "").localeCompare(String(left.created_at ?? ""))
       )),
-    [reports, reportDate],
+    [reports, reportDate, languageMode],
   );
   const product = products.find((item) => item.product_code === PRODUCT_CODE);
   const artifacts = selected?.artifacts ?? [];
   const artifactsByFormat = useMemo(() => {
     const byFormat = new Map<OutputFormat, (typeof artifacts)[number]>();
-    for (const artifact of artifacts) if (!byFormat.has(artifact.format)) byFormat.set(artifact.format, artifact);
+    for (const artifact of artifacts) if (artifact.is_current !== false && !byFormat.has(artifact.format)) byFormat.set(artifact.format, artifact);
     return byFormat;
   }, [artifacts]);
-  const formatsToGenerate = selectedFormats.filter((format) => !artifactsByFormat.has(format));
 
   async function changeMonth(value: string) {
     if (!value) return;
@@ -219,7 +212,7 @@ function App() {
     try {
       await flushPendingEdits();
       const [reportItems, productItems] = await Promise.all([api.listReports(), api.listProducts(nextDate)]);
-      const next = selectReportForMonth(reportItems, PRODUCT_CODE, nextDate);
+      const next = selectReportForMonth(reportItems, PRODUCT_CODE, nextDate, languageMode);
       const detail = next ? await loadSelectedReport(next.id) : null;
       resetTransientState();
       setReports(reportItems);
@@ -235,11 +228,33 @@ function App() {
   }
 
   async function changeReportPeriod(year: string, month: string) {
-    if (!/^\d{4}$/.test(year) || !MONTH_OPTIONS.some((item) => item.value === month)) {
-      setError("Enter a valid four-digit report year and month.");
+    if (!/^\d{4}$/.test(year) || !MONTH_OPTIONS.includes(month)) {
+      setError(t("invalidPeriod"));
       return;
     }
     await changeMonth(`${year}-${month}`);
+  }
+
+  async function changeLanguage(nextLocale: Locale) {
+    if (nextLocale === locale) return;
+    const nextLanguageMode = nextLocale === "zh-Hans" ? "ZH_HANS" : "EN";
+    setBusy(true);
+    setError("");
+    try {
+      await flushPendingEdits();
+      const reportItems = await api.listReports();
+      const next = selectReportForMonth(reportItems, PRODUCT_CODE, reportDate, nextLanguageMode);
+      const detail = next ? await loadSelectedReport(next.id) : null;
+      resetTransientState();
+      setReports(reportItems);
+      setSelected(detail);
+      setActiveModule("review");
+      setLocale(nextLocale);
+    } catch (caught) {
+      setError(String(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   function changeReportYear(value: string) {
@@ -254,7 +269,7 @@ function App() {
     setError("");
     try {
       await flushPendingEdits();
-      const detail = await api.getReport(reportId);
+      const detail = await loadSelectedReport(reportId);
       resetTransientState();
       setSelected(detail);
     } catch (caught) {
@@ -278,15 +293,49 @@ function App() {
     }
   }
 
-  async function createReport() {
+  async function createReport(createFresh = false) {
     if (!product) return;
     setBusy(true);
     setError("");
     try {
       await flushPendingEdits();
-      const created = await api.createReport(reportDate, PRODUCT_CODE);
+      const source = createFresh ? undefined : reportsForContext(reports, PRODUCT_CODE, reportDate)
+        .filter((report) => (report.language_mode ?? "EN") !== languageMode && report.status !== "ARCHIVED")
+        .sort((left, right) => right.version - left.version)[0];
+      const created = source
+        ? await api.createLanguageVariant(source.id, languageMode, source.latest_document?.version ?? (await api.getReport(source.id)).latest_document?.version ?? 1)
+        : locale === "zh-Hans"
+          ? await api.createReport(reportDate, PRODUCT_CODE, languageMode)
+          : await api.createReport(reportDate, PRODUCT_CODE);
       resetTransientState();
       await refreshReport(created.id);
+    } catch (caught) {
+      setError(String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteReport() {
+    if (!selected) return;
+    const confirmed = window.confirm(
+      t("deleteConfirm", { date: selected.report_date, revision: selected.revision, status: statusLabel(selected.status) }),
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      const current = await flushPendingEdits(selected);
+      if (!current) throw new Error(t("unavailable"));
+      await api.deleteReport(current.id, current.version);
+      const reportItems = await api.listReports();
+      const next = selectReportForMonth(reportItems, PRODUCT_CODE, reportDate, languageMode);
+      const detail = next ? await loadSelectedReport(next.id) : null;
+      resetTransientState();
+      setReports(reportItems);
+      setSelected(detail);
+      setActiveModule("review");
     } catch (caught) {
       setError(String(caught));
     } finally {
@@ -298,7 +347,7 @@ function App() {
     if (!selected) return;
     const preview = window.open("about:blank", "_blank");
     if (!preview) {
-      setError("Preview was blocked by the browser. Allow pop-ups for this application and try again.");
+      setError(t("popupBlocked"));
       return;
     }
     preview.opener = null;
@@ -306,7 +355,7 @@ function App() {
     setError("");
     try {
       const current = await flushPendingEdits(selected);
-      if (!current) throw new Error("Report is no longer available.");
+      if (!current) throw new Error(t("unavailable"));
       preview.location.replace(`/api/v1/reports/${current.id}/preview`);
     } catch (caught) {
       preview.close();
@@ -322,13 +371,10 @@ function App() {
     setError("");
     try {
       const current = await flushPendingEdits(selected);
-      if (!current) throw new Error("Report is no longer available.");
-      const verdict = await api.review(current.id);
-      setReview(verdict);
-      if (!verdict.ready) return;
+      if (!current) throw new Error(t("unavailable"));
       await api.finalize(current.id, current.latest_document?.version ?? 1);
       await refreshReport(current.id);
-      setOutputsOpen(true);
+      setDownloadsOpen(true);
     } catch (caught) {
       setError(String(caught));
     } finally {
@@ -336,25 +382,35 @@ function App() {
     }
   }
 
-  function toggleFormat(format: OutputFormat) {
-    setSelectedFormats((current) => current.includes(format)
-      ? current.filter((item) => item !== format)
-      : [...current, format]);
-  }
-
-  async function generateSelectedFormats() {
-    if (!selected || selected.status !== "FINALIZED" || !formatsToGenerate.length) return;
+  async function downloadOutput(format: OutputFormat) {
+    if (!selected || selected.status !== "FINALIZED") return;
+    const reportId = selected.id;
+    setDownloadsOpen(false);
+    setDownloadingFormat(format);
     setBusy(true);
     setError("");
     try {
-      const jobs = await api.render(selected.id, formatsToGenerate);
-      setRenderJobs((current) => [
-        ...current.filter((job) => !formatsToGenerate.includes(job.format)),
-        ...jobs,
-      ]);
+      const existing = artifactsByFormat.get(format);
+      if (existing) {
+        await api.downloadArtifact(existing.id);
+        return;
+      }
+      const jobs = await api.render(reportId, [format]);
+      let job = jobs.find((item) => item.format === format);
+      if (!job) throw new Error(`The ${format.toUpperCase()} render job was not created.`);
+      while (!isTerminal(job)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        job = await api.getJob(job.id);
+      }
+      if (job.status !== "SUCCEEDED" || !job.artifact_id) {
+        throw new Error(job.error?.message ?? `The ${format.toUpperCase()} download could not be generated.`);
+      }
+      await api.downloadArtifact(job.artifact_id);
+      await refreshReport(reportId);
     } catch (caught) {
       setError(String(caught));
     } finally {
+      setDownloadingFormat(null);
       setBusy(false);
     }
   }
@@ -363,68 +419,65 @@ function App() {
 
   return <div className="shell">
     <header className="topbar">
-      <div className="brand"><span className="brand-rule" /><div><span className="eyebrow">REPORT AUTOMATION</span><h1>Monthly Commentary</h1></div></div>
-      <div className="topbar-meta"><span>Canonical report workspace</span>{busy && <LoaderCircle className="spin" size={18} aria-label="Working" />}</div>
+      <div className="brand"><span className="brand-rule" /><div><span className="eyebrow">{t("brandEyebrow")}</span><h1>{t("appName")}</h1></div></div>
+      <div className="topbar-meta"><span>{t("workspace")}</span><label className="language-picker"><span>{t("language")}</span><select aria-label={t("language")} value={locale} disabled={busy} onChange={(event) => void changeLanguage(event.target.value as Locale)}><option value="en">English</option><option value="zh-Hans">简体中文</option></select></label>{busy && <LoaderCircle className="spin" size={18} aria-label={t("working")} />}</div>
     </header>
     {error && <div className="error" role="alert">{error}</div>}
     <main className="app-main">
       <section className="report-context">
         <div className="fund-control">
-          <label>Fund</label>
-          <div className="fund-static" aria-label="Fund 3033"><strong>{product?.name_en ?? "CSOP Hang Seng TECH Index ETF"}</strong><span>3033</span></div>
-          <p>{product ? `${product.ticker} · ${product.benchmark_name ?? product.benchmark_code} · ${product.currency}` : "3033.HK · Hang Seng TECH Index · HKD"}</p>
+          <label>{t("fund")}</label>
+          <div className="fund-static" aria-label={`${t("fund")} 3033`}><strong>{locale === "zh-Hans" ? (selected?.product_name || product?.name_zh_hans || product?.ticker || "3033") : (product?.name_en ?? "CSOP Hang Seng TECH Index ETF")}</strong><span>3033</span></div>
+          <p>{product ? `${product.ticker} · ${locale === "zh-Hans" ? product.benchmark_code : (product.benchmark_name ?? product.benchmark_code)} · ${product.currency}` : `3033.HK · ${locale === "zh-Hans" ? "HSTECH" : "Hang Seng TECH Index"} · HKD`}</p>
         </div>
         <div className="report-controls">
-          <label>Report year<input type="number" inputMode="numeric" min="1000" max="9999" step="1" value={reportYearInput} onChange={(event) => changeReportYear(event.target.value)} onBlur={() => { if (!/^\d{4}$/.test(reportYearInput)) setError("Enter a valid four-digit report year."); }} disabled={busy} /></label>
-          <label>Report month<select value={reportDate.slice(5, 7)} onChange={(event) => void changeReportPeriod(reportYearInput, event.target.value)} disabled={busy || !/^\d{4}$/.test(reportYearInput)}>{MONTH_OPTIONS.map((month) => <option key={month.value} value={month.value}>{month.label}</option>)}</select></label>
-          {selected && productReports.length > 0 && <label>Report version<select value={selected.id} onChange={(event) => void changeReport(event.target.value)} disabled={busy}>{productReports.map((report) => <option key={report.id} value={report.id}>{report.report_date} · r{report.revision} · {report.status}</option>)}</select></label>}
-          {!selected && <button className="primary" disabled={busy || !product} onClick={() => void createReport()}><Plus size={17} /> Create report</button>}
+          <label>{t("reportYear")}<input type="number" inputMode="numeric" min="1000" max="9999" step="1" value={reportYearInput} onChange={(event) => changeReportYear(event.target.value)} onBlur={() => { if (!/^\d{4}$/.test(reportYearInput)) setError(t("invalidYear")); }} disabled={busy} /></label>
+          <label>{t("reportMonth")}<select value={reportDate.slice(5, 7)} onChange={(event) => void changeReportPeriod(reportYearInput, event.target.value)} disabled={busy || !/^\d{4}$/.test(reportYearInput)}>{MONTH_OPTIONS.map((month) => <option key={month} value={month}>{new Intl.DateTimeFormat(locale === "zh-Hans" ? "zh-CN" : "en", { month: "long", timeZone: "UTC" }).format(new Date(`2024-${month}-01T00:00:00Z`))}</option>)}</select></label>
+          {selected && productReports.length > 0 && <label>{t("reportVersion")}<select value={selected.id} onChange={(event) => void changeReport(event.target.value)} disabled={busy}>{productReports.map((report) => <option key={report.id} value={report.id}>{report.report_date} · r{report.revision} · {statusLabel(report.status)}</option>)}</select></label>}
+          {!selected && <button className="primary" disabled={busy || !product} onClick={() => void createReport()}><Plus size={17} /> {reportsForContext(reports, PRODUCT_CODE, reportDate).some((report) => report.language_mode !== languageMode) ? t("createLanguageVersion", { language: locale === "zh-Hans" ? t("simplifiedChinese") : t("english") }) : t("createReport")}</button>}
           {selected && <>
-            <button disabled={busy || !product} onClick={() => void createReport()}><Plus size={17} /> New report</button>
-            <button title="Open canonical preview" disabled={busy} onClick={() => void openPreview()}><Eye size={17} /> Preview</button>
-            <button className="primary" disabled={busy || selected.status === "FINALIZED"} onClick={() => void reviewAndFinalize()}><FileCheck2 size={17} /> {selected.status === "FINALIZED" ? "Finalized" : "Review & finalize"}</button>
-            <button disabled={busy || selected.status !== "FINALIZED"} onClick={() => setOutputsOpen(true)}><Download size={17} /> Downloads</button>
+            <button disabled={busy || !product} onClick={() => void createReport(true)}><Plus size={17} /> {t("newReport")}</button>
+            <button className="danger-button" disabled={busy} onClick={() => void deleteReport()}><Trash2 size={17} /> {t("deleteReport")}</button>
+            <button title={t("preview")} disabled={busy} onClick={() => void openPreview()}><Eye size={17} /> {t("preview")}</button>
+            <button className="primary" disabled={busy || selected.status === "FINALIZED"} onClick={() => void reviewAndFinalize()}><FileCheck2 size={17} /> {selected.status === "FINALIZED" ? t("finalized") : t("finalize")}</button>
+            <div className="download-dropdown">
+              <button
+                disabled={busy || selected.status !== "FINALIZED"}
+                aria-haspopup="menu"
+                aria-expanded={downloadsOpen}
+                onClick={() => setDownloadsOpen((open) => !open)}
+              ><Download size={17} /> {t("downloads")} <ChevronDown size={15} /></button>
+              {downloadsOpen && selected.status === "FINALIZED" && <div className="download-menu popover" role="menu" aria-label={t("downloadReport")}>
+                {OUTPUT_FORMATS.map(({ value, label }) => <button key={value} role="menuitem" onClick={() => void downloadOutput(value)}>
+                  <Download size={16} />
+                  <span><strong>{label}</strong><small>{artifactsByFormat.has(value) ? t("readyDownload") : t("generateDownload")}</small></span>
+                </button>)}
+              </div>}
+            </div>
           </>}
         </div>
       </section>
 
-      {!selected && !product && <div className="month-unavailable" role="status"><AlertTriangle size={18} /><span>Fund 3033 is not available for the selected report month. Choose a month within the product's effective dates.</span></div>}
+      {!selected && !product && <div className="month-unavailable" role="status"><AlertTriangle size={18} /><span>{t("productUnavailable")}</span></div>}
 
       {!selected && product && <section className="no-report">
         <span className="empty-number">{reportDate.slice(0, 7)}</span>
-        <div><span className="eyebrow">NEW MONTHLY COMMENTARY</span><h2>No report for this month yet</h2><p>Create the report here; the selected month will be stored as {reportDate}, and no separate date-selection page is required.</p></div>
+        <div><span className="eyebrow">{t("newMonthlyCommentary")}</span><h2>{t("noReport", { language: locale === "zh-Hans" ? t("simplifiedChinese") : t("english") })}</h2><p>{t("noReportHelp", { language: locale === "zh-Hans" ? t("simplifiedChinese") : t("english"), date: reportDate })}</p></div>
       </section>}
 
       {selected && <>
         <section className="status-rail">
           <div>
-            <span className={`status ${selected.status.toLowerCase()}`}>{selected.status}</span>
-            {selected.lane === "TESTING" && <span className="lane-chip" title="Bound to testing data. Artifacts are watermarked and named TESTING-…"><AlertTriangle size={13} aria-hidden="true" /> TESTING DATA</span>}
-            <small>Report lifecycle</small>
+            <span className={`status ${selected.status.toLowerCase()}`}>{statusLabel(selected.status)}</span>
+            {selected.lane === "TESTING" && <span className="lane-chip" title={t("testingHelp")}><AlertTriangle size={13} aria-hidden="true" /> {t("testingData")}</span>}
+            <small>{t("lifecycle")}</small>
           </div>
-          <div><span>Snapshot</span><strong>{selected.active_snapshot_id ? "Bound" : "Missing"}</strong></div>
-          <div><span>Quality</span><strong>{selected.quality_results?.filter((item) => item.status === "PASSED").length ?? 0}/{selected.quality_results?.length ?? 0}</strong></div>
-          <div><span>Artifacts</span><strong>{artifactsByFormat.size}</strong></div>
+          <div><span>{t("snapshot")}</span><strong>{selected.active_snapshot_id ? t("bound") : t("missing")}</strong></div>
+          <div><span>{t("quality")}</span><strong>{selected.quality_results?.filter((item) => item.status === "PASSED").length ?? 0}/{selected.quality_results?.length ?? 0}</strong></div>
+          <div><span>{t("artifacts")}</span><strong>{artifactsByFormat.size}</strong></div>
         </section>
 
-        {review && <section className={`review-result ${review.ready ? "ready" : "blocked"}`}>
-          <div>{review.ready ? <CheckCircle2 size={22} /> : <AlertTriangle size={22} />}<div><strong>{review.ready ? (selected.status === "FINALIZED" ? "Review passed and report finalized" : "Review passed; finalization is in progress") : `${review.blocking.length} blocking checks`}</strong><span>{review.ready ? `${review.warnings.length} unresolved warning${review.warnings.length === 1 ? "" : "s"}.` : review.blocking.map((item) => `${item.check_id}: ${item.fix_hint}`).join(" · ")}</span></div></div>
-        </section>}
-
-        {selected.status === "FINALIZED" && outputsOpen && <section className="artifact-panel" ref={outputPanel} tabIndex={-1}>
-          <header><div><strong>Report outputs</strong><span>Select one or more formats. Existing finalized artifacts are reused.</span></div></header>
-          <div className="output-controls">
-            <div className="format-selector" role="group" aria-label="Output formats">
-              {OUTPUT_FORMATS.map(({ value, label }) => <label key={value}><input type="checkbox" checked={selectedFormats.includes(value)} onChange={() => toggleFormat(value)} /> <span>{label}</span></label>)}
-            </div>
-            <button className="primary" disabled={busy || !selectedFormats.length || !formatsToGenerate.length} onClick={() => void generateSelectedFormats()}><FileOutput size={16} /> {formatsToGenerate.length ? "Generate selected" : "Selected outputs ready"}</button>
-          </div>
-          {renderJobs.length > 0 && <div className="render-jobs">{renderJobs.map((job) => <div key={job.id}><span>{formatLabel(job.format)}</span><strong>{job.status}</strong>{job.error?.message && <small>{job.error.message}</small>}</div>)}</div>}
-          <div className="artifact-list">{OUTPUT_FORMATS.flatMap(({ value, label }) => {
-            const artifact = artifactsByFormat.get(value);
-            return artifact ? [<article key={artifact.id}><div><strong>{label}</strong><span>{new Intl.NumberFormat("en-HK").format(artifact.size_bytes)} bytes · {artifact.checksum.slice(0, 12)}</span></div><button title={`Download ${label}`} onClick={() => run(() => api.downloadArtifact(artifact.id))}><Download size={17} /> Download {label}</button></article>] : [];
-          })}</div>
-        </section>}
+        {downloadingFormat && <div className="download-progress" role="status">{t("preparing", { format: OUTPUT_FORMATS.find((item) => item.value === downloadingFormat)?.label ?? downloadingFormat })}</div>}
 
         <div className="workbench"><ModuleNav active={activeModule} onSelect={(moduleId) => void changeModule(moduleId)} states={moduleStates} /><section className="module-stage"><ReportModule report={selected} active={activeModule} busy={busy} run={run} registerPendingSave={registerPendingSave} /></section></div>
       </>}

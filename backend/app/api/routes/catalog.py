@@ -94,6 +94,7 @@ def list_industry_master(db: Db, as_of_date: date | None = None) -> list[dict]:
         "code": item.code,
         "parent_code": item.parent_code,
         "name_en": item.name_en,
+        "name_zh_hans": item.name_zh_hans,
         "name_zh_hant": item.name_zh_hant,
         "valid_from": item.valid_from,
         "valid_to": item.valid_to,

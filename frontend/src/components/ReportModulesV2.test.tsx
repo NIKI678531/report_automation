@@ -17,6 +17,7 @@ const report: Report = {
   constituent_index_code: "HSTECH",
   benchmark_instrument_code: "HSTECHN",
   benchmark_code: "HSTECH",
+  language_mode: "EN",
   report_date: "2026-06-30",
   status: "EDITING",
   lane: "PRODUCTION",
@@ -71,7 +72,11 @@ const report: Report = {
           },
           top: [{ issuer: "Alpha", return: "0.1" }],
           bottom: [{ issuer: "Alpha", return: "0.1" }],
-          portfolio: [{ label: "Number of holdings", value: "1" }],
+          portfolio: [
+            { metric_code: "AUM", label: "Asset Under Management (HKD)^", raw_value: "67536.55", display_value: "67,536.55 million" },
+            { metric_code: "AVERAGE_DAILY_TURNOVER", label: "Average Daily Turnover (HKD)^^", raw_value: "12882", display_value: "12,882 million" },
+            { metric_code: "NUMBER_OF_HOLDINGS", label: "Number of holdings", raw_value: "1", display_value: "1" },
+          ],
         },
         footnotes: {
           historical: "Historical disclosure from this report.",
@@ -144,8 +149,54 @@ describe("report module data responsibilities", () => {
     expect(screen.queryByRole("button", { name: /Upload file/i })).toBeNull();
     expect(screen.getByRole("img", { name: /Index Sectors Breakdown/i })).toBeTruthy();
     expect(screen.getByText(/Derived by the backend from the active constituent snapshot/i)).toBeTruthy();
+    expect(screen.getByText("Asset Under Management (HKD)^")).toBeTruthy();
+    expect(screen.getByText("67,536.55 million").closest("data")?.getAttribute("value")).toBe("67536.55");
+    expect(screen.getByText("Average Daily Turnover (HKD)^^")).toBeTruthy();
+    expect(screen.getByText("12,882 million")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Refresh analytics" }));
     await waitFor(() => expect(calculate).toHaveBeenCalledWith(report.id));
+  });
+
+  it("keeps the AUM and turnover rows visible for a legacy holding-only document", () => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const legacyReport = structuredClone(report);
+    const content = legacyReport.latest_document?.content as Record<string, unknown>;
+    const sections = content.sections as Record<string, Record<string, unknown>>;
+    sections.analytics.portfolio = [
+      { label: "Number of holdings", value: "30" },
+    ];
+
+    render(<ReportModule report={legacyReport} active="analytics" busy={false} run={run} />);
+
+    expect(screen.getByText("Asset Under Management (HKD)^")).toBeTruthy();
+    expect(screen.getByText("Average Daily Turnover (HKD)^^")).toBeTruthy();
+    expect(screen.getAllByText("N/A")).toHaveLength(2);
+    expect(screen.getByText("Number of holdings").nextElementSibling?.textContent).toBe("30");
+  });
+
+  it.each([
+    { reportDate: "2024-02-29", monthName: "February", aum: "51,234.10 million", turnover: "8,765 million" },
+    { reportDate: "2026-08-31", monthName: "August", aum: "72,345.67 million", turnover: "13,210 million" },
+    { reportDate: "2030-12-31", monthName: "December", aum: "88,000.00 million", turnover: "14,500 million" },
+  ])("renders the selected $monthName report's own Portfolio Analysis values", ({ reportDate, monthName, aum, turnover }) => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const monthlyReport = structuredClone(report);
+    monthlyReport.id = `report-${reportDate}`;
+    monthlyReport.report_date = reportDate;
+    const content = monthlyReport.latest_document?.content as Record<string, unknown>;
+    content.month_name = monthName;
+    const sections = content.sections as Record<string, Record<string, unknown>>;
+    sections.analytics.portfolio = [
+      { metric_code: "AUM", label: "Asset Under Management (HKD)^", raw_value: aum.replaceAll(",", "").split(" ")[0], display_value: aum },
+      { metric_code: "AVERAGE_DAILY_TURNOVER", label: "Average Daily Turnover (HKD)^^", raw_value: turnover.replaceAll(",", "").split(" ")[0], display_value: turnover },
+      { metric_code: "NUMBER_OF_HOLDINGS", label: "Number of holdings", raw_value: "30", display_value: "30" },
+    ];
+
+    render(<ReportModule report={monthlyReport} active="analytics" busy={false} run={run} />);
+
+    expect(screen.getByText(aum)).toBeTruthy();
+    expect(screen.getByText(turnover)).toBeTruthy();
+    expect(screen.getByText(`Performers in ${monthName}`)).toBeTruthy();
   });
 
   it("uses the selected month as the summary title and saves block alignment without a duplicate title field", async () => {

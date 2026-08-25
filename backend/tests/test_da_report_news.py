@@ -11,6 +11,7 @@ import pytest
 from app.integrations.da_report import (
     DaReportProviderError,
     _materialize_snapshot,
+    _sqlite_contains_company_alias,
     fetch_news,
     list_company_news_catalog,
 )
@@ -118,6 +119,11 @@ def test_da_report_returns_only_unique_title_matches_for_current_constituents(tm
     assert items[0]["metadata_json"]["match_method"] == "TITLE_ALIAS_EXACT"
 
 
+def test_company_alias_matching_keeps_short_names_on_token_boundaries():
+    assert _sqlite_contains_company_alias("NIO launches a new model", "NIO") == 1
+    assert _sqlite_contains_company_alias("A senior executive comments", "NIO") == 0
+
+
 def test_company_news_catalog_lists_all_regional_corporate_items_without_constituents(tmp_path, monkeypatch):
     database = tmp_path / "da-report.sqlite"
     build_da_snapshot(database)
@@ -135,6 +141,7 @@ def test_company_news_catalog_lists_all_regional_corporate_items_without_constit
     ]
     assert page["total"] == 4
     assert page["has_more"] is False
+    assert page["facets"]["companies"] == []
     assert page["facets"]["sentiments"] == {"neutral": 2, "bear": 1, "bull": 1}
     assert page["items"][-1]["published_at_source"] == "fetched_at"
 
@@ -181,6 +188,47 @@ def test_company_news_catalog_combines_source_sentiment_importance_and_date_filt
     assert page["total"] == 1
 
 
+def test_company_news_catalog_filters_by_constituent_title_alias_and_composes_with_facets(tmp_path, monkeypatch):
+    database = tmp_path / "da-report.sqlite"
+    build_da_snapshot(database)
+    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
+    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
+    constituents = [
+        {"security_code": "700", "ticker": "0700.HK", "name_en": "TENCENT", "name_zh_hans": None, "name_zh_hant": "騰訊控股"},
+        {"security_code": "981", "ticker": "0981.HK", "name_en": "SMIC", "name_zh_hans": None, "name_zh_hant": "中芯國際"},
+    ]
+
+    page = asyncio.run(list_company_news_catalog(
+        company="700",
+        constituents=constituents,
+        source="archive",
+        sentiment="bear",
+        importance="HIGH",
+        limit=20,
+    ))
+
+    assert [item["external_id"] for item in page["items"]] == ["6"]
+    assert page["total"] == 1
+    assert page["facets"]["companies"] == [
+        {"security_code": "700", "ticker": "0700.HK", "name_en": "TENCENT", "name_zh_hans": None, "name_zh_hant": "騰訊控股"},
+        {"security_code": "981", "ticker": "0981.HK", "name_en": "SMIC", "name_zh_hans": None, "name_zh_hant": "中芯國際"},
+    ]
+
+    first = asyncio.run(list_company_news_catalog(company="700", constituents=constituents, limit=2))
+    assert first["next_cursor"]
+    with pytest.raises(DaReportProviderError) as mismatched_cursor:
+        asyncio.run(list_company_news_catalog(
+            company="981",
+            constituents=constituents,
+            cursor=first["next_cursor"],
+        ))
+    assert mismatched_cursor.value.code == "DA_REPORT_CURSOR_INVALID"
+
+    with pytest.raises(DaReportProviderError) as raised:
+        asyncio.run(list_company_news_catalog(company="999999", constituents=constituents))
+    assert raised.value.code == "DA_REPORT_COMPANY_INVALID"
+
+
 def test_report_company_news_catalog_does_not_require_an_active_snapshot(client, tmp_path, monkeypatch):
     database = tmp_path / "da-report.sqlite"
     build_da_snapshot(database)
@@ -192,6 +240,7 @@ def test_report_company_news_catalog_does_not_require_an_active_snapshot(client,
 
     assert first.status_code == 200, first.text
     assert [item["external_id"] for item in first.json()["items"]] == ["5", "2"]
+    assert first.json()["facets"]["companies"] == []
     assert first.json()["facets"]["date_min"] == "2026-05-01"
     cursor = first.json()["next_cursor"]
     second = client.get(
@@ -200,6 +249,43 @@ def test_report_company_news_catalog_does_not_require_an_active_snapshot(client,
     )
     assert second.status_code == 200, second.text
     assert [item["external_id"] for item in second.json()["items"]] == ["1", "6"]
+
+
+def test_report_company_news_catalog_exposes_and_filters_current_constituents(client, tmp_path, monkeypatch):
+    database = tmp_path / "da-report.sqlite"
+    build_da_snapshot(database)
+    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
+    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
+    report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+    snapshot = client.post(
+        f"/api/v1/reports/{report['id']}/snapshots",
+        json={"source_policy": "GOLDEN_FIXTURE"},
+    )
+    assert snapshot.status_code == 201, snapshot.text
+
+    filtered = client.get(
+        f"/api/v1/reports/{report['id']}/news/catalog",
+        params={"company": "700", "limit": 20},
+    )
+
+    assert filtered.status_code == 200, filtered.text
+    assert [item["external_id"] for item in filtered.json()["items"]] == ["5", "1", "6"]
+    companies = filtered.json()["facets"]["companies"]
+    assert len(companies) == 30
+    assert next(item for item in companies if item["security_code"] == "700") == {
+        "security_code": "700",
+        "ticker": "0700.HK",
+        "name_en": "TENCENT",
+        "name_zh_hans": None,
+        "name_zh_hant": "騰訊控股",
+    }
+
+    invalid = client.get(
+        f"/api/v1/reports/{report['id']}/news/catalog",
+        params={"company": "NOT-A-CONSTITUENT"},
+    )
+    assert invalid.status_code == 422, invalid.text
+    assert invalid.json()["error_code"] == "DA_REPORT_COMPANY_INVALID"
 
 
 def test_da_catalog_selection_materializes_lineage_and_warns_after_report_date(client, tmp_path, monkeypatch):

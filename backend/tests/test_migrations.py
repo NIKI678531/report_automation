@@ -18,6 +18,18 @@ def test_initial_migration_upgrade_and_downgrade(tmp_path):
         "news_fetch_runs", "report_news_selections",
     }.issubset(tables)
     assert "batch_id" in {column["name"] for column in inspect(engine).get_columns("data_imports")}
+    assert {"language_mode", "translation_source_report_id"}.issubset(
+        {column["name"] for column in inspect(engine).get_columns("reports")}
+    )
+    assert "source_snapshot_id" in {
+        column["name"] for column in inspect(engine).get_columns("data_snapshots")
+    }
+    assert "name_zh_hans" in {
+        column["name"] for column in inspect(engine).get_columns("product_catalog")
+    }
+    assert "name_zh_hans" in {
+        column["name"] for column in inspect(engine).get_columns("industry_master")
+    }
     with engine.connect() as connection:
         products = connection.execute(text("SELECT product_code, ticker, name_en FROM product_catalog ORDER BY display_order")).all()
         bindings = connection.execute(text("SELECT fund_total_return_instrument_code, fund_kpi_product_code, trading_calendar_code FROM product_catalog WHERE product_code = '3033'")).one()

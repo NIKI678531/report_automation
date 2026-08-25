@@ -66,6 +66,7 @@ class ProductCatalog(Base):
     product_code: Mapped[str] = mapped_column(String(32), index=True)
     ticker: Mapped[str] = mapped_column(String(32), index=True)
     name_en: Mapped[str] = mapped_column(String(255))
+    name_zh_hans: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name_zh_hant: Mapped[str | None] = mapped_column(String(255), nullable=True)
     constituent_index_code: Mapped[str] = mapped_column(String(32))
     constituent_index_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -94,6 +95,12 @@ class ProductCatalog(Base):
 
 class Report(Base):
     __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "translation_source_report_id", "language_mode",
+            name="uq_report_language_variant",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     product_code: Mapped[str] = mapped_column(String(32), index=True)
     product_name: Mapped[str] = mapped_column(String(255))
@@ -110,6 +117,11 @@ class Report(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     active_snapshot_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     parent_report_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # The report whose immutable facts were copied to create this independent language draft.
+    # Kept separate from parent_report_id, which models document revisions.
+    translation_source_report_id: Mapped[str | None] = mapped_column(
+        ForeignKey("reports.id"), nullable=True, index=True
+    )
     revision_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     finalized_document_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     template_version: Mapped[str] = mapped_column(String(32), default="3033-v1")
@@ -122,6 +134,9 @@ class DataSnapshot(Base):
     __tablename__ = "data_snapshots"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     report_id: Mapped[str] = mapped_column(ForeignKey("reports.id"), index=True)
+    source_snapshot_id: Mapped[str | None] = mapped_column(
+        ForeignKey("data_snapshots.id"), nullable=True, index=True
+    )
     as_of_date: Mapped[date] = mapped_column(Date)
     # No default: every construction site must state where the data came from. A default here once
     # made GOLDEN_FIXTURE the silent fallback for anything that forgot to say.
@@ -165,6 +180,7 @@ class IndustryMasterRecord(Base):
     code: Mapped[str] = mapped_column(String(6))
     parent_code: Mapped[str | None] = mapped_column(String(4), nullable=True)
     name_en: Mapped[str] = mapped_column(String(255))
+    name_zh_hans: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name_zh_hant: Mapped[str | None] = mapped_column(String(255), nullable=True)
     valid_from: Mapped[date] = mapped_column(Date)
     valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)

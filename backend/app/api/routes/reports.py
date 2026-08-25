@@ -11,11 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain import service
-from app.domain.models import DataSnapshot, RenderArtifact, Report
+from app.domain.models import DataSnapshot, RenderArtifact, Report, ReportStatus
 from app.domain.schemas import (
     AiDraftRequest,
     DocumentUpdate,
     FinalizeRequest,
+    LanguageVariantCreate,
     ReportCreate,
     ReportDetail,
     ReportRead,
@@ -23,6 +24,7 @@ from app.domain.schemas import (
     RevisionCreate,
 )
 from app.rendering.html import render_html
+from app.rendering.artifacts import renderer_version_for
 from .deps import Db, RequestId
 
 router = APIRouter()
@@ -30,12 +32,38 @@ router = APIRouter()
 
 @router.get("/reports", response_model=list[ReportRead])
 def list_reports(db: Db) -> list[Report]:
-    return list(db.scalars(select(Report).order_by(Report.created_at.desc())))
+    return list(db.scalars(
+        select(Report)
+        .where(Report.status != ReportStatus.ARCHIVED)
+        .order_by(Report.created_at.desc())
+    ))
 
 
 @router.post("/reports", response_model=ReportRead, status_code=status.HTTP_201_CREATED)
 def create_report(command: ReportCreate, db: Db, x_request_id: RequestId) -> Report:
     return service.create_report(db, command, x_request_id)
+
+
+@router.post(
+    "/reports/{source_report_id}/language-variants",
+    response_model=ReportRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_language_variant(
+    source_report_id: str,
+    command: LanguageVariantCreate,
+    db: Db,
+    x_request_id: RequestId,
+) -> Report:
+    return service.create_language_variant(
+        db, service.get_report(db, source_report_id), command, x_request_id
+    )
+
+
+@router.delete("/reports/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_report(report_id: str, version: int, db: Db, x_request_id: RequestId) -> Response:
+    service.delete_report(db, service.get_report(db, report_id), version, x_request_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def detail(db: Session, report: Report) -> ReportDetail:
@@ -57,6 +85,14 @@ def detail(db: Session, report: Report) -> ReportDetail:
             "size_bytes": item.size_bytes,
             "checksum": item.checksum,
             "content_manifest_checksum": item.content_manifest.get("checksum"),
+            "document_version": item.document_version,
+            "renderer_version": item.renderer_version,
+            "language_mode": item.content_manifest.get("language_mode", report.language_mode),
+            "is_current": (
+                item.document_version == document.version
+                and item.content_manifest.get("language_mode", report.language_mode) == report.language_mode
+                and item.renderer_version == renderer_version_for(item.format)
+            ),
         } for item in artifacts],
     )
 
@@ -81,7 +117,6 @@ def generate_in_review(report_id: str, command: AiDraftRequest, db: Db, x_reques
 def review(report_id: str, db: Db) -> ReviewRead:
     report = service.get_report(db, report_id); document = service.latest_document(db, report_id)
     checks = service.release_gate_checks(db, report, document)
-    checks.append({"check_id": "LANGUAGE", "severity": "WARNING", "status": "PASSED" if report.language_mode == "EN" else "WARNING", "fix_hint": "Complete every configured language block."})
     blocking = [item for item in checks if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
     warnings = [item for item in checks if item["severity"] == "WARNING" and item["status"] != "PASSED"]
     return ReviewRead(ready=not blocking, blocking=blocking, warnings=warnings, checks=checks)
@@ -105,4 +140,7 @@ def finalize(report_id: str, command: FinalizeRequest, db: Db, x_request_id: Req
 def preview(report_id: str, db: Db) -> Response:
     report = service.get_report(db, report_id)
     document = service.latest_document(db, report_id)
-    return Response(render_html(report, document.content, preview=True), media_type="text/html")
+    return Response(
+        render_html(report, document.content, preview=True, layout_mode="paged"),
+        media_type="text/html",
+    )

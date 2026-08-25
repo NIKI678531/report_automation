@@ -49,6 +49,7 @@ async def report_company_news_catalog(
     report_id: str,
     db: Db,
     query: str | None = None,
+    company: str | None = None,
     source: str | None = None,
     sentiment: str | None = None,
     importance: str | None = None,
@@ -58,10 +59,18 @@ async def report_company_news_catalog(
     cursor: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
 ) -> dict:
-    service.get_report(db, report_id)
+    report = service.get_report(db, report_id)
+    snapshot = service.resolve_news_constituent_snapshot(db, report)
+    constituents = (
+        list((snapshot.payload or {}).get("constituents", []))
+        if snapshot is not None and snapshot.status.value == "VALID"
+        else []
+    )
     try:
         return await list_company_news_catalog(
             query=query,
+            company=company,
+            constituents=constituents,
             source=source,
             sentiment=sentiment,
             importance=importance,

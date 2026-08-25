@@ -52,6 +52,7 @@ def parse_product_catalog_csv(data: bytes) -> list[dict]:
                 "product_code": product_code,
                 "ticker": required(raw, "ticker").upper(),
                 "name_en": required(raw, "name_en"),
+                "name_zh_hans": optional(raw, "name_zh_hans") or None,
                 "name_zh_hant": optional(raw, "name_zh_hant") or None,
                 "constituent_index_code": required(raw, "constituent_index_code").upper(),
                 "constituent_index_name": optional(raw, "constituent_index_name") or None,

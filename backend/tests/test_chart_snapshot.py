@@ -186,6 +186,9 @@ def test_every_output_format_reads_the_same_display_value(client, tmp_path):
     html = artifacts["html"].decode("utf-8")
     for value in expected:
         assert value in html
+    assert 'data-metric-code="AUM"' in html
+    assert "67,536.55 million" in html
+    assert "12,882 million" in html
 
     docx_path = tmp_path / "actual.docx"
     docx_path.write_bytes(artifacts["docx"])
@@ -197,4 +200,8 @@ def test_every_output_format_reads_the_same_display_value(client, tmp_path):
     )
     for value in expected:
         assert value in docx_text
+    assert "Asset Under Management (HKD)^" in docx_text
+    assert "67,536.55 million" in docx_text
+    assert "Average Daily Turnover (HKD)^^" in docx_text
+    assert "12,882 million" in docx_text
     assert "47.75%" not in docx_text and "49.27%" not in docx_text

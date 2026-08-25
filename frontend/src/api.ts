@@ -1,11 +1,13 @@
 export type ReportStatus = "DRAFT" | "DATA_READY" | "EDITING" | "QA_BLOCKED" | "READY_TO_FINALIZE" | "REVIEW" | "FINALIZED" | "ARCHIVED";
 export type OutputFormat = "pdf" | "html" | "docx";
+export type ReportLanguage = "EN" | "ZH_HANS" | "ZH_HANT" | "BILINGUAL";
 
 export interface Product {
   id: string;
   product_code: string;
   ticker: string;
   name_en: string;
+  name_zh_hans?: string | null;
   name_zh_hant: string | null;
   constituent_index_code: string;
   constituent_index_name: string | null;
@@ -65,15 +67,21 @@ export interface CompanyNewsCatalogItem {
   source_code: string;
   source_name: string;
   source_name_zh: string | null;
+  source_name_zh_hans?: string | null;
+  source_name_zh_hans_source?: "SOURCE_ZH_HANS" | "OPENCC_T2S" | "MISSING";
   published_at: string;
   published_at_source: "published_at" | "fetched_at";
   fetched_at: string;
   title: string;
   title_en: string | null;
   title_zh: string | null;
+  title_zh_hans?: string | null;
+  title_zh_hans_source?: "SOURCE_ZH_HANS" | "OPENCC_T2S" | "MISSING";
   summary: string;
   summary_en: string | null;
   summary_zh: string | null;
+  summary_zh_hans?: string | null;
+  summary_zh_hans_source?: "SOURCE_ZH_HANS" | "OPENCC_T2S" | "MISSING";
   category: "Corporate";
   region: string | null;
   sentiment: string | null;
@@ -87,7 +95,8 @@ export interface CompanyNewsCatalogPage {
   has_more: boolean;
   next_cursor: string | null;
   facets: {
-    sources: Array<{ value: string; label: string; label_zh: string | null; count: number }>;
+    companies: Array<{ security_code: string; ticker: string; name_en: string; name_zh_hans?: string | null; name_zh_hant: string | null }>;
+    sources: Array<{ value: string; label: string; label_zh: string | null; label_zh_hans?: string | null; count: number }>;
     sentiments: Record<string, number>;
     importance: Record<string, number>;
     date_min: string | null;
@@ -97,6 +106,7 @@ export interface CompanyNewsCatalogPage {
 
 export interface CompanyNewsCatalogQuery {
   query?: string;
+  company?: string;
   source?: string;
   sentiment?: string;
   importance?: "LOW" | "MEDIUM" | "HIGH";
@@ -171,6 +181,7 @@ export interface ImportBatch {
     rows: Array<{
       security_code: string;
       name_en: string | null;
+      name_zh_hans?: string | null;
       name_zh_hant: string | null;
       close_price: string | number | null;
       currency: string | null;
@@ -202,16 +213,19 @@ export interface Report {
   benchmark_instrument_code: string;
   benchmark_code: string;
   report_date: string;
+  language_mode: ReportLanguage;
   /** Whether this report's data may be distributed. TESTING artifacts are watermarked. */
   lane: "PRODUCTION" | "TESTING";
   status: ReportStatus;
   revision: number;
   version: number;
   active_snapshot_id: string | null;
+  parent_report_id?: string | null;
+  translation_source_report_id?: string | null;
   finalized_document_version: number | null;
   latest_document?: { version: number; checksum: string; content: Record<string, unknown> } | null;
   quality_results?: Array<{ check_id: string; status: string; severity: string; fix_hint: string }>;
-  artifacts?: Array<{ id: string; format: OutputFormat; size_bytes: number; checksum: string }>;
+  artifacts?: Array<{ id: string; format: OutputFormat; size_bytes: number; checksum: string; document_version?: number; renderer_version?: string; language_mode?: ReportLanguage; is_current?: boolean }>;
   created_at?: string;
   updated_at?: string;
 }
@@ -241,6 +255,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { ...(!isForm ? { "Content-Type": "application/json" } : {}), "X-Request-ID": crypto.randomUUID(), ...init?.headers },
   });
   if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`);
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -248,7 +263,9 @@ export const api = {
   listProducts: (asOfDate: string) => request<Product[]>(`/products?as_of_date=${encodeURIComponent(asOfDate)}`),
   listReports: () => request<Report[]>("/reports"),
   getReport: (id: string) => request<Report>(`/reports/${id}`),
-  createReport: (report_date: string, product_code = "3033") => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date }) }),
+  createReport: (report_date: string, product_code = "3033", language_mode?: Extract<ReportLanguage, "EN" | "ZH_HANS">) => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date, ...(language_mode ? { language_mode } : {}) }) }),
+  createLanguageVariant: (sourceReportId: string, language_mode: Extract<ReportLanguage, "EN" | "ZH_HANS">, source_document_version: number) => request<Report>(`/reports/${sourceReportId}/language-variants`, { method: "POST", body: JSON.stringify({ language_mode, source_document_version }) }),
+  deleteReport: (id: string, version: number) => request<void>(`/reports/${id}?version=${version}`, { method: "DELETE" }),
   refreshAutomaticData: (id: string, version: number) => request<{ changed: boolean; snapshot?: unknown }>(`/reports/${id}/automatic-data/refresh`, { method: "POST", body: JSON.stringify({ version }) }),
   calculate: (id: string) => request<CalculationResult>(`/reports/${id}/calculations`, { method: "POST", body: JSON.stringify({}) }),
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
@@ -271,6 +288,7 @@ export const api = {
   listCompanyNewsCatalog: (id: string, filters: CompanyNewsCatalogQuery = {}) => {
     const parameters = new URLSearchParams();
     if (filters.query) parameters.set("query", filters.query);
+    if (filters.company) parameters.set("company", filters.company);
     if (filters.source) parameters.set("source", filters.source);
     if (filters.sentiment) parameters.set("sentiment", filters.sentiment);
     if (filters.importance) parameters.set("importance", filters.importance);

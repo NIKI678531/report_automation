@@ -46,6 +46,7 @@ _CLEARABLE_DATASETS = frozenset({"constituent_performance", "index_constituents"
 
 def empty_payload(report_date: date) -> dict:
     return {
+        "report_date": report_date.isoformat(),
         "as_of_date": report_date.isoformat(),
         "constituents": [],
         "historical_performance": {"rows": []},
@@ -204,6 +205,35 @@ def has_approved_constituent_bundle(payload: dict) -> bool:
         and identity.get("source_type") in approved
         and returns.get("source_type") in approved
     )
+
+
+def has_final_analytics_inputs(payload: dict) -> bool:
+    """Return whether module 05 can be calculated before the full report is complete.
+
+    Top 10, the HSICS breakdown, and the performer rankings depend only on the approved
+    constituent identity/return bundle and its report-date-effective industry mapping. Fund KPI
+    and trading-calendar gaps may keep the overall snapshot pending, but must not blank outputs
+    whose own dependencies have already passed their blocking checks.
+    """
+    if not has_approved_constituent_bundle(payload) or not dataset_present(payload, "industry_master"):
+        return False
+    checks = {
+        item["check_id"]: item["status"]
+        for item in snapshot_checks(payload)
+        if item["check_id"] in {"QC-001", "QC-002", "QC-003", "QC-004"}
+    }
+    return all(checks.get(check_id) == "PASSED" for check_id in ("QC-001", "QC-002", "QC-003", "QC-004"))
+
+
+def _has_bound_final_analytics(db: Session, report: Report, snapshot: DataSnapshot) -> bool:
+    """Return whether the current document already exposes analytics for this snapshot."""
+    current = latest_document(db, report.id)
+    if current.snapshot_id != snapshot.id:
+        return False
+    sections = (current.content or {}).get("sections") or {}
+    analytics = sections.get("analytics") or {}
+    chart = analytics.get("sector_chart") or {}
+    return bool(analytics.get("top10")) and bool(chart.get("series"))
 
 
 def enrich_constituent_returns(payload: dict, report_date: date) -> list[dict]:
@@ -404,6 +434,7 @@ def fixture_payload(product_code: str, report_date) -> dict:
     if not path.exists():
         raise HTTPException(status_code=503, detail={"error_code": "FIXTURE_MISSING", "message": f"Golden fixture is missing: {path}"})
     payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.setdefault("report_date", report_date.isoformat())
     # Transcribed prose, kept beside the transcribed numbers. Merged only here, on the one code
     # path that binds on the TESTING lane, so no production report can be handed writing it did
     # not do. `bind_snapshot` refuses it on any other lane and labels it where it lands.
@@ -422,6 +453,7 @@ def _stage_auto_snapshot(
     deduplicate: bool = False,
 ) -> DataSnapshot:
     payload = empty_payload(report.report_date)
+    payload["product_currency"] = product.currency
     active_snapshot = db.get(DataSnapshot, report.active_snapshot_id) if report.active_snapshot_id else None
     active_datasets = ((active_snapshot.payload or {}).get("datasets") or {}) if active_snapshot else {}
     upload_lineage = any(
@@ -550,20 +582,41 @@ def _stage_auto_snapshot(
         else "DA_REPORT_PLUS_UPLOAD" if has_upload
         else "DA_REPORT_AUTO"
     )
+    dataset_metadata = payload.get("datasets") or {}
+    mapping_versions: list[str] = []
+    historical_metadata = dataset_metadata.get("historical_performance")
+    if (
+        isinstance(historical_metadata, dict)
+        and historical_metadata.get("source_type") in {"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"}
+    ):
+        mapping_versions.append("datawarehouse-performance-v1")
+    if any(
+        isinstance(metadata, dict) and metadata.get("source_type") == "DA_REPORT_SQLITE"
+        for metadata in dataset_metadata.values()
+    ):
+        mapping_versions.append("da-report-monthly-v1")
+    fund_kpi_metadata = dataset_metadata.get("fund_kpi_daily")
+    if (
+        isinstance(fund_kpi_metadata, dict)
+        and fund_kpi_metadata.get("source_type") in {"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"}
+    ):
+        mapping_versions.append(str(fund_kpi_metadata.get("mapping_version") or "cdb-fund-kpi-v1"))
+    constituent_metadata = dataset_metadata.get("index_constituents")
+    if (
+        isinstance(constituent_metadata, dict)
+        and constituent_metadata.get("source_type") in {"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"}
+    ):
+        mapping_versions.append("cdb-index-constituents-v1")
+    if has_fmp:
+        mapping_versions.append("fmp-hk-ticker-v1")
+    if not mapping_versions:
+        mapping_versions.append("da-report-monthly-v1")
     snapshot = DataSnapshot(
         report_id=report.id,
         as_of_date=report.report_date,
         source_policy=source_policy,
         lane=Lane.PRODUCTION.value,
-        mapping_version=(
-            "datawarehouse-performance-v1+cdb-index-constituents-v1+da-report-monthly-v1+fmp-hk-ticker-v1"
-            if has_datawarehouse and has_fmp
-            else "datawarehouse-performance-v1+cdb-index-constituents-v1+da-report-monthly-v1"
-            if has_datawarehouse
-            else "da-report-monthly-v1+fmp-hk-ticker-v1"
-            if has_fmp
-            else "da-report-monthly-v1"
-        ),
+        mapping_version="+".join(mapping_versions),
         status=SnapshotStatus.VALID if valid else SnapshotStatus.PENDING,
         checksum=payload_checksum,
         payload=payload,
@@ -621,7 +674,11 @@ def refresh_automatic_data(
     changed = snapshot.id != before_id
     db.commit()
     db.refresh(snapshot)
-    if changed and snapshot.status == SnapshotStatus.VALID:
+    calculation_ready = (
+        snapshot.status == SnapshotStatus.VALID
+        or has_final_analytics_inputs(snapshot.payload or {})
+    )
+    if calculation_ready and (changed or not _has_bound_final_analytics(db, report, snapshot)):
         run_calculation(db, report, request_id)
         db.refresh(snapshot)
     return snapshot, changed
@@ -642,7 +699,11 @@ def create_snapshot(db: Session, report: Report, source_policy: str, mapping_ver
         changed = snapshot.id != before_id
         db.commit()
         db.refresh(snapshot)
-        if changed and snapshot.status == SnapshotStatus.VALID:
+        calculation_ready = (
+            snapshot.status == SnapshotStatus.VALID
+            or has_final_analytics_inputs(snapshot.payload or {})
+        )
+        if calculation_ready and (changed or not _has_bound_final_analytics(db, report, snapshot)):
             run_calculation(db, report, request_id)
             db.refresh(snapshot)
         return snapshot
@@ -664,6 +725,7 @@ def create_snapshot(db: Session, report: Report, source_policy: str, mapping_ver
         })
     product = resolve_product(db, report.product_code, report.report_date)
     payload = fixture_payload(report.product_code, report.report_date)
+    payload["product_currency"] = product.currency
     results = snapshot_checks(payload, product.expected_constituent_count)
     valid = all(item["status"] == "PASSED" for item in results if item["severity"] == "BLOCKING")
     snapshot = DataSnapshot(
@@ -731,6 +793,8 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         base = json.loads(json.dumps(active_snapshot.payload))
     else:
         base = empty_payload(report.report_date)
+    base.setdefault("report_date", report.report_date.isoformat())
+    base["product_currency"] = product.currency
     spec = ingestion.get_spec(data_import.dataset_type)
     if spec is None:
         raise HTTPException(status_code=409, detail={
@@ -869,7 +933,7 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         "diff": data_import.diff,
         "snapshot_status": status.value, "missing_slots": missing, "findings": len(findings),
     })
-    if status == SnapshotStatus.VALID:
+    if status == SnapshotStatus.VALID or has_final_analytics_inputs(base):
         try:
             run_calculation(db, report, request_id)
         except Exception:

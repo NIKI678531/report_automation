@@ -6,8 +6,16 @@ module it is bound to (QC-007). Nothing here is transcribed prose.
 
 from decimal import Decimal
 
+from .fund_kpis import trading_days, turnover_rows
+from ..localization import is_zh_hans
 
-def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[str, str]:
+
+def build_lineage_footnotes(
+    payload: dict,
+    metrics: dict | None = None,
+    *,
+    language_mode: str = "EN",
+) -> dict[str, str]:
     footnotes = dict(payload.get("footnotes") or {})
     as_of_date = str(payload.get("as_of_date") or "")
     series = payload.get("total_return_series", [])
@@ -18,8 +26,13 @@ def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[
         for field, label in (("return_1m", "1M"), ("return_3m", "3M"), ("return_6m", "6M"), ("return_ytd", "YTD")):
             period = periods.get(field, {})
             if period.get("period_start") and period.get("period_end"):
-                period_labels.append(f"{label} {period['period_start']} to {period['period_end']}")
-        footnotes["historical"] = f"Source: {sources}; official Total Return series. {'; '.join(period_labels)}."
+                separator = "至" if is_zh_hans(language_mode) else "to"
+                period_labels.append(f"{label} {period['period_start']} {separator} {period['period_end']}")
+        footnotes["historical"] = (
+            f"来源：{sources}；官方总回报序列。{'; '.join(period_labels)}。"
+            if is_zh_hans(language_mode)
+            else f"Source: {sources}; official Total Return series. {'; '.join(period_labels)}."
+        )
     elif (payload.get("historical_performance") or {}).get("rows"):
         history = payload["historical_performance"]
         mapping = history.get("source_mapping") or {}
@@ -33,12 +46,20 @@ def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[
                 ("return_ytd", "returns_ytd", "YTD"),
             )
         )
-        footnotes["historical"] = (
-            f"Source: {history.get('source_name', 'CSOP Data Warehouse')}; "
-            f"{mapping.get('tradar_code', '')} / {mapping.get('class_id', '')} and "
-            f"{mapping.get('benchmark_index_ticker', '')}; as of {history.get('effective_as_of', as_of_date)}. "
-            f"Source-supplied decimal period returns ({field_text}) are displayed as percentages."
-        )
+        if is_zh_hans(language_mode):
+            footnotes["historical"] = (
+                f"来源：{history.get('source_name', 'CSOP Data Warehouse')}；"
+                f"{mapping.get('tradar_code', '')} / {mapping.get('class_id', '')} 及 "
+                f"{mapping.get('benchmark_index_ticker', '')}；截至 {history.get('effective_as_of', as_of_date)}。"
+                f"来源提供的小数形式期间回报（{field_text}）以百分比显示。"
+            )
+        else:
+            footnotes["historical"] = (
+                f"Source: {history.get('source_name', 'CSOP Data Warehouse')}; "
+                f"{mapping.get('tradar_code', '')} / {mapping.get('class_id', '')} and "
+                f"{mapping.get('benchmark_index_ticker', '')}; as of {history.get('effective_as_of', as_of_date)}. "
+                f"Source-supplied decimal period returns ({field_text}) are displayed as percentages."
+            )
 
     datasets = payload.get("datasets", {})
     constituent_sources = []
@@ -61,7 +82,7 @@ def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[
         return_periods = payload.get("return_periods") or {}
         starts = return_periods.get("starts") or {}
         period_text = ", ".join(
-            f"{label} {starts.get(field)} to {return_periods.get('end')}"
+            f"{label} {starts.get(field)} {'至' if is_zh_hans(language_mode) else 'to'} {return_periods.get('end')}"
             for field, label in (("return_1m", "1M"), ("return_3m", "3M"), ("return_6m", "6M"), ("return_ytd", "YTD"))
             if starts.get(field) and return_periods.get("end")
         )
@@ -69,12 +90,20 @@ def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[
         taxonomy_text = (
             f" HSICS {taxonomy.get('version')}." if taxonomy.get("version") else ""
         )
-        footnotes["constituents"] = (
-            f"Constituent source: {', '.join(sorted(set(constituent_sources)))}; as of {as_of_date}."
-            f" Return source: {return_source or return_periods.get('source') or 'not recorded'}."
-            f"{f' {period_text}.' if period_text else ''}{taxonomy_text}"
-            " Prices, weights and returns retain their source units and periods."
-        )
+        if is_zh_hans(language_mode):
+            footnotes["constituents"] = (
+                f"成份股来源：{', '.join(sorted(set(constituent_sources)))}；截至 {as_of_date}。"
+                f" 回报来源：{return_source or return_periods.get('source') or '未记录'}。"
+                f"{f' {period_text}。' if period_text else ''}{taxonomy_text}"
+                " 价格、权重及回报沿用来源单位与期间。"
+            )
+        else:
+            footnotes["constituents"] = (
+                f"Constituent source: {', '.join(sorted(set(constituent_sources)))}; as of {as_of_date}."
+                f" Return source: {return_source or return_periods.get('source') or 'not recorded'}."
+                f"{f' {period_text}.' if period_text else ''}{taxonomy_text}"
+                " Prices, weights and returns retain their source units and periods."
+            )
 
     fund_kpis = payload.get("fund_kpis", [])
     if fund_kpis:
@@ -84,10 +113,30 @@ def build_lineage_footnotes(payload: dict, metrics: dict | None = None) -> dict[
         expected = metric_values.get("turnover_expected_day_count", 0)
         coverage = metric_values.get("turnover_coverage")
         coverage_text = f" turnover coverage {observed}/{expected} ({Decimal(str(coverage)) * Decimal('100'):.2f}%)" if coverage is not None else ""
+        aum_as_of_date = metric_values.get("aum_as_of_date") or as_of_date
+        observed_turnover_rows = turnover_rows(fund_kpis, trading_days(payload))
+        turnover_as_of_date = max(
+            (str(row.get("metric_date")) for row in observed_turnover_rows),
+            default=None,
+        )
+        is_partial = coverage is not None and Decimal(str(coverage)) < Decimal("1")
+        turnover_date_text = (
+            f" turnover through {turnover_as_of_date};"
+            if turnover_as_of_date and is_partial else ""
+        )
         taxonomy = payload.get("industry_master") or {}
         taxonomy_text = f" Industry aggregation uses HSICS {taxonomy.get('version')}." if taxonomy.get("version") else ""
-        footnotes["analytics"] = (
-            f"Source: {sources}; AUM as of {as_of_date};{coverage_text}."
-            f"{taxonomy_text} Number of holdings counts unique positive-weight securities."
-        )
+        if is_zh_hans(language_mode):
+            zh_turnover_date = f" 成交额截至 {turnover_as_of_date}；" if turnover_as_of_date and is_partial else ""
+            zh_coverage = f" 成交额覆盖 {observed}/{expected}（{Decimal(str(coverage)) * Decimal('100'):.2f}%）" if coverage is not None else ""
+            zh_taxonomy = f" 行业汇总采用 HSICS {taxonomy.get('version')}。" if taxonomy.get("version") else ""
+            footnotes["analytics"] = (
+                f"来源：{sources}；资产管理规模截至 {aum_as_of_date}；{zh_turnover_date}{zh_coverage}。"
+                f"{zh_taxonomy} 持仓数量按权重大于零的唯一证券计算。"
+            )
+        else:
+            footnotes["analytics"] = (
+                f"Source: {sources}; AUM as of {aum_as_of_date};{turnover_date_text}{coverage_text}."
+                f"{taxonomy_text} Number of holdings counts unique positive-weight securities."
+            )
     return footnotes

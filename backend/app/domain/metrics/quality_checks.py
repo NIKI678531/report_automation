@@ -9,7 +9,7 @@ reproducible. Callers must not invent a second shape.
 from decimal import Decimal
 
 from ..validation import BLOCKING, FAILED, PASSED, WARNING
-from .fund_kpis import aum_rows, trading_days, turnover_days
+from .fund_kpis import amount_in_millions, aum_rows, common_currency, trading_days, turnover_days, turnover_rows
 
 # Checks that are meaningful on a freshly parsed *single* dataset, before it is composed into a
 # snapshot. Anything requiring cross-dataset context is deliberately absent: QC-003 needs the
@@ -128,32 +128,80 @@ def snapshot_checks(payload: dict, expected_constituent_count: int | None = None
 
     fund_kpis = payload.get("fund_kpis", [])
     if fund_kpis:
-        as_of_date = str(payload.get("as_of_date") or "")
-        aum = aum_rows(fund_kpis, as_of_date)
-        aum_valid = len(aum) == 1 and bool(aum[0].get("currency")) and bool(aum[0].get("unit"))
+        report_date = str(payload.get("report_date") or payload.get("as_of_date") or "")
+        product_currency = str(payload.get("product_currency") or "").strip().upper()
+        aum = aum_rows(fund_kpis, report_date)
+        aum_currency = common_currency(aum)
+        aum_as_of_date = str(aum[0].get("metric_date")) if len(aum) == 1 else None
+        aum_valid = (
+            len(aum) == 1
+            and aum_currency is not None
+            and amount_in_millions(aum[0]) is not None
+            and (not product_currency or aum_currency == product_currency)
+        )
         checks.append({
             "check_id": "KPI-001",
             "passed": aum_valid,
-            "message": "Exactly one AUM observation sits on the report date with currency and unit.",
-            "actual": {"matching_rows": len(aum), "as_of_date": as_of_date},
-            "threshold": "exactly one report-date AUM row with currency and unit",
-            "fix_hint": "Provide one AUM observation on the report effective date with explicit currency and unit.",
+            "message": "Exactly one convertible AUM observation sits on the latest valid report-month date.",
+            "actual": {
+                "matching_rows": len(aum),
+                "report_date": report_date,
+                "as_of_date": aum_as_of_date,
+                "currency": aum_currency,
+                "product_currency": product_currency or None,
+                "unit": aum[0].get("unit") if len(aum) == 1 else None,
+            },
+            "threshold": "one latest same-month AUM row not later than report_date, with currency and a supported amount unit",
+            "fix_hint": "Provide one AUM observation on or before the report date in the same month, using an explicit currency and supported unit.",
         })
         expected_days = trading_days(payload)
+        observed_rows = turnover_rows(fund_kpis, expected_days)
         observed_days = turnover_days(fund_kpis, expected_days)
         coverage = Decimal(len(observed_days)) / Decimal(len(expected_days)) if expected_days else Decimal("0")
+        duplicate_days = len(observed_rows) != len(observed_days)
+        turnover_currency = common_currency(observed_rows)
+        units_valid = all(amount_in_millions(row) is not None for row in observed_rows)
+        currency_matches_aum = not aum_currency or not turnover_currency or turnover_currency == aum_currency
+        currency_matches_product = not product_currency or turnover_currency == product_currency
         checks.append({
             "check_id": "KPI-002",
-            "passed": bool(expected_days) and coverage >= Decimal("0.95"),
-            "message": "Daily turnover covers at least 95% of the authoritative trading days.",
+            "passed": (
+                bool(expected_days)
+                and coverage >= Decimal("0.95")
+                and not duplicate_days
+                and turnover_currency is not None
+                and units_valid
+                and currency_matches_aum
+                and currency_matches_product
+            ),
+            "message": "Daily turnover is unique, unit-compatible and covers at least 95% of authoritative trading days.",
             "actual": {
                 "observed_days": len(observed_days),
                 "expected_days": len(expected_days),
                 "coverage": str(coverage),
+                "duplicate_days": duplicate_days,
+                "currency": turnover_currency,
+                "units": sorted({str(row.get("unit") or "") for row in observed_rows}),
+                "currency_matches_aum": currency_matches_aum,
+                "currency_matches_product": currency_matches_product,
             },
-            "threshold": "coverage >= 0.95",
-            "fix_hint": "Load the authoritative trading calendar and unique daily turnover observations covering at least 95% of trading days.",
+            "threshold": "coverage >= 0.95 with one convertible observation per trading day in the AUM currency",
+            "fix_hint": "Load unique daily turnover observations in unit, thousand, million or billion, using the AUM currency and covering at least 95% of authoritative trading days.",
         })
+        if Decimal("0.95") <= coverage < Decimal("1"):
+            checks.append({
+                "check_id": "KPI-002-PARTIAL-COVERAGE",
+                "passed": False,
+                "severity": WARNING,
+                "message": "Daily turnover passes the release threshold but does not cover every trading day.",
+                "actual": {
+                    "observed_days": len(observed_days),
+                    "expected_days": len(expected_days),
+                    "coverage": str(coverage),
+                },
+                "threshold": "coverage = 1 for a warning-free result",
+                "fix_hint": "Load the missing daily-turnover observations or disclose the partial coverage.",
+            })
 
     if expected_constituent_count is not None:
         checks.append({

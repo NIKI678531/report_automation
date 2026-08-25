@@ -2,12 +2,14 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App from "./App";
+import App, { needsAutomaticBackfill } from "./App";
 import { api, type Product, type Report } from "./api";
+import { LocaleProvider, type ReportLanguage } from "./i18n";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.localStorage.clear();
 });
 
 const product3033: Product = {
@@ -15,6 +17,7 @@ const product3033: Product = {
   product_code: "3033",
   ticker: "3033.HK",
   name_en: "CSOP Hang Seng TECH Index ETF",
+  name_zh_hans: "南方东英恒生科技指数ETF",
   name_zh_hant: null,
   constituent_index_code: "HSTECH",
   constituent_index_name: "Hang Seng TECH Index",
@@ -35,16 +38,19 @@ const product3033: Product = {
   source: "PROJECT_BASELINE",
 };
 
-function report(id: string, reportDate: string, status: Report["status"] = "DRAFT", revision = 1): Report {
-  const monthName = new Date(`${reportDate}T00:00:00Z`).toLocaleDateString("en-HK", { month: "long", timeZone: "UTC" });
+function report(id: string, reportDate: string, status: Report["status"] = "DRAFT", revision = 1, languageMode: ReportLanguage = "EN"): Report {
+  const monthName = languageMode === "ZH_HANS"
+    ? `${Number(reportDate.slice(5, 7))}月`
+    : new Date(`${reportDate}T00:00:00Z`).toLocaleDateString("en-HK", { month: "long", timeZone: "UTC" });
   return {
     id,
     product_code: "3033",
-    product_name: "CSOP Hang Seng TECH Index ETF (3033.HK)",
+    product_name: languageMode === "ZH_HANS" ? "南方东英恒生科技指数ETF (3033.HK)" : "CSOP Hang Seng TECH Index ETF (3033.HK)",
     constituent_index_code: "HSTECH",
     benchmark_instrument_code: "HSTECHN",
     benchmark_code: "HSTECH",
     report_date: reportDate,
+    language_mode: languageMode,
     status,
     lane: "PRODUCTION",
     revision,
@@ -59,7 +65,7 @@ function report(id: string, reportDate: string, status: Report["status"] = "DRAF
         month_name: monthName,
         product_ticker: "3033.HK",
         sections: {
-          month_in_review: { title: `${monthName} in Review`, display_title: `${monthName} in Review`, summary: "", drivers: [], monitor: [], outlook: "" },
+          month_in_review: { title: languageMode === "ZH_HANS" ? `${monthName}月度回顾` : `${monthName} in Review`, display_title: languageMode === "ZH_HANS" ? `${monthName}月度回顾` : `${monthName} in Review`, summary: "", drivers: [], monitor: [], outlook: "" },
           historical_performance: { rows: [] },
           company_news: [],
           constituents: [],
@@ -74,6 +80,29 @@ function report(id: string, reportDate: string, status: Report["status"] = "DRAF
 }
 
 describe("3033 product scope", () => {
+  it("backfills Final Analytics for any report month when constituents are already present", () => {
+    for (const reportDate of ["2026-02-28", "2026-06-30", "2026-08-31"]) {
+      const legacy = report(`legacy-${reportDate}`, reportDate, "EDITING");
+      const sections = legacy.latest_document?.content.sections as Record<string, unknown>;
+      sections.constituents = [{ security_code: "1", weight: "1", return_1m: "0.1" }];
+      sections.historical_performance = { rows: [{ period: "1M" }] };
+      expect(needsAutomaticBackfill(legacy)).toBe(true);
+
+      (sections.analytics as Record<string, unknown>).top10 = [{ security_code: "1" }];
+      (sections.analytics as Record<string, unknown>).portfolio = [
+        { label: "Number of holdings", value: "1" },
+      ];
+      expect(needsAutomaticBackfill(legacy)).toBe(true);
+
+      (sections.analytics as Record<string, unknown>).portfolio = [
+        { label: "Asset Under Management (HKD)^", value: "1,000.00 million" },
+        { label: "Average Daily Turnover (HKD)^^", value: "50 million" },
+        { label: "Number of holdings", value: "1" },
+      ];
+      expect(needsAutomaticBackfill(legacy)).toBe(false);
+    }
+  });
+
   it("renders a fixed 3033 header instead of a fund dropdown", async () => {
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockResolvedValue([]);
@@ -148,34 +177,43 @@ describe("3033 product scope", () => {
     expect(reviewButton.querySelector(".module-state")?.classList.contains("ready")).toBe(true);
   });
 
-  it("finalizes after a passing review, then batch-generates only selected missing formats", async () => {
+  it("finalizes without blocking on review findings and opens direct format downloads", async () => {
     let current = report("ready", "2026-07-31", "READY_TO_FINALIZE");
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockImplementation(async () => [current]);
     vi.spyOn(api, "getReport").mockImplementation(async () => current);
     vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
-    vi.spyOn(api, "review").mockResolvedValue({ ready: true, blocking: [], warnings: [] });
+    const review = vi.spyOn(api, "review").mockResolvedValue({
+      ready: false,
+      blocking: [{ check_id: "SNAPSHOT_INCOMPLETE", fix_hint: "Upload Trading calendar." }],
+      warnings: [],
+    });
     const finalize = vi.spyOn(api, "finalize").mockImplementation(async () => {
       current = report("ready", "2026-07-31", "FINALIZED");
       return current;
     });
     const renderOutputs = vi.spyOn(api, "render").mockResolvedValue([
-      { id: "pdf-job", format: "pdf", status: "SUCCEEDED", progress: 100, stage: "complete", error: null, artifact_id: "pdf-artifact" },
       { id: "html-job", format: "html", status: "SUCCEEDED", progress: 100, stage: "complete", error: null, artifact_id: "html-artifact" },
     ]);
+    const downloadArtifact = vi.spyOn(api, "downloadArtifact").mockResolvedValue(undefined);
 
     render(<App />);
     const reviewButton = await screen.findByRole("button", { name: "Review & finalize" });
     fireEvent.click(reviewButton);
 
     await waitFor(() => expect(finalize).toHaveBeenCalledTimes(1));
+    expect(review).not.toHaveBeenCalled();
     expect(renderOutputs).not.toHaveBeenCalled();
-    const html = await screen.findByLabelText("HTML");
-    expect((screen.getByLabelText("PDF") as HTMLInputElement).checked).toBe(true);
+    const menu = await screen.findByRole("menu", { name: "Download report" });
+    expect(within(menu).getByRole("menuitem", { name: /PDF/ })).toBeTruthy();
+    expect(within(menu).getByRole("menuitem", { name: /Word/ })).toBeTruthy();
+    const html = within(menu).getByRole("menuitem", { name: /HTML/ });
     fireEvent.click(html);
-    fireEvent.click(screen.getByRole("button", { name: "Generate selected" }));
 
-    await waitFor(() => expect(renderOutputs).toHaveBeenCalledWith("ready", ["pdf", "html"]));
+    await waitFor(() => expect(renderOutputs).toHaveBeenCalledWith("ready", ["html"]));
+    await waitFor(() => expect(downloadArtifact).toHaveBeenCalledWith("html-artifact"));
+    expect(screen.queryByText(/blocking checks/i)).toBeNull();
+    expect(screen.queryByText(/SNAPSHOT_INCOMPLETE/i)).toBeNull();
   });
 
   it("creates another report even when the selected month already has a draft", async () => {
@@ -192,5 +230,57 @@ describe("3033 product scope", () => {
 
     await waitFor(() => expect(create).toHaveBeenCalledWith("2026-06-30", "3033"));
     await waitFor(() => expect(screen.getByLabelText("Report version")).toHaveProperty("value", created.id));
+  });
+
+  it("switches language without auto-creating and offers an explicit independent variant", async () => {
+    const english = report("english", "2026-06-30", "DRAFT", 1, "EN");
+    const chinese = report("chinese", "2026-06-30", "DRAFT", 1, "ZH_HANS");
+    let visibleReports = [english];
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "listReports").mockImplementation(async () => visibleReports);
+    vi.spyOn(api, "getReport").mockImplementation(async (id) => id === chinese.id ? chinese : english);
+    vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
+    const createVariant = vi.spyOn(api, "createLanguageVariant").mockImplementation(async () => {
+      visibleReports = [english, chinese];
+      return chinese;
+    });
+
+    render(<LocaleProvider><App /></LocaleProvider>);
+    const language = await screen.findByLabelText("Language");
+    fireEvent.change(language, { target: { value: "zh-Hans" } });
+
+    expect(await screen.findByText("本月尚无简体中文报告")).toBeTruthy();
+    expect(createVariant).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("commentary.locale")).toBe("zh-Hans");
+    fireEvent.click(screen.getByRole("button", { name: "创建简体中文版本" }));
+
+    await waitFor(() => expect(createVariant).toHaveBeenCalledWith(english.id, "ZH_HANS", 1));
+    await waitFor(() => expect(screen.getByText("月度评论")).toBeTruthy());
+  });
+
+  it.each([
+    ["DRAFT" as const, "draft"],
+    ["FINALIZED" as const, "finalized"],
+  ])("deletes a selected %s report and selects the remaining report", async (status, id) => {
+    const target = report(id, "2026-06-30", status, 2);
+    const remaining = report("remaining", "2026-06-30", "DRAFT", 1);
+    let visibleReports = [target, remaining];
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "listReports").mockImplementation(async () => visibleReports);
+    vi.spyOn(api, "getReport").mockImplementation(async (reportId) => (
+      reportId === target.id ? target : remaining
+    ));
+    vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
+    const deleteSelected = vi.spyOn(api, "deleteReport").mockImplementation(async () => {
+      visibleReports = [remaining];
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Delete report" }));
+
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining(`${target.report_date} revision ${target.revision}`));
+    await waitFor(() => expect(deleteSelected).toHaveBeenCalledWith(target.id, target.version));
+    await waitFor(() => expect(screen.getByLabelText("Report version")).toHaveProperty("value", remaining.id));
   });
 });

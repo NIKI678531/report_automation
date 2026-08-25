@@ -44,6 +44,7 @@ def sector_breakdown(rows: Iterable[dict], display_order: list[str] | None = Non
     """
     ranking = list(display_order or [])
     totals: dict[tuple[str, str], Decimal] = {}
+    localized_names: dict[str, str] = {}
     for row in rows:
         code = str(row.get("effective_industry_code") or "")
         label = str(row.get("effective_industry_name") or "")
@@ -57,13 +58,19 @@ def sector_breakdown(rows: Iterable[dict], display_order: list[str] | None = Non
             )
         key = (code, label)
         totals[key] = totals.get(key, Decimal("0")) + Decimal(str(row["weight"]))
+        localized_names.setdefault(code, str(row.get("effective_industry_name_zh_hans") or ""))
     def rank(item: tuple[tuple[str, str], Decimal]) -> tuple[int, int, Decimal, str]:
         code = item[0][0]
         configured = ranking.index(code) if code in ranking else len(ranking)
         return (0 if code in ranking else 1, configured, -item[1], code)
 
     return [
-        {"code": key[0], "sector": key[1], "weight": str(value)}
+        {
+            "code": key[0],
+            "sector": key[1],
+            "sector_zh_hans": localized_names.get(key[0], ""),
+            "weight": str(value),
+        }
         for key, value in sorted(totals.items(), key=rank)
     ]
 
@@ -106,6 +113,7 @@ def sector_chart_snapshot(sectors: list[dict], payload: dict | None = None) -> d
         snapshot["series"].append({
             "code": code,
             "label": str(row.get("sector") or ""),
+            "label_zh_hans": str(row.get("sector_zh_hans") or ""),
             "raw_value": str(weight),
             "unit": "RATIO",
             "display_value": f"{display_percent(weight, places)}%",

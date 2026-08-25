@@ -31,6 +31,7 @@ from ..models import (
     SnapshotStatus,
     utcnow,
 )
+from ..localization import localized_source_text
 from ..schemas import NewsCandidateFetch, NewsCreate, NewsRead, NewsSelectionUpdate
 from .audit import audit
 from .documents import latest_document, update_document
@@ -298,7 +299,12 @@ def add_manual_news_candidate(db: Session, report: Report, command: NewsCreate, 
     candidate = {
         "source_name": command.source_name, "source_url": command.source_url, "published_at": published_at,
         "title": command.title, "summary": command.summary, "ticker": command.ticker,
-        "metadata_json": {"provider": "MANUAL", "scope": "MANUAL", "site": urlparse(command.source_url).hostname},
+        "metadata_json": {
+            "provider": "MANUAL",
+            "scope": "MANUAL",
+            "site": urlparse(command.source_url).hostname,
+            "content_language": report.language_mode,
+        },
     }
     items, _ = upsert_news_candidates(db, report, [candidate], request_id, provider="MANUAL")
     return items[0]
@@ -357,6 +363,18 @@ async def select_report_news(db: Session, report: Report, command: NewsSelection
                     "scope": "CATALOG",
                     "site": urlparse(catalog_item["source_url"]).hostname,
                     "external_id": catalog_item["external_id"],
+                    "source_name_en": catalog_item["source_name"],
+                    "source_name_zh": catalog_item.get("source_name_zh"),
+                    "source_name_zh_hans": catalog_item.get("source_name_zh_hans"),
+                    "source_name_zh_hans_source": catalog_item.get("source_name_zh_hans_source"),
+                    "title_en": catalog_item.get("title_en"),
+                    "title_zh": catalog_item.get("title_zh"),
+                    "title_zh_hans": catalog_item.get("title_zh_hans"),
+                    "title_zh_hans_source": catalog_item.get("title_zh_hans_source"),
+                    "summary_en": catalog_item.get("summary_en"),
+                    "summary_zh": catalog_item.get("summary_zh"),
+                    "summary_zh_hans": catalog_item.get("summary_zh_hans"),
+                    "summary_zh_hans_source": catalog_item.get("summary_zh_hans_source"),
                     "source_code": catalog_item["source_code"],
                     "category": catalog_item["category"],
                     "region": catalog_item["region"],
@@ -384,13 +402,39 @@ async def select_report_news(db: Session, report: Report, command: NewsSelection
         published_hkt = news_published_at.astimezone(ZoneInfo("Asia/Hong_Kong"))
         db.add(ReportNewsSelection(report_id=report.id, news_item_id=news.id, position=item.position, title_override=item.title_override, summary_override=item.summary_override))
         metadata = news.metadata_json or {}
+        title, title_source = localized_source_text(
+            language_mode=report.language_mode,
+            en=metadata.get("title_en") or news.title,
+            zh_hans=metadata.get("title_zh_hans"),
+            zh_hant=metadata.get("title_zh"),
+        )
+        summary, summary_source = localized_source_text(
+            language_mode=report.language_mode,
+            en=metadata.get("summary_en") or news.summary,
+            zh_hans=metadata.get("summary_zh_hans"),
+            zh_hant=metadata.get("summary_zh"),
+        )
+        source_name, source_name_source = localized_source_text(
+            language_mode=report.language_mode,
+            en=metadata.get("source_name_en") or news.source_name,
+            zh_hans=metadata.get("source_name_zh_hans"),
+            zh_hant=metadata.get("source_name_zh"),
+        )
+        if metadata.get("provider") == "MANUAL" and metadata.get("content_language") == report.language_mode:
+            title, summary, source_name = news.title, news.summary, news.source_name
+            title_source = summary_source = source_name_source = "SOURCE_ZH_HANS" if report.language_mode == "ZH_HANS" else "SOURCE_EN"
         selected.append({
             "news_item_id": news.id,
             "provider": metadata.get("provider"),
             "external_id": metadata.get("external_id"),
-            "title": item.title_override or news.title,
-            "summary": item.summary_override or news.summary,
-            "source_name": news.source_name,
+            "title": item.title_override if item.title_override is not None else title,
+            "summary": item.summary_override if item.summary_override is not None else summary,
+            "source_name": source_name,
+            "translation_sources": {
+                "title": "MANUAL_OVERRIDE" if item.title_override is not None else title_source,
+                "summary": "MANUAL_OVERRIDE" if item.summary_override is not None else summary_source,
+                "source_name": source_name_source,
+            },
             "source_url": news.source_url,
             "published_at": news.published_at.isoformat(),
             "published_at_hkt": published_hkt.strftime("%Y-%m-%d %H:%M HKT"),

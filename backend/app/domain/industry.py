@@ -13,6 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .models import IndustryMasterRecord
+from .localization import localized_source_text
 
 
 LEVEL_WIDTH = {"INDUSTRY": 2, "SECTOR": 4, "SUBSECTOR": 6}
@@ -90,6 +91,7 @@ def parse_industry_master_csv(data: bytes) -> list[dict[str, Any]]:
             "code": code,
             "parent_code": parent_code or None,
             "name_en": _text(raw, "name_en", row_number),
+            "name_zh_hans": _text(raw, "name_zh_hans", row_number, required=False),
             "name_zh_hant": _text(raw, "name_zh_hant", row_number, required=False),
             "valid_from": valid_from,
             "valid_to": valid_to,
@@ -155,9 +157,18 @@ def map_effective_hsics(db: Session, payload: dict[str, Any], report_date: date)
         constituent["source_industry_code"] = code
         constituent["effective_industry_code"] = code
         constituent["effective_industry_name"] = industry.name_en
+        localized_name, localized_source = localized_source_text(
+            language_mode="ZH_HANS",
+            en=industry.name_en,
+            zh_hans=industry.name_zh_hans,
+            zh_hant=industry.name_zh_hant,
+        )
+        constituent["effective_industry_name_zh_hans"] = localized_name
+        constituent["effective_industry_name_zh_hans_source"] = localized_source
         constituent["industry_taxonomy"] = industry.taxonomy
         constituent["industry_taxonomy_version"] = industry.version
         constituent["sector"] = industry.name_en
+        constituent["sector_zh_hans"] = localized_name
     version = next(iter(versions))
     payload["industry_master"] = {
         "taxonomy": "HSICS",

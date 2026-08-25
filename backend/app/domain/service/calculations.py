@@ -21,6 +21,7 @@ from ..metrics.final_analytics import calculate_snapshot
 from ..metrics.footnotes import build_lineage_footnotes
 from ..metrics.historical_performance import historical_performance
 from ..metrics.quality_checks import snapshot_checks
+from ..localization import enrich_simplified_names
 from ..models import (
     DataSnapshot,
     Lane,
@@ -30,11 +31,18 @@ from ..models import (
     Report,
     ReportDocument,
     ReportStatus,
+    SnapshotStatus,
 )
 from .audit import audit
 from .catalog import resolve_product
 from .documents import latest_document
-from .snapshots import ensure_snapshot_datasets, has_approved_constituent_bundle, require_complete_snapshot
+from .snapshots import (
+    ensure_snapshot_datasets,
+    has_approved_constituent_bundle,
+    has_final_analytics_inputs,
+    missing_required_slots,
+    require_complete_snapshot,
+)
 
 
 def persist_calculation_records(
@@ -89,8 +97,13 @@ def persist_calculation_records(
         "turnover_observation_count": "COUNT",
         "turnover_expected_day_count": "COUNT",
         "turnover_average": "AMOUNT",
+        "turnover_currency": "TEXT",
+        "turnover_unit": "TEXT",
         "turnover_coverage": "RATIO",
         "aum_value": "AMOUNT",
+        "aum_currency": "TEXT",
+        "aum_unit": "TEXT",
+        "aum_as_of_date": "DATE",
         "top_security_code": "SECURITY_CODE",
         "bottom_security_code": "SECURITY_CODE",
     }
@@ -103,8 +116,13 @@ def persist_calculation_records(
         "turnover_observation_count": ("fund_kpi_daily", "trading_calendar"),
         "turnover_expected_day_count": ("trading_calendar",),
         "turnover_average": ("fund_kpi_daily", "trading_calendar"),
+        "turnover_currency": ("fund_kpi_daily",),
+        "turnover_unit": ("fund_kpi_daily",),
         "turnover_coverage": ("fund_kpi_daily", "trading_calendar"),
         "aum_value": ("fund_kpi_daily",),
+        "aum_currency": ("fund_kpi_daily",),
+        "aum_unit": ("fund_kpi_daily",),
+        "aum_as_of_date": ("fund_kpi_daily",),
         "next_rebalancing_date": ("index_event",),
     }
     for metric_code, raw in metrics.items():
@@ -338,7 +356,11 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
     if not report.active_snapshot_id:
         raise HTTPException(status_code=422, detail={"error_code": "SNAPSHOT_REQUIRED"})
     snapshot = db.get(DataSnapshot, report.active_snapshot_id)
-    require_complete_snapshot(snapshot)
+    if snapshot is None or (
+        snapshot.status != SnapshotStatus.VALID
+        and not has_final_analytics_inputs(snapshot.payload or {})
+    ):
+        require_complete_snapshot(snapshot)
     if snapshot.lane == Lane.PRODUCTION.value and not has_approved_constituent_bundle(snapshot.payload or {}):
         raise HTTPException(status_code=422, detail={
             "error_code": "CONSTITUENT_SOURCES_REQUIRED",
@@ -349,6 +371,7 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
     product = resolve_product(db, report.product_code, report.report_date)
     formula_version = product.formula_profile
     derived_payload = json.loads(json.dumps(snapshot.payload))
+    enrich_simplified_names(derived_payload)
     if derived_payload.get("total_return_series"):
         try:
             derived_payload["historical_performance"] = historical_performance(
@@ -368,6 +391,7 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
     derived_payload["snapshot_id"] = snapshot.id
     derived_payload["mapping_version"] = snapshot.mapping_version
     derived_payload["formula_version"] = formula_version
+    derived_payload["product_currency"] = product.currency
     derived_payload["snapshot_dataset_ids"] = {
         item.dataset_type: item.id for item in ensure_snapshot_datasets(db, snapshot)
     }
@@ -375,7 +399,9 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
     if metrics.get("next_rebalancing_date"):
         derived_payload["next_rebalancing_date"] = metrics["next_rebalancing_date"]
     derived_payload.update({"analytics": analytics, "metrics": metrics, "formula_version": formula_version})
-    derived_payload["footnotes"] = build_lineage_footnotes(derived_payload, metrics)
+    derived_payload["footnotes"] = build_lineage_footnotes(
+        derived_payload, metrics, language_mode=report.language_mode
+    )
     results = snapshot_checks(derived_payload, product.expected_constituent_count)
     modules = persist_calculation_records(
         db,
@@ -400,7 +426,16 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
     )
     db.add(document); report.version += 1
     blocking = [item for item in results if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
-    report.status = ReportStatus.QA_BLOCKED if blocking else ReportStatus.EDITING
+    snapshot_blocking = [
+        item for item in snapshot.quality_results or []
+        if item.get("severity") == "BLOCKING" and item.get("status", "FAILED") != "PASSED"
+    ]
+    missing = missing_required_slots(snapshot.payload or {})
+    report.status = (
+        ReportStatus.DRAFT if missing
+        else ReportStatus.QA_BLOCKED if blocking or snapshot_blocking
+        else ReportStatus.EDITING
+    )
     audit(db, "calculation.completed", "report", report.id, request_id, {"formula_version": formula_version, "metrics": metrics})
     db.commit(); db.refresh(document)
     return metrics, document, results

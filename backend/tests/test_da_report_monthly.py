@@ -1,4 +1,5 @@
 import sqlite3
+from copy import deepcopy
 from datetime import date
 
 import pytest
@@ -197,6 +198,12 @@ def test_report_auto_snapshot_becomes_valid_after_one_constituent_upload(client,
     calculated = client.get(f"/api/v1/reports/{detail['id']}").json()
     assert calculated["status"] == "EDITING"
     assert calculated["latest_document"]["content"]["sections"]["analytics"]["top10"]
+    portfolio = calculated["latest_document"]["content"]["sections"]["analytics"]["portfolio"]
+    assert [row["display_value"] for row in portfolio] == ["1,000.00 million", "60 million", "2"]
+    assert portfolio[0]["as_of_date"] == "2026-06-30"
+    assert portfolio[1]["observation_count"] == 2
+    assert portfolio[1]["expected_day_count"] == 2
+    assert portfolio[1]["coverage"] == "1"
     modules = {
         item["module_code"]: set(item["source_dataset_types"])
         for item in client.get(f"/api/v1/reports/{detail['id']}/modules").json()
@@ -235,3 +242,30 @@ def test_report_auto_snapshot_becomes_valid_after_one_constituent_upload(client,
     assert client.get(f"/api/v1/reports/{detail['id']}").json()["version"] == version_before_refresh
     assert refreshed.json()["status"] == "VALID"
     assert refreshed.json()["payload"]["datasets"]["constituent_performance"]["checksum"] == upload_checksum
+
+    # Legacy documents can have a ready constituent snapshot but an empty module 05. Selecting
+    # that month invokes the same unchanged-source refresh, which must repair the document without
+    # appending a duplicate DataSnapshot.
+    legacy = client.get(f"/api/v1/reports/{detail['id']}").json()
+    legacy_content = deepcopy(legacy["latest_document"]["content"])
+    legacy_content["sections"]["analytics"] = {
+        "top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": [],
+    }
+    saved = client.patch(
+        f"/api/v1/reports/{detail['id']}/document",
+        json={"version": legacy["latest_document"]["version"], "content": legacy_content},
+    )
+    assert saved.status_code == 200, saved.text
+    legacy_version = client.get(f"/api/v1/reports/{detail['id']}").json()["version"]
+
+    repaired = client.post(
+        f"/api/v1/reports/{detail['id']}/automatic-data/refresh",
+        json={"version": legacy_version},
+    )
+
+    assert repaired.status_code == 200, repaired.text
+    assert repaired.json()["changed"] is False
+    assert len(client.get(f"/api/v1/reports/{detail['id']}/snapshots").json()) == 2
+    repaired_detail = client.get(f"/api/v1/reports/{detail['id']}").json()
+    repaired_analytics = repaired_detail["latest_document"]["content"]["sections"]["analytics"]
+    assert [row["security_code"] for row in repaired_analytics["top10"]] == ["1", "2"]

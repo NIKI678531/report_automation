@@ -409,6 +409,45 @@ def test_calculation_refuses_an_incomplete_snapshot(client, report):
     }
 
 
+def test_module_ready_final_analytics_populates_while_other_report_slots_are_pending(client):
+    imported_master = client.post(
+        "/api/v1/industry-master/import",
+        files={"file": ("hsics.csv", hsics_master_csv(), "text/csv")},
+        headers={"X-User-Role": "ADMIN"},
+    )
+    assert imported_master.status_code == 201, imported_master.text
+    report = client.post(
+        "/api/v1/reports", json={"product_code": "SLOT", "report_date": "2026-06-30"}
+    ).json()
+    uploaded = upload_bytes(
+        client,
+        report["id"],
+        "constituent_performance",
+        constituent_performance_csv(),
+        "constituent-performance.csv",
+    ).json()
+
+    applied = apply(client, report["id"], uploaded["id"], reason=None)
+
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["status"] == "PENDING"
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    assert detail["status"] == "DRAFT"
+    analytics = detail["latest_document"]["content"]["sections"]["analytics"]
+    assert [row["security_code"] for row in analytics["top10"]] == ["1", "2"]
+    assert [row["security_code"] for row in analytics["top"]] == ["1", "2"]
+    assert [row["security_code"] for row in analytics["bottom"]] == ["2", "1"]
+    assert [row["code"] for row in analytics["sector_chart"]["series"]] == ["23", "70"]
+    assert [
+        {"label": row["label"], "value": row["display_value"]}
+        for row in analytics["portfolio"]
+    ] == [
+        {"label": "Asset Under Management (HKD)^", "value": "N/A"},
+        {"label": "Average Daily Turnover (HKD)^^", "value": "N/A"},
+        {"label": "Number of holdings", "value": "2"},
+    ]
+
+
 def test_required_logical_slots_auto_calculate_without_golden_fixture(client):
     imported_master = client.post(
         "/api/v1/industry-master/import",
@@ -562,6 +601,8 @@ def test_apply_never_injects_golden_fixture_data(client):
     assert applied.status_code == 200, applied.text
     payload = applied.json()["payload"]
     assert len(payload["constituents"]) == 5
+    sense_time = next(row for row in payload["constituents"] if row["security_code"] == "20")
+    assert sense_time["name_zh_hans"] == "商汤 - W"
     assert payload["historical_performance"] == {"rows": []}
     assert payload["company_news"] == []
 

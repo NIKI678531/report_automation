@@ -29,10 +29,10 @@ from app.domain.models import MappingProfile
 from app.domain.validation import BLOCKING, INFO, WARNING, FindingCollector
 
 # Fields the constituent-identity slot is authoritative for.
-IDENTITY_FIELDS = ("security_code", "ticker", "name_en", "name_zh_hant", "close_price", "currency", "weight", "as_of_date", "source_codes")
+IDENTITY_FIELDS = ("security_code", "ticker", "name_en", "name_zh_hans", "name_zh_hant", "close_price", "currency", "weight", "as_of_date", "source_codes")
 RETURN_FIELDS = ("return_1m", "return_3m", "return_6m", "return_ytd")
 CONSTITUENT_PERFORMANCE_COLUMNS = (
-    "index_code", "as_of_date", "security_code", "ticker", "name_en", "name_zh_hant",
+    "index_code", "as_of_date", "security_code", "ticker", "name_en", "name_zh_hans", "name_zh_hant",
     "close_price", "currency", "weight_pct", "source_industry_code", "period_end",
     "period_start_1m", "return_1m_pct", "return_1m_missing_reason",
     "period_start_3m", "return_3m_pct", "return_3m_missing_reason",
@@ -40,6 +40,7 @@ CONSTITUENT_PERFORMANCE_COLUMNS = (
     "period_start_ytd", "return_ytd_pct", "return_ytd_missing_reason",
     "constituent_source", "return_source",
 )
+OPTIONAL_CONSTITUENT_PERFORMANCE_COLUMNS = frozenset({"name_zh_hans"})
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,10 @@ def _normalize_header(value: Any) -> str:
 def _field_aliases(profile: MappingProfile, field: str) -> tuple[str, ...]:
     config = (profile.field_map or {}).get(field, {})
     aliases = config.get("aliases", []) if isinstance(config, dict) else []
+    # Simplified Chinese was added after the first approved HSI mapping profile.  Keep that
+    # immutable profile valid while accepting the canonical source/export column directly.
+    if field == "name_zh_hans":
+        aliases = [*aliases, "name_zh_hans", "Stk Name_SC"]
     return tuple(_normalize_header(value) for value in aliases if str(value).strip())
 
 
@@ -275,8 +280,9 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
         index_codes.add(incoming_index)
         as_of_dates.add(as_of)
         name_en = _text(_mapped_value(row, "name_en", profile))
+        name_zh_hans = _text(_mapped_value(row, "name_zh_hans", profile))
         name_zh_hant = _text(_mapped_value(row, "name_zh_hant", profile))
-        if not name_en and not name_zh_hant:
+        if not name_en and not name_zh_hans and not name_zh_hant:
             collector.add(
                 "CONSTITUENT_NAME_MISSING",
                 f"Security {code} has no English or Traditional Chinese name.",
@@ -290,6 +296,7 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
             "security_code": code,
             "ticker": f"{code.zfill(4)}.HK",
             "name_en": name_en or "",
+            "name_zh_hans": name_zh_hans or "",
             "name_zh_hant": name_zh_hant or "",
             "close_price": str(value) if (value := _profile_number(row, "close_price", index, collector, profile, code)) is not None else None,
             "currency": str(_mapped_value(row, "currency", profile) or "").strip().upper(),
@@ -656,7 +663,10 @@ def parse_constituent_performance(
         return {}
     reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig")))
     actual_columns = tuple(reader.fieldnames or ())
-    missing_columns = [column for column in spec.template_columns if column not in actual_columns]
+    missing_columns = [
+        column for column in spec.template_columns
+        if column not in actual_columns and column not in OPTIONAL_CONSTITUENT_PERFORMANCE_COLUMNS
+    ]
     if missing_columns:
         collector.add(
             "DATASET_COLUMNS_MISSING",
@@ -708,13 +718,15 @@ def parse_constituent_performance(
             if weight_pct is None or weight_pct < 0 or weight_pct > 100:
                 raise ValueError(f"Row {row_number}: weight_pct must be between 0 and 100")
             name_en = _text(record.get("name_en"))
+            name_zh_hans = _text(record.get("name_zh_hans"))
             name_zh_hant = _text(record.get("name_zh_hant"))
-            if not name_en and not name_zh_hant:
-                raise ValueError(f"Row {row_number}: name_en or name_zh_hant is required")
+            if not name_en and not name_zh_hans and not name_zh_hant:
+                raise ValueError(f"Row {row_number}: name_en, name_zh_hans or name_zh_hant is required")
             item: dict[str, Any] = {
                 "security_code": code,
                 "ticker": imports._required(record, "ticker", row_number).upper(),
                 "name_en": name_en or "",
+                "name_zh_hans": name_zh_hans or "",
                 "name_zh_hant": name_zh_hant or "",
                 "close_price": str(close_price),
                 "currency": imports._required(record, "currency", row_number).upper(),

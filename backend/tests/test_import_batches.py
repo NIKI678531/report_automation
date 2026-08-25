@@ -168,7 +168,14 @@ def test_split_files_plus_unknown_apply_as_one_snapshot(client):
     analytics = applied.json()["payload"]["analytics"]
     assert [row["security_code"] for row in analytics["top10"]] == ["1", "2"]
     assert [row["code"] for row in analytics["sectors"]] == ["23", "70"]
-    assert analytics["portfolio"] == [{"label": "Number of holdings", "value": "2"}]
+    assert [
+        {"label": row["label"], "value": row["display_value"]}
+        for row in analytics["portfolio"]
+    ] == [
+        {"label": "Asset Under Management (HKD)^", "value": "N/A"},
+        {"label": "Average Daily Turnover (HKD)^^", "value": "N/A"},
+        {"label": "Number of holdings", "value": "2"},
+    ]
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     assert detail["latest_document"]["content"]["sections"]["analytics"] == analytics
 

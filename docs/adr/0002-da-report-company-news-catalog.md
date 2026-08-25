@@ -11,7 +11,7 @@ Copying the full catalog into the commentary database on every visit would creat
 ## Decision
 
 - The Company News browser reads every row satisfying `news_sources.report_type = 'regional'` and `news_enrichments.category = 'Corporate'` directly from the approved read-only DA-Report SQLite snapshot.
-- Catalog browsing is not filtered by commentary product, active constituent snapshot, report month, or report date.
+- Catalog browsing is not filtered by commentary product, active constituent snapshot, report month, or report date by default. When a report has a valid constituent snapshot, the UI may apply an explicit company filter using that snapshot's controlled English and Chinese names; this does not narrow the default catalog.
 - The default range is the full available snapshot, including upstream backfilled dates. A missing `published_at` uses `fetched_at` for ordering and is identified as such.
 - The API applies server-side filters and opaque keyset pagination ordered by effective timestamp and DA item ID. Cursors are bound to the active filter and sort contract.
 - Opening the module never copies catalog rows into the commentary database. A DA row is re-read by trusted external ID and materialized as a local `NewsItem` only when the user saves it into a report.
@@ -23,7 +23,7 @@ This intentionally deviates from the V2.1 current-constituent matching and repor
 
 ## Consequences
 
-The screen is useful before an active snapshot exists and reflects the approved DA snapshot on every entry. All 2,296 Regional Corporate rows in the 2026-08-07 snapshot are addressable without bulk duplication. The user must curate fund relevance and date appropriateness; the upstream Corporate classification does not imply relevance to the selected commentary product.
+The screen is useful before an active snapshot exists and reflects the approved DA snapshot on every entry. All 2,296 Regional Corporate rows in the 2026-08-07 snapshot are addressable without bulk duplication. When constituent context is available, the company selector narrows that catalog through boundary-aware title matching; otherwise the selector is disabled. The user must still curate fund relevance and date appropriateness because the upstream Corporate classification does not imply relevance to the selected commentary product.
 
 DA availability is required to browse or newly select catalog rows. Already materialized selections remain editable and renderable if DA is temporarily unavailable. Missing files, checksum failures, schema drift, invalid cursors, and query failures continue to fail closed with structured errors.
 

@@ -7,5 +7,6 @@ import "@fontsource/inter/latin-700.css";
 import "@fontsource/roboto-mono/latin-500.css";
 import "./styles/tokens.css";
 import App from "./App";
+import { LocaleProvider } from "./i18n";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><LocaleProvider><App /></LocaleProvider></React.StrictMode>);

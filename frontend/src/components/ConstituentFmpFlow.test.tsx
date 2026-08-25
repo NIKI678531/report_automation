@@ -17,6 +17,7 @@ const report: Report = {
   constituent_index_code: "HSTECH",
   benchmark_instrument_code: "HSTECHN",
   benchmark_code: "HSTECH",
+  language_mode: "EN",
   report_date: "2026-06-30",
   lane: "PRODUCTION",
   status: "EDITING",

@@ -160,16 +160,16 @@ def expected_document() -> dict:
                 {"code": "28", "label": "Healthcare", "display_value": "1.7%"},
                 {"code": "10", "label": "Industrials", "display_value": "1.3%"},
             ],
-            # "Top Performers in June**" / "Bottom Performers in June**", as printed.
+            # "Top Performers in June**" desc / "Bottom Performers in June**" asc.
             "top": [
                 {"security_code": "1347", "return_1m_pct": 33.42},
                 {"security_code": "2513", "return_1m_pct": 31.91},
                 {"security_code": "981", "return_1m_pct": 9.56},
             ],
             "bottom": [
-                {"security_code": "2382", "return_1m_pct": -26.12},
-                {"security_code": "285", "return_1m_pct": -27.78},
                 {"security_code": "100", "return_1m_pct": -50.36},
+                {"security_code": "285", "return_1m_pct": -27.78},
+                {"security_code": "2382", "return_1m_pct": -26.12},
             ],
             # "3033.HK Portfolio Analysis", including the report's exact number formatting.
             "portfolio": [

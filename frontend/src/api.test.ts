@@ -9,6 +9,23 @@ describe("FastAPI client", () => {
     fetchMock.mockRestore();
   });
 
+  it("creates a language variant from a locked source document version", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "zh1" }), { status: 201 }));
+    await api.createLanguageVariant("en1", "ZH_HANS", 4);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/en1/language-variants", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ language_mode: "ZH_HANS", source_document_version: 4 }),
+    }));
+    fetchMock.mockRestore();
+  });
+
+  it("soft-deletes the selected report with optimistic locking", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    await api.deleteReport("r1", 7);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1?version=7", expect.objectContaining({ method: "DELETE" }));
+    fetchMock.mockRestore();
+  });
+
   it("loads the effective product catalog", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 200 }));
     await api.listProducts("2026-06-30");
@@ -40,13 +57,14 @@ describe("FastAPI client", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
     await api.listCompanyNewsCatalog("r1", {
       query: "Tencent results",
+      company: "700",
       sentiment: "bull",
       sort: "oldest",
       cursor: "next-page",
       limit: 25,
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/reports/r1/news/catalog?query=Tencent+results&sentiment=bull&sort=oldest&cursor=next-page&limit=25",
+      "/api/v1/reports/r1/news/catalog?query=Tencent+results&company=700&sentiment=bull&sort=oldest&cursor=next-page&limit=25",
       expect.any(Object),
     );
     fetchMock.mockRestore();

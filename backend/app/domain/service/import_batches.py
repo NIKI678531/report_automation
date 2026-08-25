@@ -39,6 +39,7 @@ from .snapshots import (
     empty_payload,
     enrich_constituent_returns,
     ensure_snapshot_datasets,
+    has_final_analytics_inputs,
     missing_required_slots,
     overlay_slot,
 )
@@ -92,7 +93,11 @@ def _detect_dataset(db: Session, filename: str, data: bytes) -> tuple[str | None
     """Return detected type and whether failure should block rather than be skipped."""
     suffix = Path(filename).suffix.lower()
     headers = _csv_headers(data) if suffix == ".csv" else set()
-    canonical = {ingestion._normalize_header(value) for value in ingestion.CONSTITUENT_PERFORMANCE_COLUMNS}
+    canonical = {
+        ingestion._normalize_header(value)
+        for value in ingestion.CONSTITUENT_PERFORMANCE_COLUMNS
+        if value not in ingestion.OPTIONAL_CONSTITUENT_PERFORMANCE_COLUMNS
+    }
     if canonical and canonical.issubset(headers):
         return "constituent_performance", True
     profiles = list(db.scalars(select(MappingProfile).where(MappingProfile.status == "APPROVED")))
@@ -474,18 +479,12 @@ def apply_import_batch(
     base["constituent_index_code"] = report.constituent_index_code
     findings.extend(map_effective_hsics(db, base, report.report_date))
     product = resolve_product(db, report.product_code, report.report_date)
+    base["product_currency"] = product.currency
     results = snapshot_checks(base, product.expected_constituent_count)
     blocked = [item for item in [*results, *findings] if item.get("severity") == "BLOCKING" and item.get("status", "FAILED") != "PASSED"]
     if blocked:
         raise HTTPException(status_code=422, detail={"error_code": "IMPORT_BATCH_QUALITY_BLOCKED", "checks": blocked})
-    # Page 05 rankings and sector aggregation depend on the validated Page 04 bundle, not on
-    # Historical Performance or fund KPI slots. Bind those derived outputs immediately so a
-    # successful constituent upload is visible and useful while unrelated slots remain pending.
-    # Missing AUM and turnover remain absent; calculate_snapshot never invents substitutes.
     base["formula_version"] = product.formula_profile
-    analytics, metrics = calculate_snapshot(base)
-    base["analytics"] = analytics
-    base["metrics"] = metrics
     missing = missing_required_slots(base)
     status = SnapshotStatus.VALID if not missing else SnapshotStatus.PENDING
     source_types = {
@@ -509,7 +508,28 @@ def apply_import_batch(
     )
     db.add(snapshot)
     db.flush()
-    ensure_snapshot_datasets(db, snapshot)
+    snapshot_datasets = ensure_snapshot_datasets(db, snapshot)
+    # Page 05 rankings and sector aggregation depend on the validated Page 04 bundle, not on
+    # Historical Performance or fund KPI slots. Calculate them after the immutable snapshot and
+    # its dataset records have ids so the chart lineage stored on the snapshot exactly matches the
+    # document produced by run_calculation below. Missing AUM and turnover retain their fixed
+    # presentation rows with N/A values; calculate_snapshot never invents financial substitutes.
+    calculation_payload = json.loads(json.dumps(base))
+    calculation_payload.update({
+        "snapshot_id": snapshot.id,
+        "mapping_version": snapshot.mapping_version,
+        "snapshot_dataset_ids": {
+            item.dataset_type: item.id for item in snapshot_datasets
+        },
+    })
+    analytics, metrics = calculate_snapshot(calculation_payload)
+    # Build a new JSON object: the first flush has already serialized ``base``, and in-place
+    # mutations of a plain SQLAlchemy JSON value are intentionally not tracked.
+    final_payload = json.loads(json.dumps(base))
+    final_payload["analytics"] = analytics
+    final_payload["metrics"] = metrics
+    snapshot.payload = final_payload
+    snapshot.checksum = checksum(final_payload)
     report.active_snapshot_id = snapshot.id
     report.lane = snapshot.lane
     report.status = ReportStatus.DATA_READY if status == SnapshotStatus.VALID else ReportStatus.DRAFT
@@ -523,14 +543,14 @@ def apply_import_batch(
     audit(db, "import_batch.applied", "import_batch", batch.id, request_id, {
         "snapshot_id": snapshot.id, "file_count": len(ordered), "missing_slots": missing, "reason": reason,
     })
-    if status == SnapshotStatus.VALID:
+    if status == SnapshotStatus.VALID or has_final_analytics_inputs(base):
         # The calculator binds the derived payload and appends the single document version for a
-        # complete batch. Creating an intermediate document here would make one Apply click look
-        # like two reviewer versions.
+        # complete or module-ready batch. Creating an intermediate document here would make one
+        # Apply click look like two reviewer versions.
         run_calculation(db, report, request_id)
     else:
         current = latest_document(db, report.id)
-        content = bind_snapshot(current.content, base, lane=snapshot.lane)
+        content = bind_snapshot(current.content, final_payload, lane=snapshot.lane)
         content["snapshot_id"] = snapshot.id
         db.add(ReportDocument(
             report_id=report.id, version=current.version + 1, snapshot_id=snapshot.id,

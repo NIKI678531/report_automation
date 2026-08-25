@@ -1,13 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ html_language }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{ report.product_name }} - {{ report_date_long }}</title>
   <style>
+    {{ cjk_font_css|safe }}
     :root { --deep:#22327f; --blue:#2660ad; --text:#000; --paper:#fff; }
     * { box-sizing:border-box; }
     html,body { margin:0; background:#eee; color:var(--text); font-family:Calibri,Carlito,Arial,sans-serif; font-size:10pt; line-height:1.22; }
+    body.language-zh-hans { font-family:"Embedded Noto Sans CJK SC","Noto Sans CJK SC","Microsoft YaHei",Calibri,Carlito,Arial,sans-serif; }
     .report-page { position:relative; width:210mm; height:297mm; margin:8mm auto; padding:5mm 7mm 15mm; background:var(--paper); overflow:hidden; page-break-after:always; }
     .report-page:last-child { page-break-after:auto; }
     .page-header { height:8mm; color:var(--deep); font-size:11pt; border-bottom:0.45pt solid var(--deep); padding:0 3mm; }
@@ -67,6 +69,7 @@
     .portfolio { margin-top:7mm; } .portfolio td { border-bottom:1px solid #000; padding:2mm; }
     .portfolio td:first-child { font-weight:700; }
     .empty-note { color:#666; font-style:italic; }
+    .table-scroll { width:100%; overflow-x:auto; }
     [data-page="1"] .page-header { border-bottom:0; height:5mm; }
     [data-page="1"] .page-body { padding-top:2mm; }
 {%- if testing_banner %}
@@ -84,22 +87,37 @@
     @media screen and (max-width:800px) {
       .report-page { width:100%; height:auto; min-height:297mm; margin:0 0 8px; overflow-x:auto; }
     }
+    body.layout-continuous { background:#fff; }
+    .layout-continuous .report-document { width:min(210mm,100%); margin:0 auto; background:#fff; }
+    .layout-continuous .report-page { width:100%; height:auto; min-height:0; margin:0; padding:8mm 10mm; overflow:visible; page-break-after:auto; break-after:auto; }
+    .layout-continuous .page-body { padding:0; }
+    .layout-continuous .footnote { position:static; margin:4mm 3mm 0; }
+    .layout-continuous .report-page + .report-page { padding-top:4mm; }
+    @media screen and (max-width:800px) {
+      .layout-continuous .report-page { min-height:0; padding:6mm 4mm; overflow:visible; }
+      .layout-continuous .constituents { min-width:760px; }
+      .layout-continuous .analytics-grid { grid-template-columns:minmax(0,1fr); gap:6mm; }
+      .layout-continuous .donut { max-width:100%; height:auto !important; }
+    }
   </style>
 </head>
-<body>
+<body class="layout-{{ layout_mode }} language-{{ language_mode|lower|replace('_', '-') }}">
 {% macro chrome(page) -%}
-  <header class="page-header">Monthly Commentary | {{ report_date_long }}</header>
+  {%- if layout_mode == 'paged' %}
+  <header class="page-header">{{ t('monthly_commentary') }} | {{ report_date_long }}</header>
   <footer class="page-footer"><img src="data:image/png;base64,{{ logo_data }}" alt="CSOP Asset Management"><span class="page-number">{{ page }}</span></footer>
+  {%- endif %}
   {%- if testing_banner %}
   <div class="testing-mark" data-lane="TESTING" aria-hidden="true"><span class="testing-watermark">{{ testing_banner.watermark }}</span></div>
   <div class="testing-chip">{{ testing_banner.label }}</div>
   {%- endif %}
 {%- endmacro %}
 
+<article class="report-document" data-layout-mode="{{ layout_mode }}" data-language="{{ language_mode }}">
 <section class="report-page" data-page="1" data-section-key="month_in_review">
   {{ chrome(1) }}
   <main class="page-body">
-    <h1>{{ report.product_name }}</h1>
+    <h1>{{ product_display_name }}</h1>
     {% if enable_review_layout and sections.month_in_review.get('blocks') %}
     <div class="review-layout">
       {% for block in sections.month_in_review.blocks %}<section class="review-layout-block align-{{ block.text_align|default('left', true) }}" data-block-id="{{ block.block_id }}" style="grid-column:{{ block.x + 1 }} / span {{ block.w }};grid-row:{{ block.y + 1 }} / span {{ block.h }}"><h3>{{ block.title }}</h3><div class="review-layout-content">{{ block.content|safe }}</div></section>{% endfor %}
@@ -108,27 +126,28 @@
       <h2>{{ review_title }}</h2>
       <p>{{ sections.month_in_review.get('summary', '') }}</p>
       <div class="columns-2">
-        <section><h2>Key Drivers of the Correction</h2><ol>{% for item in sections.month_in_review.get('drivers', []) %}<li><strong>{{ item.get('title', '') }}</strong><br>{{ item.get('body', '') }}</li>{% endfor %}</ol></section>
-        <section><h2>Key Areas to Monitor</h2><ol>{% for item in sections.month_in_review.get('monitor', []) %}<li><strong>{{ item.get('title', '') }}</strong><br>{{ item.get('body', '') }}</li>{% endfor %}</ol><h2>Outlook</h2><p>{{ sections.month_in_review.get('outlook', '') }}</p></section>
+        <section><h2>{{ t('key_drivers') }}</h2><ol>{% for item in sections.month_in_review.get('drivers', []) %}<li><strong>{{ item.get('title', '') }}</strong><br>{{ item.get('body', '') }}</li>{% endfor %}</ol></section>
+        <section><h2>{{ t('areas_to_monitor') }}</h2><ol>{% for item in sections.month_in_review.get('monitor', []) %}<li><strong>{{ item.get('title', '') }}</strong><br>{{ item.get('body', '') }}</li>{% endfor %}</ol><h2>{{ t('outlook') }}</h2><p>{{ sections.month_in_review.get('outlook', '') }}</p></section>
       </div>
     {% endif %}
-    <h2 class="center">Historical Performance of {{ doc.product_ticker|default(report.product_code ~ '.HK', true) }} and {{ doc.benchmark_name|default(report.benchmark_code, true) }}*</h2>
-    <table class="history"><thead><tr><th></th><th>1-month return (%)</th><th>3-month return (%)</th><th>6-month return (%)</th><th>YTD return (%)</th></tr></thead><tbody>{% for row in sections.historical_performance.get('rows', []) %}<tr><td>{{ row.get('name', '') }}</td><td>{{ row.get('return_1m')|pct }}</td><td>{{ row.get('return_3m')|pct }}</td><td>{{ row.get('return_6m')|pct }}</td><td>{{ row.get('return_ytd')|pct }}</td></tr>{% endfor %}</tbody></table>
+    <h2 class="center">{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}</h2>
+    <div class="table-scroll" role="region" aria-label="{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}"><table class="history"><thead><tr><th></th><th>{{ t('return_1m') }}</th><th>{{ t('return_3m') }}</th><th>{{ t('return_6m') }}</th><th>{{ t('return_ytd') }}</th></tr></thead><tbody>{% for row in sections.historical_performance.get('rows', []) %}<tr><td>{{ row.get('name', '') }}</td><td>{{ row.get('return_1m')|pct(language_mode) }}</td><td>{{ row.get('return_3m')|pct(language_mode) }}</td><td>{{ row.get('return_6m')|pct(language_mode) }}</td><td>{{ row.get('return_ytd')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></div>
   </main><div class="footnote">{{ sections.footnotes.historical|default('') }}</div>
 </section>
 
 <section class="report-page" data-page="2" data-section-key="company_news">
-  {{ chrome(2) }}<main class="page-body"><h2>Company News</h2><ul class="news-list">{% for item in sections.company_news %}{% set source = item.get('source_name', '') %}{% set published = item.get('published_at_hkt') or item.get('published_at', '')[:10] %}{% set source_url = item.get('source_url', '') %}<li><div class="news-title">{{ item.get('title', '') }}</div>{% if source or published or source_url %}<div class="news-meta">{% if source %}{{ source }}{% endif %}{% if source and published %} · {% endif %}{{ published }}{% if source_url %}{% if source or published %} · {% endif %}<a href="{{ source_url }}">Source</a>{% endif %}</div>{% endif %}<div>{{ item.get('summary', '') }}</div></li>{% endfor %}</ul></main>
+  {{ chrome(2) }}<main class="page-body"><h2>{{ t('company_news') }}</h2><ul class="news-list">{% for item in sections.company_news %}{% set source = item.get('source_name', '') %}{% if item.get('title') or item.get('summary') or source %}<li><div class="news-title">{{ item.get('title', '') }}</div>{% if source %}<div class="news-meta">{{ source }}</div>{% endif %}<div>{{ item.get('summary', '') }}</div></li>{% endif %}{% endfor %}</ul></main>
 </section>
 
 <section class="report-page" data-page="3" data-section-key="constituents">
-  {{ chrome(3) }}<main class="page-body"><h2 class="center constituent-title">The Performance of {{ report.constituent_index_code|default(report.benchmark_code, true) }} Constituents</h2><p class="center">(*Next Rebalancing Date: {{ doc.next_rebalancing_date|rebalancing_date }})</p>
-  <table class="constituents"><colgroup><col style="width:6%"><col style="width:17%"><col style="width:12%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:14%"></colgroup><thead><tr><th>Stock<br>Code</th><th>Stock Name</th><th>Closing Price<br>(HKD)</th><th>Weighting<br>(%)</th><th>1-month<br>return (%)</th><th>3-month<br>return (%)</th><th>6-month<br>return (%)</th><th>YTD return<br>(%)</th></tr></thead><tbody>{% for row in sections.constituents %}<tr><td class="code">{{ row.get('security_code', '') }}</td><td class="name">{{ row.get('name_en') or row.get('name_zh_hant', '') }}</td><td>{{ row.get('close_price')|price }}</td><td>{{ row.get('weight')|pct }}</td><td>{{ row.get('return_1m')|pct }}</td><td>{{ row.get('return_3m')|pct }}</td><td>{{ row.get('return_6m')|pct }}</td><td>{{ row.get('return_ytd')|pct }}</td></tr>{% endfor %}</tbody></table></main><div class="footnote">{{ sections.footnotes.constituents|default('') }}</div>
+  {{ chrome(3) }}<main class="page-body"><h2 class="center constituent-title">{{ t('constituent_performance', index=report.constituent_index_code|default(report.benchmark_code, true)) }}</h2><p class="center">({{ t('next_rebalancing_date', date=doc.next_rebalancing_date|rebalancing_date(language_mode)) }})</p>
+  <div class="table-scroll" role="region" aria-label="{{ t('constituent_performance', index=report.constituent_index_code|default(report.benchmark_code, true)) }}"><table class="constituents"><colgroup><col style="width:6%"><col style="width:17%"><col style="width:12%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:14%"></colgroup><thead><tr><th>{{ t('stock_code') }}</th><th>{{ t('stock_name') }}</th><th>{{ t('closing_price_hkd') }}</th><th>{{ t('weighting_pct') }}</th><th>{{ t('return_1m') }}</th><th>{{ t('return_3m') }}</th><th>{{ t('return_6m') }}</th><th>{{ t('return_ytd') }}</th></tr></thead><tbody>{% for row in sections.constituents %}<tr><td class="code">{{ row.get('security_code', '') }}</td><td class="name">{{ row.get('display_name', '') }}</td><td>{{ row.get('close_price')|price(language_mode) }}</td><td>{{ row.get('weight')|pct(language_mode) }}</td><td>{{ row.get('return_1m')|pct(language_mode) }}</td><td>{{ row.get('return_3m')|pct(language_mode) }}</td><td>{{ row.get('return_6m')|pct(language_mode) }}</td><td>{{ row.get('return_ytd')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></div></main><div class="footnote">{{ sections.footnotes.constituents|default('') }}</div>
 </section>
 
 <section class="report-page" data-page="4" data-section-key="analytics">
-  {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title title-split"><span>Top 10 Index Constituents*</span><span>(%)</span></div><table class="top10">{% for row in sections.analytics.get('top10', []) %}<tr><td>{{ row.get('issuer', '') }}</td><td>{{ row.get('weight')|pct }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">Index Sectors Breakdown*</div>{% if sector_chart.has_data %}<svg class="donut" role="img" aria-label="{{ sector_chart.alt_text }}" style="width:{{ sector_chart.box_mm }}mm;height:{{ sector_chart.box_mm }}mm" viewBox="0 0 {{ sector_chart.view_box }} {{ sector_chart.view_box }}"><title>Index Sectors Breakdown</title><desc>{{ sector_chart.alt_text }}</desc>{% for row in sector_chart.rows %}<path class="donut-slice" data-sector-slice="{{ row.sector }}" d="{{ row.path }}" fill="{{ row.color }}" />{% endfor %}{% for row in sector_chart.rows %}{% if not row.inside %}<polyline class="donut-leader" points="{{ row.leader }}" />{% endif %}{% endfor %}{% for row in sector_chart.rows %}<text class="{{ 'donut-label' if row.inside else 'donut-label-outside' }}" data-sector-label="{{ row.sector }}" x="{{ row.label_x }}" y="{{ row.label_y }}" text-anchor="{{ row.label_anchor }}" dominant-baseline="middle">{{ row.display_value }}</text>{% endfor %}</svg><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}</span>{% endfor %}</div>{% else %}<div class="sector-empty" aria-hidden="true"></div>{% endif %}</section></div>
-  <div class="analytics-grid performers"><section><h2>Top Performers in {{ doc.month_name }}**</h2><table class="simple"><thead><tr><th>Issuer</th><th>{{ doc.month_name }} Return (%)</th></tr></thead><tbody>{% for row in sections.analytics.get('top', []) %}<tr><td>{{ row.get('issuer', '') }}</td><td>{{ row.get('return')|pct }}</td></tr>{% endfor %}</tbody></table></section><section><h2>Bottom Performers in {{ doc.month_name }}**</h2><table class="simple"><thead><tr><th>Issuer</th><th>{{ doc.month_name }} Return (%)</th></tr></thead><tbody>{% for row in sections.analytics.get('bottom', []) %}<tr><td>{{ row.get('issuer', '') }}</td><td>{{ row.get('return')|pct }}</td></tr>{% endfor %}</tbody></table></section></div>
-  <section class="portfolio"><h2>{{ doc.product_ticker|default(report.product_code ~ '.HK', true) }} Portfolio Analysis</h2><table>{% for row in sections.analytics.get('portfolio', []) %}<tr><td>{{ row.get('label', '') }}</td><td>{{ row.get('value', '') }}</td></tr>{% endfor %}</table></section></main><div class="footnote">{{ sections.footnotes.analytics|default('') }}</div>
+  {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title title-split"><span>{{ t('top10') }}</span><span>(%)</span></div><table class="top10">{% for row in sections.analytics.get('top10', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('weight')|pct(language_mode) }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">{{ t('sector_breakdown') }}</div>{% if sector_chart.has_data %}<svg class="donut" role="img" aria-label="{{ sector_chart.alt_text }}" style="width:{{ sector_chart.box_mm }}mm;height:{{ sector_chart.box_mm }}mm" viewBox="0 0 {{ sector_chart.view_box }} {{ sector_chart.view_box }}"><title>{{ t('sector_breakdown') }}</title><desc>{{ sector_chart.alt_text }}</desc>{% for row in sector_chart.rows %}<path class="donut-slice" data-sector-slice="{{ row.sector }}" d="{{ row.path }}" fill="{{ row.color }}" />{% endfor %}{% for row in sector_chart.rows %}{% if not row.inside %}<polyline class="donut-leader" points="{{ row.leader }}" />{% endif %}{% endfor %}{% for row in sector_chart.rows %}<text class="{{ 'donut-label' if row.inside else 'donut-label-outside' }}" data-sector-label="{{ row.sector }}" x="{{ row.label_x }}" y="{{ row.label_y }}" text-anchor="{{ row.label_anchor }}" dominant-baseline="middle">{{ row.display_value }}</text>{% endfor %}</svg><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}</span>{% endfor %}</div>{% else %}<div class="sector-empty" aria-hidden="true"></div>{% endif %}</section></div>
+  <div class="analytics-grid performers"><section><h2>{{ t('top_performers', month=doc.month_name) }}</h2><table class="simple"><thead><tr><th>{{ t('issuer') }}</th><th>{{ doc.month_name }} {{ t('return') }}</th></tr></thead><tbody>{% for row in sections.analytics.get('top', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('return')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></section><section><h2>{{ t('bottom_performers', month=doc.month_name) }}</h2><table class="simple"><thead><tr><th>{{ t('issuer') }}</th><th>{{ doc.month_name }} {{ t('return') }}</th></tr></thead><tbody>{% for row in sections.analytics.get('bottom', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('return')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></section></div>
+  <section class="portfolio"><h2>{{ t('portfolio_analysis', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</h2><table>{% for row in portfolio_analysis %}<tr data-metric-code="{{ row.get('metric_code', '') }}"><td>{{ row.get('label', '') }}</td><td>{{ row.get('display_value', t('no_data')) }}</td></tr>{% endfor %}</table></section></main><div class="footnote">{{ sections.footnotes.analytics|default('') }}</div>
 </section>
+</article>
 </body></html>

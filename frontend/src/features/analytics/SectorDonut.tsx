@@ -31,7 +31,7 @@ const INDUSTRY_COLOR_CLASS: Record<string, number> = {
  * string and the colour identity are all decided by the backend; the browser only turns angles
  * into stroke geometry. It must never recompute a number that appears on screen.
  */
-export function sectorSlices(chart?: SectorChartSnapshot): SectorSeriesEntry[] {
+export function sectorSlices(chart?: SectorChartSnapshot, locale: Locale = "en"): SectorSeriesEntry[] {
   if (!Array.isArray(chart?.series)) return [];
   return chart.series.flatMap((value, index) => {
     if (!value || typeof value !== "object") return [];
@@ -43,7 +43,7 @@ export function sectorSlices(chart?: SectorChartSnapshot): SectorSeriesEntry[] {
     const token = String(row.color_token ?? "");
     return [{
       code: String(row.code ?? row.label ?? ""),
-      sector: String(row.label ?? ""),
+      sector: String(locale === "zh-Hans" ? (row.label_zh_hans ?? "") : (row.label ?? "")),
       displayValue: String(row.display_value ?? ""),
       share: (endAngle - startAngle) / 360,
       offset: startAngle / 360,
@@ -53,13 +53,15 @@ export function sectorSlices(chart?: SectorChartSnapshot): SectorSeriesEntry[] {
 }
 
 export function SectorDonut({ chart }: { chart?: SectorChartSnapshot }) {
-  const slices = sectorSlices(chart);
-  const description = String(chart?.alt_text ?? "")
-    || slices.map((slice) => `${slice.sector} ${slice.displayValue}`).join(", ");
+  const { locale, t } = useLocale();
+  const slices = sectorSlices(chart, locale);
+  const description = locale === "zh-Hans"
+    ? `指数行业分布：${slices.map((slice) => `${slice.sector} ${slice.displayValue}`).join("，")}`
+    : String(chart?.alt_text ?? "") || slices.map((slice) => `${slice.sector} ${slice.displayValue}`).join(", ");
 
   return <figure className="sector-donut-figure">
     <svg className="sector-donut" viewBox="0 0 120 120" role="img" aria-labelledby="sector-donut-title sector-donut-desc">
-      <title id="sector-donut-title">Index Sectors Breakdown</title>
+      <title id="sector-donut-title">{t("sectorBreakdown")}</title>
       <desc id="sector-donut-desc">{description}</desc>
       <circle className="sector-donut-track" cx="60" cy="60" r="44" pathLength="100" />
       {slices.map((slice, index) => <circle
@@ -82,3 +84,4 @@ export function SectorDonut({ chart }: { chart?: SectorChartSnapshot }) {
     </figcaption>
   </figure>;
 }
+import { useLocale, type Locale } from "../../i18n";

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..document import DocumentValidationError, checksum, validate_document_content
+from ..localization import month_name
 from ..metrics.final_analytics import calculate_snapshot
 from ..models import DataSnapshot, Report, ReportDocument, ReportStatus
 from .audit import audit
@@ -43,7 +44,7 @@ def update_document(db: Session, report: Report, expected_version: int, content:
     canonical.update({
         "report_id": report.id,
         "report_date": report.report_date.isoformat(),
-        "month_name": report.report_date.strftime("%B"),
+        "month_name": month_name(report.report_date, report.language_mode),
         "product_ticker": product.ticker,
         "benchmark_name": product.benchmark_instrument_name or product.benchmark_instrument_code,
         "template_version": report.template_version,

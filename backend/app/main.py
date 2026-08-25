@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +8,9 @@ from fastapi.responses import JSONResponse
 from app.api.routes import router
 from app.core.config import settings
 from app.core.security import AuthorizationMiddleware
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 def create_app() -> FastAPI:
@@ -72,9 +77,17 @@ def create_app() -> FastAPI:
 
     @application.exception_handler(Exception)
     async def unexpected_error(request: Request, error: Exception):
+        request_id = request.headers.get("X-Request-ID")
+        logger.error(
+            "Unexpected request error request_id=%s method=%s path=%s",
+            request_id or "-",
+            request.method,
+            request.url.path,
+            exc_info=(type(error), error, error.__traceback__),
+        )
         return JSONResponse(
             status_code=500,
-            content={"error_code": "INTERNAL_ERROR", "message": "Unexpected server error.", "severity": "BLOCKING", "fix_hint": "Use the request ID to inspect server logs.", "request_id": request.headers.get("X-Request-ID")},
+            content={"error_code": "INTERNAL_ERROR", "message": "Unexpected server error.", "severity": "BLOCKING", "fix_hint": "Use the request ID to inspect server logs.", "request_id": request_id},
         )
 
     return application

@@ -10,7 +10,13 @@ class ReportCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     product_code: str = "3033"
     report_date: date
-    language_mode: Literal["EN", "ZH_HANT", "BILINGUAL"] = "EN"
+    language_mode: Literal["EN", "ZH_HANS", "ZH_HANT", "BILINGUAL"] = "EN"
+
+
+class LanguageVariantCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language_mode: Literal["EN", "ZH_HANS"]
+    source_document_version: int = Field(ge=1)
 
 
 class ProductRead(BaseModel):
@@ -19,6 +25,7 @@ class ProductRead(BaseModel):
     product_code: str
     ticker: str
     name_en: str
+    name_zh_hans: str | None
     name_zh_hant: str | None
     constituent_index_code: str
     constituent_index_name: str | None
@@ -85,6 +92,7 @@ class ReportRead(BaseModel):
     version: int
     active_snapshot_id: str | None
     parent_report_id: str | None
+    translation_source_report_id: str | None
     revision_reason: str | None
     finalized_document_version: int | None
     template_version: str
@@ -108,6 +116,7 @@ class SnapshotRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     report_id: str
+    source_snapshot_id: str | None
     as_of_date: date
     source_policy: str
     lane: str
@@ -266,10 +275,20 @@ class NewsCatalogSourceFacet(BaseModel):
     value: str
     label: str
     label_zh: str | None = None
+    label_zh_hans: str | None = None
     count: int
 
 
+class NewsCatalogCompanyFacet(BaseModel):
+    security_code: str
+    ticker: str
+    name_en: str
+    name_zh_hans: str | None = None
+    name_zh_hant: str | None = None
+
+
 class NewsCatalogFacets(BaseModel):
+    companies: list[NewsCatalogCompanyFacet]
     sources: list[NewsCatalogSourceFacet]
     sentiments: dict[str, int]
     importance: dict[str, int]
@@ -284,15 +303,21 @@ class DaReportNewsCatalogItem(BaseModel):
     source_code: str
     source_name: str
     source_name_zh: str | None = None
+    source_name_zh_hans: str | None = None
+    source_name_zh_hans_source: Literal["SOURCE_ZH_HANS", "OPENCC_T2S", "MISSING"] = "MISSING"
     published_at: datetime
     published_at_source: Literal["published_at", "fetched_at"]
     fetched_at: datetime
     title: str
     title_en: str | None = None
     title_zh: str | None = None
+    title_zh_hans: str | None = None
+    title_zh_hans_source: Literal["SOURCE_ZH_HANS", "OPENCC_T2S", "MISSING"] = "MISSING"
     summary: str
     summary_en: str | None = None
     summary_zh: str | None = None
+    summary_zh_hans: str | None = None
+    summary_zh_hans_source: Literal["SOURCE_ZH_HANS", "OPENCC_T2S", "MISSING"] = "MISSING"
     category: Literal["Corporate"]
     region: str | None = None
     sentiment: str | None = None

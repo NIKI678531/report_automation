@@ -1,6 +1,6 @@
 # Implementation status against V2.1
 
-Last verified: 2026-08-21
+Last verified: 2026-08-25
 
 ## Implemented and tested
 
@@ -28,10 +28,11 @@ Last verified: 2026-08-21
 - Versioned MappingProfile persistence and administrator API; CSV/XLSX sheet/header scanning now reads field aliases, explicit units and approved unlabelled-column positions from the selected profile. Ambiguous or unknown formats stop in `NEEDS_MAPPING`, and duplicate Bloomberg return groups are recorded without double import.
 - Normalized SnapshotDataset, MetricValue, ModuleSnapshot and QualityCheckResult persistence with Decimal database columns, lineage IDs/checksums, module bindings and read APIs. Existing document sections remain a compatibility projection.
 - Effective-dated HSICS master CSV import with 2/4/6 digit code restoration, hierarchy/effective-range validation and report-date constituent mapping. Non-fixture finalization requires a bound HSICS dataset.
-- A complete valid slot set automatically runs server calculations; Review and Finalize consume the same release gates. Drafts with partial applied data have a tolerant canonical four-page preview, while Finalize remains gated; finalized reports let reviewers batch-select PDF/HTML/DOCX jobs, track each job independently, and use signed downloads.
+- A complete valid slot set automatically runs server calculations, while Review retains the cross-module checks as advisory diagnostics. Under ADR-0014, Finalize version-locks the current document without blocking on those findings; the Downloads menu then generates or reuses PDF/HTML/DOCX artifacts on demand and serves them through signed links.
 - Final Analytics trading-calendar and index-event records, report-date AUM validation, 95% daily-turnover coverage gate, and authoritative next rebalancing selection.
+- Portfolio Analysis always renders its fixed AUM/turnover/holding rows in the workbench, HTML, PDF and DOCX. It resolves every selected report month from that month's snapshot, normalizes supported source amount units to HKD millions, averages only unique authoritative trading days, and exposes raw/display metadata; absent upstream KPI observations are shown as `N/A` rather than silently hiding a row or inventing a value. Month/report-version selection automatically repairs legacy documents missing any of the three portfolio metrics.
 - Product configuration now separates the constituent index (`HSTECH`) from the official return benchmark instrument (`HSTECHN`).
-- Company News opens directly against the complete DA Regional Corporate catalog without requiring an active report snapshot. It supports server-side filters, infinite cursor loading, visible retry errors, bilingual enrichment metadata, manual additions and a retained right-side report editor. Saved DA rows retain external lineage, survive data recalculation, and render source/date/URL across formats; cross-period selection is allowed with a non-blocking post-report-date warning under ADR-0002.
+- Company News opens directly against the complete DA Regional Corporate catalog without requiring an active report snapshot. It supports server-side filters, an optional current-constituent company selector, infinite cursor loading, visible retry errors, bilingual enrichment metadata, manual additions and a retained right-side report editor. Saved DA rows retain external lineage and survive data recalculation; report outputs show only the publisher name while date/URL remain available for audit in the workbench. Cross-period selection is allowed with a non-blocking post-report-date warning under ADR-0002.
 - Legacy combined imports, GICS/sector-override uploads, the old React report module, pnpm files and OneDrive `*-AZ-AI-WS-07*` source/configuration copies have been removed.
 - V2.1 lifecycle states, calculation-before-finalize gating, QC-008 AI number binding, dynamic lineage footnotes, and canonical cross-format content manifests for QC-010 comparison.
 - Page 04 exposes two distinct paths: an explicit constituent CSV identity override and automatic CDB HSTECH identity plus FMP 1M/3M/6M/YTD returns. Both paths produce immutable source lineage; Historical Performance and Final Analytics do not expose manual calculation inputs.
@@ -40,6 +41,9 @@ Last verified: 2026-08-21
 - MetricValue and ModuleSnapshot source IDs now follow an explicit dependency graph instead of referencing every snapshot dataset. Constituent periods are independent from Historical common TR periods.
 - Frontend and canonical HTML/PDF sector breakdowns now render accessible SVG donut charts without a chart library or CSS conic gradients. Chromium waits for fonts/images and fails on footer-safe-area overflow.
 - Visual QA now verifies page-4 required text, a nonblank multicolor donut and its center hole. The latest actual PDF passes these structural checks.
+- English/Simplified Chinese report variants are implemented as independently editable reports. Explicit creation copies immutable snapshot/dataset lineage to new IDs, preserves source checksums, reruns deterministic calculations, regenerates language-specific footnotes, and records OpenCC/manual terminology provenance. Missing Chinese editorial text remains blank and produces a non-blocking warning.
+- The application language selector switches the full workbench between English and Simplified Chinese, remembers the preference locally, selects only the same-month target-language report, and requires an explicit action when that variant does not exist.
+- Preview now restores the approved four-page A4 presentation with the running header, footer CSOP Logo, and page numbers. Downloadable HTML keeps the continuous white document flow, while PDF and DOCX retain the formal four-page structure. Chinese HTML/PDF embed Noto Sans SC data when rendered, while DOCX declares the matching East Asian font.
 
 ## Incomplete or environment-dependent
 
@@ -49,12 +53,12 @@ Last verified: 2026-08-21
 - Azure OpenAI deployment is unavailable. The current assisted draft is deterministic and MetricValue-bound; DA-Report snapshot news and manual approved news ingestion are implemented.
 - Celery/Redis worker separation is represented in deployment topology, but the local implementation executes rendering inline while persisting the same job states. Production queue execution remains to be wired.
 - Object storage and short-lived signed URLs require the company storage endpoint; local artifacts use the workspace filesystem.
-- English golden output is implemented. Full Traditional Chinese and paired bilingual templates, terminology workflow, and language completeness rules remain incomplete.
+- English golden output and independent Simplified Chinese output are implemented. Traditional Chinese and paired bilingual UI/templates remain incomplete and are intentionally deferred by ADR-0016.
 - The output passes four-page A4 validation and page-4 donut/text structure checks but does not meet the specification's recommended 0.5% pixel-difference target against the supplied reference PDF. The latest page-4 difference is 12.0464%; evidence is under `var/artifacts/visual/latest/manifest.json`.
 - Formal Marketing, Business, Data Steward, Security, and UAT approvals are external gates and have not been claimed.
 - The business-approved full CSOP listed-fund CSV has not been supplied. The production catalog therefore contains only the confirmed 3033 baseline; test-only products are never seeded by migrations.
 - Page 04 constituent identity can be loaded automatically from the report-month-effective CDB HSTECH view; 1M/3M/6M/YTD returns are loaded from FMP's dividend-adjusted EOD endpoint using each normalized Hong Kong ticker. An explicit constituent CSV remains an override, and provider tests use HTTP mocks without committed credentials.
-- Review v2 currently supports rich-text blocks, creation/deletion, drag and resize. Dedicated image/data-table block property editors, bilingual block editing, undo/redo history, and DOCX fidelity for complex staggered rows remain incomplete.
+- Review v2 currently supports rich-text blocks, creation/deletion, drag and resize, plus Simplified Chinese terminology overrides. Dedicated image/data-table block property editors, Traditional Chinese/paired bilingual block editing, undo/redo history, and DOCX fidelity for complex staggered rows remain incomplete.
 - The formal report-date 112-subindustry HSICS file, complete KPI/calendar/event feeds, and TOS credentials/object publication remain environment inputs. CDB/FMP credentials also remain deployment secrets. The code fails closed or marks QA blocked rather than copying facts from the PDF.
 
 This file is an implementation ledger, not a waiver. Items above remain part of the active V2.1 objective.

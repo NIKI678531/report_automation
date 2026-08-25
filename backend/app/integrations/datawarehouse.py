@@ -7,7 +7,8 @@ import json
 import os
 import re
 import threading
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ CLASS_MASTER = "view_ads_busi_product_fundinfo_class_f_p"
 FUND_RETURNS = "view_ads_busi_performance_class_returns_f_p"
 INDEX_RETURNS = "view_ads_busi_performance_index_returns_f_p"
 INDEX_CONSTITUENTS = "view_ads_busi_market_index_constituent_price_daily_f_p"
+FUND_AUM = "view_ads_busi_valuation_nav_fund_level_exposure_1_f_p"
 RETURN_COLUMNS = {
     "return_1m": "returns_l1m",
     "return_3m": "returns_l3m",
@@ -37,8 +39,18 @@ REQUIRED_COLUMNS = {
         "trade_date", "index_code", "stock_code", "stock_name", "stock_name_eng", "ccy",
         "index_weight", "close_price", "industry_code", "industry_code2", "industry_code3", "sector",
     },
+    "fund_kpis": {
+        "product_code", "as_of_date", "is_trading_day", "aum", "aum_currency", "aum_unit",
+        "daily_turnover", "turnover_currency", "turnover_unit", "source", "updated_at",
+    },
+    "fund_aum": {"trade_date", "tradar_code", "fund_ccy", "actual_nav_fc"},
 }
 _VIEW_NAME = re.compile(r"^[A-Za-z0-9_]+$")
+_CURRENCY = re.compile(r"^[A-Z]{3}$")
+_AMOUNT_UNITS = {
+    "1", "one", "unit", "units", "k", "thousand", "thousands", "m", "mn", "million",
+    "millions", "b", "bn", "billion", "billions",
+}
 _MATERIALIZE_LOCK = threading.Lock()
 
 
@@ -58,6 +70,10 @@ def _view_names() -> dict[str, str]:
         "index_returns": settings.datawarehouse_index_returns_view,
         "index_constituents": settings.datawarehouse_constituents_view,
     }
+    if settings.datawarehouse_fund_kpi_view:
+        views["fund_kpis"] = settings.datawarehouse_fund_kpi_view
+    if settings.datawarehouse_fund_aum_view:
+        views["fund_aum"] = settings.datawarehouse_fund_aum_view
     invalid = sorted(name for name in views.values() if not _VIEW_NAME.fullmatch(name))
     if invalid:
         raise DataWarehouseProviderError(
@@ -297,6 +313,11 @@ def _validate_schema(
     for role in roles:
         required = REQUIRED_COLUMNS[role]
         table_name = views[role]
+        if not schema.has_table(table_name):
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_SCHEMA_MISMATCH",
+                f"The configured CSOP data-warehouse view does not exist or is not accessible: {table_name}.",
+            )
         actual = {str(column["name"]) for column in schema.get_columns(table_name)}
         missing = sorted(required - actual)
         if missing:
@@ -313,6 +334,25 @@ def _ticker_token(ticker: str) -> str:
 
 def _ticker_matches(raw: Any, expected: str) -> bool:
     return expected in {item.strip().upper() for item in str(raw or "").split("|")}
+
+
+def _listed_share_class(connection, views: dict[str, str], fund_ticker: str) -> dict[str, Any]:
+    expected_ticker = _ticker_token(fund_ticker)
+    candidates = list(connection.execute(text(f"""
+        SELECT class_id, tradar_code, fund_name_en, class_name, class_type, ticker, index_ticker
+        FROM {views['class_master']}
+        WHERE UPPER(class_type) = 'LISTED'
+          AND LOWER(class_name) NOT LIKE '%unlisted%'
+        ORDER BY class_id
+    """)).mappings())
+    share_classes = [row for row in candidates if _ticker_matches(row["ticker"], expected_ticker)]
+    if len(share_classes) != 1:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_MAPPING_NOT_UNIQUE",
+            f"Expected one listed share class for {fund_ticker}; found {len(share_classes)}.",
+            422,
+        )
+    return dict(share_classes[0])
 
 
 def _month_floor(value: date, months_back: int) -> date:
@@ -365,6 +405,454 @@ def _hsics_codes(record: dict[str, Any]) -> dict[str, str | None]:
         "hsics_industry": industry,
         "hsics_sector": sector,
         "hsics_subsector": subsector,
+    }
+
+
+def _calendar_flag(raw: Any, *, record_date: date) -> bool:
+    if raw in (True, 1, "1") or str(raw).strip().lower() in {"true", "yes", "y"}:
+        return True
+    if raw in (False, 0, "0") or str(raw).strip().lower() in {"false", "no", "n"}:
+        return False
+    raise DataWarehouseProviderError(
+        "DATAWAREHOUSE_FUND_KPI_INVALID",
+        f"The fund KPI view has an invalid is_trading_day value on {record_date.isoformat()}.",
+        422,
+    )
+
+
+def _amount_value(raw: Any, *, field: str, record_date: date) -> str | None:
+    if raw is None:
+        return None
+    try:
+        value = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_KPI_INVALID",
+            f"The fund KPI view has a malformed {field} value on {record_date.isoformat()}.",
+            422,
+        ) from error
+    if not value.is_finite() or value < 0:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_KPI_INVALID",
+            f"The fund KPI view has a negative or non-finite {field} value on {record_date.isoformat()}.",
+            422,
+        )
+    return format(value, "f")
+
+
+def _amount_attributes(
+    record: dict[str, Any],
+    *,
+    value_field: str,
+    currency_field: str,
+    unit_field: str,
+    record_date: date,
+) -> tuple[str | None, str | None, str | None]:
+    value = _amount_value(record.get(value_field), field=value_field, record_date=record_date)
+    currency = str(record.get(currency_field) or "").strip().upper()
+    unit = str(record.get(unit_field) or "").strip().lower()
+    if value is None:
+        return None, None, None
+    if not _CURRENCY.fullmatch(currency) or unit not in _AMOUNT_UNITS:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_KPI_INVALID",
+            f"The fund KPI view has an invalid currency or unit for {value_field} on {record_date.isoformat()}.",
+            422,
+        )
+    return value, currency, unit
+
+
+def load_fund_kpis(
+    *,
+    product_code: str,
+    trading_calendar_code: str,
+    report_date: date,
+) -> dict[str, Any]:
+    """Load the configured CDB fund-KPI/calendar contract for one report month.
+
+    The physical view carries one row for every natural date so missing turnover remains distinct
+    from a market closure. AUM is retained at every available trading date; the calculation layer
+    selects the latest one not later than the requested report date.
+    """
+    if not settings.datawarehouse_fund_kpi_view:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_KPI_VIEW_NOT_CONFIGURED",
+            "The approved CDB fund KPI view has not been configured.",
+        )
+    views = _view_names()
+    engine, source = _data_source(views)
+    month_start = report_date.replace(day=1)
+    try:
+        with engine.connect() as connection:
+            _validate_schema(connection, views, ("fund_kpis",))
+            records = list(connection.execute(text(f"""
+                SELECT
+                    product_code, as_of_date, is_trading_day,
+                    aum, aum_currency, aum_unit,
+                    daily_turnover, turnover_currency, turnover_unit,
+                    source, updated_at
+                FROM {views['fund_kpis']}
+                WHERE product_code = :product_code
+                  AND as_of_date BETWEEN :month_start AND :report_date
+                ORDER BY as_of_date
+            """), {
+                "product_code": product_code,
+                "month_start": month_start.isoformat(),
+                "report_date": report_date.isoformat(),
+            }).mappings())
+    except DataWarehouseProviderError:
+        raise
+    except SQLAlchemyError as error:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_KPI_QUERY_FAILED",
+            "Fund KPI data could not be queried from the CSOP data warehouse.",
+        ) from error
+
+    if not records:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_KPI_NOT_FOUND",
+            f"The CDB contains no fund KPI/calendar rows for {product_code} in {report_date:%Y-%m}.",
+            422,
+        )
+
+    expected_dates = {
+        month_start + timedelta(days=offset)
+        for offset in range((report_date - month_start).days + 1)
+    }
+    record_dates: list[date] = []
+    normalized: list[dict[str, Any]] = []
+    for raw_record in records:
+        record = dict(raw_record)
+        raw_date = record.get("as_of_date")
+        try:
+            record_date = raw_date if isinstance(raw_date, date) else date.fromisoformat(str(raw_date))
+        except ValueError as error:
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_FUND_KPI_INVALID",
+                "The fund KPI view contains an invalid as_of_date.",
+                422,
+            ) from error
+        record_dates.append(record_date)
+        if str(record.get("product_code") or "").strip() != product_code:
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_FUND_KPI_INVALID",
+                f"The fund KPI view returned a mismatched product on {record_date.isoformat()}.",
+                422,
+            )
+        source_name = str(record.get("source") or "").strip()
+        if not source_name:
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_FUND_KPI_INVALID",
+                f"The fund KPI view is missing source on {record_date.isoformat()}.",
+                422,
+            )
+        is_trading_day = _calendar_flag(record.get("is_trading_day"), record_date=record_date)
+        aum, aum_currency, aum_unit = _amount_attributes(
+            record,
+            value_field="aum",
+            currency_field="aum_currency",
+            unit_field="aum_unit",
+            record_date=record_date,
+        )
+        turnover, turnover_currency, turnover_unit = _amount_attributes(
+            record,
+            value_field="daily_turnover",
+            currency_field="turnover_currency",
+            unit_field="turnover_unit",
+            record_date=record_date,
+        )
+        if turnover is not None and not is_trading_day:
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_FUND_KPI_INVALID",
+                f"The fund KPI view supplies daily_turnover on a non-trading day ({record_date.isoformat()}).",
+                422,
+            )
+        normalized.append({
+            "date": record_date,
+            "is_trading_day": is_trading_day,
+            "aum": aum,
+            "aum_currency": aum_currency,
+            "aum_unit": aum_unit,
+            "turnover": turnover,
+            "turnover_currency": turnover_currency,
+            "turnover_unit": turnover_unit,
+            "source": source_name,
+        })
+
+    if len(record_dates) != len(set(record_dates)):
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_KPI_DUPLICATE",
+            "The fund KPI view contains more than one row for the same product and date.",
+            422,
+        )
+    missing_calendar_dates = sorted(expected_dates - set(record_dates))
+    extra_calendar_dates = sorted(set(record_dates) - expected_dates)
+    if missing_calendar_dates or extra_calendar_dates:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_KPI_CALENDAR_INCOMPLETE",
+            "The fund KPI view must contain exactly one calendar row for every date in the query window.",
+            422,
+        )
+
+    fund_kpis: list[dict[str, Any]] = []
+    calendar: list[dict[str, Any]] = []
+    for record in normalized:
+        record_date = record["date"].isoformat()
+        calendar.append({
+            "market": trading_calendar_code,
+            "date": record_date,
+            "is_trading_day": record["is_trading_day"],
+            "source": record["source"],
+        })
+        if record["is_trading_day"] and record["aum"] is not None:
+            fund_kpis.append({
+                "metric_code": "AUM",
+                "metric_date": record_date,
+                "value": record["aum"],
+                "unit": record["aum_unit"],
+                "currency": record["aum_currency"],
+                "source": record["source"],
+            })
+        if record["is_trading_day"] and record["turnover"] is not None:
+            fund_kpis.append({
+                "metric_code": "DAILY_TURNOVER",
+                "metric_date": record_date,
+                "value": record["turnover"],
+                "unit": record["turnover_unit"],
+                "currency": record["turnover_currency"],
+                "source": record["source"],
+            })
+
+    fund_kpis.sort(key=lambda row: (row["metric_date"], row["metric_code"]))
+    aum_dates = [row["metric_date"] for row in fund_kpis if row["metric_code"] == "AUM"]
+    turnover_dates = [row["metric_date"] for row in fund_kpis if row["metric_code"] == "DAILY_TURNOVER"]
+    findings: list[dict[str, Any]] = []
+    for missing_code, present, message in (
+        ("DATAWAREHOUSE_AUM_NOT_FOUND", aum_dates, "The CDB fund KPI view contains no AUM observation in the report month."),
+        ("DATAWAREHOUSE_TURNOVER_NOT_FOUND", turnover_dates, "The CDB fund KPI view contains no daily-turnover observation in the report month."),
+    ):
+        if not present:
+            findings.append({
+                "check_id": missing_code,
+                "error_code": missing_code,
+                "severity": "BLOCKING",
+                "status": "FAILED",
+                "message": message,
+                "actual": {"product_code": product_code, "report_month": report_date.strftime("%Y-%m")},
+                "threshold": "At least one report-month observation",
+                "fix_hint": "Populate the approved CDB fund KPI view and refresh automatic data.",
+            })
+
+    serialized = json.dumps(
+        {"fund_kpis": fund_kpis, "trading_calendar": calendar},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    payload_checksum = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    source_checksum = source["file_checksum"] or payload_checksum
+    source_object = f"{source['source_object'].split('#', 1)[0]}#{views['fund_kpis']}"
+    extracted_at = datetime.now(timezone.utc).isoformat()
+    common_lineage = {
+        "source_system": source["source_system"],
+        "source_checksum": source_checksum,
+        "source_table": views["fund_kpis"],
+        "query_window": {"from": month_start.isoformat(), "to": report_date.isoformat()},
+        "requested_report_date": report_date.isoformat(),
+        "extracted_at": extracted_at,
+    }
+    datasets = {
+        "fund_kpi_daily": {
+            "source_type": source["source_type"],
+            "source_name": source["source_name"],
+            "source_object": source_object,
+            "row_count": len(fund_kpis),
+            "checksum": hashlib.sha256(json.dumps(fund_kpis, sort_keys=True).encode("utf-8")).hexdigest(),
+            "mapping_version": "cdb-fund-kpi-v1",
+            "lineage": {
+                **common_lineage,
+                "effective_as_of": max(aum_dates) if aum_dates else None,
+                "source_record_keys": [
+                    f"{product_code}:{row['metric_date']}:{row['metric_code']}" for row in fund_kpis
+                ],
+                "source_field_map": {"AUM": "aum", "DAILY_TURNOVER": "daily_turnover"},
+            },
+        },
+        "trading_calendar": {
+            "source_type": source["source_type"],
+            "source_name": source["source_name"],
+            "source_object": source_object,
+            "row_count": len(calendar),
+            "checksum": hashlib.sha256(json.dumps(calendar, sort_keys=True).encode("utf-8")).hexdigest(),
+            "mapping_version": "cdb-fund-kpi-v1",
+            "lineage": {
+                **common_lineage,
+                "source_record_keys": [f"{product_code}:{row['date']}" for row in calendar],
+                "source_field_map": {"date": "as_of_date", "is_trading_day": "is_trading_day"},
+            },
+        },
+    }
+    return {
+        "fund_kpis": fund_kpis,
+        "trading_calendar": calendar,
+        "datasets": datasets,
+        "source_checksum": source_checksum,
+        "_findings": findings,
+    }
+
+
+def load_fund_aum(
+    *,
+    fund_ticker: str,
+    product_code: str,
+    report_date: date,
+) -> dict[str, Any]:
+    """Load latest report-month fund-level AUM from the existing CDB valuation view.
+
+    This bridge deliberately supplies only AUM. It neither estimates exchange turnover nor
+    manufactures a trading calendar; those remain owned by the unified fund-KPI contract.
+    """
+    if not settings.datawarehouse_fund_aum_view:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_AUM_VIEW_NOT_CONFIGURED",
+            "The approved CDB fund AUM view has not been configured.",
+        )
+    views = _view_names()
+    engine, source = _data_source(views)
+    month_start = report_date.replace(day=1)
+    try:
+        with engine.connect() as connection:
+            _validate_schema(connection, views, ("class_master", "fund_aum"))
+            share_class = _listed_share_class(connection, views, fund_ticker)
+            records = list(connection.execute(text(f"""
+                SELECT trade_date, tradar_code, fund_ccy, actual_nav_fc
+                FROM {views['fund_aum']}
+                WHERE tradar_code = :tradar_code
+                  AND trade_date BETWEEN :month_start AND :report_date
+                  AND actual_nav_fc IS NOT NULL
+                ORDER BY trade_date
+            """), {
+                "tradar_code": share_class["tradar_code"],
+                "month_start": month_start.isoformat(),
+                "report_date": report_date.isoformat(),
+            }).mappings())
+    except DataWarehouseProviderError:
+        raise
+    except SQLAlchemyError as error:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_AUM_QUERY_FAILED",
+            "Fund AUM could not be queried from the CSOP data warehouse.",
+        ) from error
+
+    if not records:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_AUM_NOT_FOUND",
+            f"The CDB contains no fund-level AUM for {product_code} in {report_date:%Y-%m} through the report date.",
+            422,
+        )
+
+    normalized: list[dict[str, Any]] = []
+    for raw_record in records:
+        record = dict(raw_record)
+        raw_date = record.get("trade_date")
+        try:
+            record_date = raw_date if isinstance(raw_date, date) else date.fromisoformat(str(raw_date))
+        except (TypeError, ValueError) as error:
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_FUND_AUM_INVALID",
+                "The fund AUM view contains an invalid trade_date.",
+                422,
+            ) from error
+        if str(record.get("tradar_code") or "").strip() != str(share_class["tradar_code"]):
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_FUND_AUM_INVALID",
+                f"The fund AUM view returned a mismatched fund on {record_date.isoformat()}.",
+                422,
+            )
+        value = _amount_value(record.get("actual_nav_fc"), field="actual_nav_fc", record_date=record_date)
+        currency = str(record.get("fund_ccy") or "").strip().upper()
+        if value is None or not _CURRENCY.fullmatch(currency):
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_FUND_AUM_INVALID",
+                f"The fund AUM view has an invalid value or currency on {record_date.isoformat()}.",
+                422,
+            )
+        normalized.append({"date": record_date, "value": value, "currency": currency})
+
+    dates = [row["date"] for row in normalized]
+    if len(dates) != len(set(dates)):
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_AUM_DUPLICATE",
+            "The fund AUM view contains more than one row for the same fund and date.",
+            422,
+        )
+    currencies = {row["currency"] for row in normalized}
+    if len(currencies) != 1:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_FUND_AUM_INVALID",
+            "The fund AUM view changes currency within the report month.",
+            422,
+        )
+
+    latest = max(normalized, key=lambda row: row["date"])
+    metric_date = latest["date"].isoformat()
+    fund_kpis = [{
+        "metric_code": "AUM",
+        "metric_date": metric_date,
+        "value": latest["value"],
+        "unit": "unit",
+        "currency": latest["currency"],
+        "source": "CSOP Data Warehouse fund-level valuation",
+    }]
+    payload_checksum = hashlib.sha256(
+        json.dumps(fund_kpis, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    source_checksum = source["file_checksum"] or payload_checksum
+    source_object = f"{source['source_object'].split('#', 1)[0]}#{views['fund_aum']}"
+    metadata = {
+        "source_type": source["source_type"],
+        "source_name": source["source_name"],
+        "source_object": source_object,
+        "row_count": 1,
+        "checksum": payload_checksum,
+        "mapping_version": "cdb-fund-aum-v1",
+        "lineage": {
+            "source_system": source["source_system"],
+            "source_checksum": source_checksum,
+            "source_table": views["fund_aum"],
+            "source_record_keys": [f"{share_class['tradar_code']}:{metric_date}"],
+            "query_window": {"from": month_start.isoformat(), "to": report_date.isoformat()},
+            "requested_report_date": report_date.isoformat(),
+            "effective_as_of": metric_date,
+            "source_field_map": {
+                "metric_date": "trade_date",
+                "value": "actual_nav_fc",
+                "currency": "fund_ccy",
+                "unit": "constant:unit",
+            },
+            "product_mapping": {
+                "product_code": product_code,
+                "fund_ticker": fund_ticker,
+                "tradar_code": str(share_class["tradar_code"]),
+                "class_id": str(share_class["class_id"]),
+            },
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    return {
+        "fund_kpis": fund_kpis,
+        "datasets": {"fund_kpi_daily": metadata},
+        "source_checksum": source_checksum,
+        "_findings": [{
+            "check_id": "DATAWAREHOUSE_TURNOVER_VIEW_NOT_CONFIGURED",
+            "error_code": "DATAWAREHOUSE_TURNOVER_VIEW_NOT_CONFIGURED",
+            "severity": "BLOCKING",
+            "status": "FAILED",
+            "message": "AUM was loaded from CDB, but the approved unified daily-turnover/calendar view is not configured.",
+            "actual": {"product_code": product_code, "report_month": report_date.strftime("%Y-%m")},
+            "threshold": "Approved daily turnover and trading calendar for the report month",
+            "fix_hint": "Provision and configure DATAWAREHOUSE_FUND_KPI_VIEW, then refresh automatic data.",
+        }],
     }
 
 
@@ -488,27 +976,12 @@ def load_historical_performance(
         raise ValueError("month_count must be between 1 and 24")
     views = _view_names()
     engine, source = _data_source(views)
-    expected_ticker = _ticker_token(fund_ticker)
     benchmark_prefix = benchmark_instrument_code.strip().upper()
     history_start = _month_floor(report_date, month_count - 1)
     try:
         with engine.connect() as connection:
             _validate_schema(connection, views)
-            candidates = list(connection.execute(text(f"""
-                SELECT class_id, tradar_code, fund_name_en, class_name, class_type, ticker, index_ticker
-                FROM {views['class_master']}
-                WHERE UPPER(class_type) = 'LISTED'
-                  AND LOWER(class_name) NOT LIKE '%unlisted%'
-                ORDER BY class_id
-            """)).mappings())
-            share_classes = [row for row in candidates if _ticker_matches(row["ticker"], expected_ticker)]
-            if len(share_classes) != 1:
-                raise DataWarehouseProviderError(
-                    "DATAWAREHOUSE_FUND_MAPPING_NOT_UNIQUE",
-                    f"Expected one listed share class for {fund_ticker}; found {len(share_classes)}.",
-                    422,
-                )
-            share_class = share_classes[0]
+            share_class = _listed_share_class(connection, views, fund_ticker)
             query_parameters = {
                 "class_id": share_class["class_id"],
                 "tradar_code": share_class["tradar_code"],

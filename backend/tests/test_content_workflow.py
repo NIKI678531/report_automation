@@ -44,7 +44,7 @@ def test_calculation_and_ai_draft_are_versioned_and_bound(client):
     assert next(item for item in review.json()["checks"] if item["check_id"] == "QC-008")["status"] == "PASSED"
 
 
-def test_ai_number_check_blocks_unbound_numbers(client):
+def test_ai_number_check_remains_advisory_for_unbound_numbers(client):
     report_id = prepared_report(client)
     detail = client.get(f"/api/v1/reports/{report_id}").json()
     drafted = client.post(
@@ -66,9 +66,11 @@ def test_ai_number_check_blocks_unbound_numbers(client):
         f"/api/v1/reports/{report_id}/finalize",
         json={"version": saved.json()["version"]},
     )
-    assert finalized.status_code == 422
-    assert finalized.json()["error_code"] == "QC-008"
-    assert client.get(f"/api/v1/reports/{report_id}").json()["status"] == "QA_BLOCKED"
+    assert finalized.status_code == 200, finalized.text
+    assert finalized.json()["status"] == "FINALIZED"
+    events = client.get("/api/v1/audit").json()
+    event = next(item for item in events if item["action"] == "report.finalized" and item["entity_id"] == report_id)
+    assert "QC-008" in event["details"]["advisory_check_ids"]
 
 
 def test_news_candidate_selection_and_order(client):
@@ -109,7 +111,7 @@ def test_manual_news_can_be_outside_the_report_month(client):
     assert response.json()["title"] == "Before the report month"
 
 
-def test_selected_news_survives_recalculation_and_renders_month_metadata(client):
+def test_selected_news_survives_recalculation_and_renders_source_only(client):
     report_id = prepared_report(client)
     candidate = client.post(f"/api/v1/reports/{report_id}/news/candidates", json={
         "source_name": "Reuters",
@@ -132,10 +134,33 @@ def test_selected_news_survives_recalculation_and_renders_month_metadata(client)
     assert recalculated.status_code == 200, recalculated.text
     content = client.get(f"/api/v1/reports/{report_id}").json()["latest_document"]["content"]
     assert [item["title"] for item in content["sections"]["company_news"]] == ["June selected headline"]
+    stored_news = content["sections"]["company_news"][0]
+    assert stored_news["published_at"].startswith("2026-06-12")
+    assert stored_news["source_url"] == "https://example.test/june-news"
     preview = client.post(f"/api/v1/reports/{report_id}/preview")
     assert "Reuters" in preview.text
-    assert "2026-06-12" in preview.text
-    assert "https://example.test/june-news" in preview.text
+    assert '<div class="news-meta">Reuters</div>' in preview.text
+    assert "2026-06-12" not in preview.text
+    assert "https://example.test/june-news" not in preview.text
+
+    latest = client.get(f"/api/v1/reports/{report_id}").json()
+    finalized = client.post(
+        f"/api/v1/reports/{report_id}/finalize",
+        json={"version": latest["latest_document"]["version"]},
+    )
+    assert finalized.status_code == 200, finalized.text
+    rendered = client.post(
+        f"/api/v1/reports/{report_id}/renders",
+        json={"formats": ["docx"]},
+        headers={"Idempotency-Key": f"news-source-only-{report_id}"},
+    )
+    assert rendered.status_code == 202, rendered.text
+    signed = client.get(f"/api/v1/artifacts/{rendered.json()[0]['artifact_id']}/download").json()
+    document = Document(io.BytesIO(client.get(signed["download_url"]).content))
+    docx_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "Reuters" in docx_text
+    assert "2026-06-12" not in docx_text
+    assert "https://example.test/june-news" not in docx_text
 
 
 def test_review_accepts_complete_golden_editorial(client):

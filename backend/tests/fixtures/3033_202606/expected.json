@@ -106,16 +106,16 @@
     ],
     "bottom": [
       {
-        "security_code": "2382",
-        "return_1m_pct": -26.12
+        "security_code": "100",
+        "return_1m_pct": -50.36
       },
       {
         "security_code": "285",
         "return_1m_pct": -27.78
       },
       {
-        "security_code": "100",
-        "return_1m_pct": -50.36
+        "security_code": "2382",
+        "return_1m_pct": -26.12
       }
     ],
     "portfolio": [

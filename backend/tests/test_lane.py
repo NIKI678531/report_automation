@@ -140,7 +140,7 @@ def test_every_rendered_format_carries_the_testing_mark(client, finalized_testin
         download = client.get(signed["download_url"])
         assert download.status_code == 200
         # The name is what survives the file leaving the tool, so the lane has to be in it.
-        assert f'filename="TESTING-3033_2026-06-30_v3.{job["format"]}"' in download.headers["content-disposition"]
+        assert f'filename="TESTING-3033_2026-06-30_EN_v3.{job["format"]}"' in download.headers["content-disposition"]
         if job["format"] == "html":
             html = download.text
             assert html.count('class="testing-mark"') == 4

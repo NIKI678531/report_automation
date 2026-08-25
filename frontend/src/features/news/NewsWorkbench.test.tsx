@@ -43,6 +43,7 @@ const report: Report = {
   constituent_index_code: "HSTECH",
   benchmark_instrument_code: "HSTECHN",
   benchmark_code: "HSTECH",
+  language_mode: "EN",
   report_date: "2026-06-30",
   lane: "PRODUCTION",
   status: "DRAFT",
@@ -59,6 +60,7 @@ const page = {
   has_more: false,
   next_cursor: null,
   facets: {
+    companies: [{ security_code: "700", ticker: "0700.HK", name_en: "TENCENT", name_zh_hant: "騰訊控股" }],
     sources: [{ value: "reuters", label: "Reuters", label_zh: "路透", count: 1 }],
     sentiments: { bull: 1 },
     importance: { HIGH: 1 },
@@ -129,6 +131,24 @@ describe("Company News automatic catalog loading", () => {
       "report-1",
       expect.objectContaining({ query: "Tencent" }),
     ));
+    await user.selectOptions(screen.getByLabelText("Filter by company"), "700");
+    await waitFor(() => expect(catalog).toHaveBeenLastCalledWith(
+      "report-1",
+      expect.objectContaining({ query: "Tencent", company: "700" }),
+    ));
+    await user.click(screen.getByRole("button", { name: /Clear filters/ }));
+    expect((screen.getByLabelText("Filter by company") as HTMLSelectElement).value).toBe("");
+  });
+
+  it("disables the company filter when no constituent snapshot is available", async () => {
+    vi.spyOn(api, "listCompanyNewsCatalog").mockResolvedValue({
+      ...page,
+      facets: { ...page.facets, companies: [] },
+    });
+    render(<CompanyNewsWorkbench report={report} busy={false} run={run} selectedSnapshot={[]} />);
+
+    expect(await screen.findByText("DA-Report headline")).toBeTruthy();
+    expect((screen.getByLabelText("Filter by company") as HTMLSelectElement).disabled).toBe(true);
   });
 
   it("shows a visible error and retries the catalog request", async () => {

@@ -22,6 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.integrations.news import NewsProviderError
+from app.domain.localization import traditional_to_simplified
 
 
 NEWS_REQUIRED_COLUMNS = {
@@ -83,6 +84,50 @@ def _contains_alias(text_value: str, alias: str) -> bool:
         rf"(?<![{_LATIN_BOUNDARY}]){re.escape(alias)}(?![{_LATIN_BOUNDARY}])",
         text_value,
     ) is not None
+
+
+def _sqlite_contains_company_alias(text_value: Any, alias: Any) -> int:
+    """SQLite scalar used so company matching participates in count and pagination."""
+    normalized_alias = _normalize_text(alias)
+    if not normalized_alias:
+        return 0
+    return int(_contains_alias(_normalize_text(text_value), normalized_alias))
+
+
+def _company_aliases(constituent: dict[str, Any]) -> list[str]:
+    source_names = constituent.get("source_names") if isinstance(constituent.get("source_names"), dict) else {}
+    values = (
+        constituent.get("report_display_name"),
+        constituent.get("name_en"),
+        constituent.get("name_zh_hant"),
+        constituent.get("name_zh_hans"),
+        *source_names.values(),
+    )
+    aliases: list[str] = []
+    for value in values:
+        alias = _normalize_text(value)
+        if len(alias) >= 2 and alias not in aliases:
+            aliases.append(alias)
+    return aliases
+
+
+def _company_facets(constituents: list[dict[str, Any]]) -> list[dict[str, str | None]]:
+    facets: list[dict[str, str | None]] = []
+    seen: set[str] = set()
+    for row in constituents:
+        security_code = str(row.get("security_code") or "").strip()
+        if not security_code or security_code in seen:
+            continue
+        seen.add(security_code)
+        name_en = str(row.get("name_en") or row.get("name_zh_hant") or security_code).strip()
+        facets.append({
+            "security_code": security_code,
+            "ticker": str(row.get("ticker") or "").strip(),
+            "name_en": name_en,
+            "name_zh_hans": str(row.get("name_zh_hans") or "").strip() or None,
+            "name_zh_hant": str(row.get("name_zh_hant") or "").strip() or None,
+        })
+    return facets
 
 
 def _constituent_aliases(constituents: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
@@ -236,6 +281,12 @@ def _engine(path: str) -> Engine:
     @event.listens_for(engine, "connect")
     def configure_read_only(dbapi_connection, connection_record) -> None:
         del connection_record
+        dbapi_connection.create_function(
+            "contains_company_alias",
+            2,
+            _sqlite_contains_company_alias,
+            deterministic=True,
+        )
         dbapi_connection.execute("PRAGMA query_only=ON")
 
     return engine
@@ -510,6 +561,7 @@ def _catalog_filter_signature(
     importance: str | None,
     from_date: date | None,
     to_date: date | None,
+    company: str | None,
 ) -> str:
     payload = {
         "query": (query or "").strip(),
@@ -518,6 +570,7 @@ def _catalog_filter_signature(
         "importance": importance or "",
         "from_date": from_date.isoformat() if from_date else "",
         "to_date": to_date.isoformat() if to_date else "",
+        "company": company or "",
     }
     encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -556,6 +609,9 @@ def _decode_catalog_cursor(cursor: str, sort: str, signature: str) -> tuple[str,
 
 
 def _catalog_item(row: Any) -> dict[str, Any]:
+    source_name_zh_hans = traditional_to_simplified(row["source_name_zh"]) if row["source_name_zh"] else None
+    title_zh_hans = traditional_to_simplified(row["title_zh"]) if row["title_zh"] else None
+    summary_zh_hans = traditional_to_simplified(row["summary_zh"]) if row["summary_zh"] else None
     return {
         "provider": "DA_REPORT",
         "external_id": str(row["external_id"]),
@@ -563,15 +619,21 @@ def _catalog_item(row: Any) -> dict[str, Any]:
         "source_code": row["source_code"],
         "source_name": row["source_name_en"] or row["source_name_zh"] or row["source_code"],
         "source_name_zh": row["source_name_zh"],
+        "source_name_zh_hans": source_name_zh_hans,
+        "source_name_zh_hans_source": "OPENCC_T2S" if source_name_zh_hans else "MISSING",
         "published_at": _published_at(str(row["effective_at"])),
         "published_at_source": "published_at" if row["published_at"] else "fetched_at",
         "fetched_at": row["fetched_at"],
         "title": row["title_en"] or row["title_zh"] or row["title_raw"] or "",
         "title_en": row["title_en"],
         "title_zh": row["title_zh"],
+        "title_zh_hans": title_zh_hans,
+        "title_zh_hans_source": "OPENCC_T2S" if title_zh_hans else "MISSING",
         "summary": row["summary_en"] or row["summary_zh"] or row["summary_raw"] or "",
         "summary_en": row["summary_en"],
         "summary_zh": row["summary_zh"],
+        "summary_zh_hans": summary_zh_hans,
+        "summary_zh_hans_source": "OPENCC_T2S" if summary_zh_hans else "MISSING",
         "category": row["category"],
         "region": row["region"],
         "sentiment": row["sentiment"],
@@ -591,6 +653,8 @@ def _list_company_news_catalog_sync(
     sort: str,
     cursor: str | None,
     limit: int,
+    constituents: list[dict[str, Any]],
+    company: str | None,
 ) -> dict[str, Any]:
     _verify_file(path)
     if sort not in {"newest", "oldest"}:
@@ -623,6 +687,35 @@ def _list_company_news_catalog_sync(
             "COALESCE(s.name_en, '') || ' ' || COALESCE(s.name_zh, '')) LIKE :" + key
         )
         parameters[key] = f"%{term.casefold()}%"
+    normalized_company = (company or "").strip()
+    if normalized_company:
+        selected_company = next(
+            (
+                row for row in constituents
+                if str(row.get("security_code") or "").strip() == normalized_company
+            ),
+            None,
+        )
+        if selected_company is None:
+            raise DaReportProviderError(
+                "DA_REPORT_COMPANY_INVALID",
+                "The selected company is not part of this report's constituent snapshot.",
+                422,
+            )
+        aliases = _company_aliases(selected_company)
+        title_expression = (
+            "COALESCE(e.title_en, '') || ' ' || COALESCE(e.title_zh, '') || ' ' || "
+            "COALESCE(i.title_raw, '')"
+        )
+        if aliases:
+            company_predicates: list[str] = []
+            for index, alias in enumerate(aliases):
+                key = f"company_alias_{index}"
+                company_predicates.append(f"contains_company_alias({title_expression}, :{key}) = 1")
+                parameters[key] = alias
+            predicates.append("(" + " OR ".join(company_predicates) + ")")
+        else:
+            predicates.append("0 = 1")
     if source:
         predicates.append("s.code = :source")
         parameters["source"] = source
@@ -647,7 +740,7 @@ def _list_company_news_catalog_sync(
         parameters["to_date_exclusive"] = (to_date + timedelta(days=1)).isoformat()
 
     where_sql = " WHERE " + " AND ".join(f"({predicate})" for predicate in predicates)
-    signature = _catalog_filter_signature(query, source, sentiment, importance, from_date, to_date)
+    signature = _catalog_filter_signature(query, source, sentiment, importance, from_date, to_date, normalized_company)
     page_predicates = list(predicates)
     if cursor:
         cursor_at, cursor_id = _decode_catalog_cursor(cursor, sort, signature)
@@ -711,6 +804,7 @@ def _list_company_news_catalog_sync(
                 "value": str(row["value"]),
                 "label": row["label"] or row["label_zh"] or row["value"],
                 "label_zh": row["label_zh"],
+                "label_zh_hans": traditional_to_simplified(row["label_zh"]) if row["label_zh"] else None,
                 "count": int(row["count"]),
             } for row in connection.execute(text(
                 "SELECT s.code AS value, s.name_en AS label, s.name_zh AS label_zh, COUNT(*) AS count "
@@ -758,6 +852,7 @@ def _list_company_news_catalog_sync(
         "has_more": len(rows) > limit,
         "next_cursor": next_cursor,
         "facets": {
+            "companies": _company_facets(constituents),
             "sources": sources,
             "sentiments": sentiments,
             "importance": importance_counts,
@@ -777,6 +872,8 @@ async def list_company_news_catalog(
     sort: Literal["newest", "oldest"] = "newest",
     cursor: str | None = None,
     limit: int = 50,
+    constituents: list[dict[str, Any]] | None = None,
+    company: str | None = None,
 ) -> dict[str, Any]:
     return await asyncio.to_thread(
         _list_company_news_catalog_sync,
@@ -790,6 +887,8 @@ async def list_company_news_catalog(
         sort,
         cursor,
         limit,
+        constituents or [],
+        company,
     )
 
 
@@ -936,6 +1035,12 @@ def _fetch_sync(
                         "scope": "CONSTITUENTS",
                         "site": urlparse(source_url).hostname,
                         "external_id": str(row["external_id"]),
+                        "source_name_en": row["source_name_en"],
+                        "source_name_zh": row["source_name_zh"],
+                        "title_en": row["title_en"],
+                        "title_zh": row["title_zh"],
+                        "summary_en": row["summary_en"],
+                        "summary_zh": row["summary_zh"],
                         "source_code": row["source_code"],
                         "fetched_at": row["fetched_at"],
                         "region": row["region"],

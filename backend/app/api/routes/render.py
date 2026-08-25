@@ -20,6 +20,7 @@ from app.domain import service
 from app.domain.models import JobStatus, RenderArtifact, RenderJob, ReportStatus
 from app.domain.schemas import JobRead, RenderRequest
 from app.worker import dispatch_render
+from app.rendering.artifacts import renderer_version_for
 from .deps import Db, RequestId
 
 router = APIRouter()
@@ -37,7 +38,7 @@ def render_outputs(
     if report.status != ReportStatus.FINALIZED:
         raise HTTPException(status_code=422, detail={"error_code": "FINALIZATION_REQUIRED", "message": "Finalize the report before rendering artifacts."})
     # Fail before queuing anything if the report has no document to render.
-    service.latest_document(db, report_id)
+    document = service.latest_document(db, report_id)
     jobs = []
     for format_name in dict.fromkeys(command.formats):
         key = f"{idempotency_key}:{format_name}" if idempotency_key else None
@@ -46,6 +47,27 @@ def render_outputs(
             if existing:
                 jobs.append(existing)
                 continue
+        current_artifact = db.scalar(select(RenderArtifact).where(
+            RenderArtifact.report_id == report.id,
+            RenderArtifact.document_version == document.version,
+            RenderArtifact.format == format_name,
+            RenderArtifact.renderer_version == renderer_version_for(format_name),
+        ).order_by(RenderArtifact.created_at.desc()))
+        if current_artifact and current_artifact.content_manifest.get("language_mode", report.language_mode) == report.language_mode:
+            job = RenderJob(
+                report_id=report.id,
+                format=format_name,
+                status=JobStatus.SUCCEEDED,
+                progress=100,
+                stage="reused",
+                idempotency_key=key,
+                artifact_id=current_artifact.id,
+            )
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+            jobs.append(job)
+            continue
         job = RenderJob(report_id=report.id, format=format_name, status=JobStatus.QUEUED, progress=0, stage="queued", idempotency_key=key)
         db.add(job); db.commit(); db.refresh(job)
         try:

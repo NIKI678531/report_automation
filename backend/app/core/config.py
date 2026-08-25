@@ -87,6 +87,14 @@ class Settings(BaseModel):
     datawarehouse_constituents_view: str = os.getenv(
         "DATAWAREHOUSE_CONSTITUENTS_VIEW", "view_ads_busi_market_index_constituent_price_daily_f_p"
     )
+    # Existing approved fund-level valuation view. This can supply AUM independently while the
+    # unified daily KPI/calendar contract below is being provisioned.
+    datawarehouse_fund_aum_view: str | None = os.getenv(
+        "DATAWAREHOUSE_FUND_AUM_VIEW", "view_ads_busi_valuation_nav_fund_level_exposure_1_f_p"
+    )
+    # Optional unified CDB contract for Portfolio Analysis. When configured, it is authoritative
+    # for both fund_kpi_daily and trading_calendar; DA-Report is not used as a silent fallback.
+    datawarehouse_fund_kpi_view: str | None = os.getenv("DATAWAREHOUSE_FUND_KPI_VIEW")
     datawarehouse_sqlite_path: Path | None = (
         Path(os.environ["DATAWAREHOUSE_SQLITE_PATH"]).expanduser()
         if os.getenv("DATAWAREHOUSE_SQLITE_PATH")
