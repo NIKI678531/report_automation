@@ -1,0 +1,8 @@
+# Development happens on Windows while CI and the containers run Linux; normalise on checkin
+# so line endings never show up as diff noise.
+* text=auto eol=lf
+
+*.png binary
+*.pdf binary
+*.docx binary
+*.xlsx binary

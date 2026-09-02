@@ -1,0 +1,159 @@
+export const REPORT_MODULES = [
+	{ id: "review", label: "Review", pageLabel: "01" },
+	{ id: "performance", label: "Historical Performance", pageLabel: "02" },
+	{ id: "news", label: "Company News", pageLabel: "03" },
+	{ id: "constituents", label: "Constituent Performance", pageLabel: "04" },
+	{ id: "analytics", label: "Final Analytics", pageLabel: "05" },
+	{ id: "footnotes", label: "Footnotes & Disclosures", pageLabel: "06" },
+] as const;
+
+export const FOOTNOTE_SECTIONS = [
+	{ key: "historical", label: "Historical", boundTo: "Historical Performance" },
+	{ key: "constituents", label: "Constituents", boundTo: "Constituent Performance" },
+	{ key: "analytics", label: "Analytics", boundTo: "Final Analytics" },
+] as const;
+
+export type FootnoteSectionKey = (typeof FOOTNOTE_SECTIONS)[number]["key"];
+
+export type ModuleId = (typeof REPORT_MODULES)[number]["id"];
+
+interface ReportIdentity {
+	product_code: string;
+	report_date: string;
+	latest_document?: { content: Record<string, unknown> } | null;
+}
+
+interface ReportContextItem {
+	product_code: string;
+	report_date: string;
+	language_mode?: string;
+}
+
+export function isReportReadOnly(report: { status: string }): boolean {
+	return report.status === "FINALIZED" || report.status === "ARCHIVED";
+}
+
+interface InitialReportItem extends ReportContextItem {
+	version: number;
+	lane: string;
+	revision?: number;
+	status?: string;
+	created_at?: string;
+}
+
+interface ConstituentIndexIdentity {
+	constituent_index_code: string;
+}
+
+interface ReviewBlockContent {
+	block_id?: unknown;
+	type?: unknown;
+	content?: unknown;
+}
+
+const REVIEW_PLACEHOLDERS = new Set([
+	"add monthly market review.",
+	"add outlook.",
+	"no content yet.",
+	"start writing...",
+]);
+
+export function reviewPlainText(value: unknown): string {
+	if (typeof value !== "string") return "";
+	return value
+		.replace(/<[^>]+>/g, " ")
+		.replace(/&nbsp;|&#160;/gi, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+function isSubstantiveReviewText(value: unknown): boolean {
+	const text = reviewPlainText(value);
+	if (!text) return false;
+	const normalized = text.toLocaleLowerCase("en");
+	return !REVIEW_PLACEHOLDERS.has(normalized) && !normalized.startsWith("add the approved");
+}
+
+function reviewBlocks(review: Record<string, unknown>): ReviewBlockContent[] {
+	return Array.isArray(review.blocks)
+		? review.blocks.filter((block): block is ReviewBlockContent => Boolean(block) && typeof block === "object")
+		: [];
+}
+
+export function reviewHasContent(review: Record<string, unknown>): boolean {
+	const blocks = reviewBlocks(review);
+	if (blocks.length) return blocks.some((block) => isSubstantiveReviewText(block.content));
+	return isSubstantiveReviewText(review.summary);
+}
+
+export function reviewLegacyText(blocks: ReviewBlockContent[]): { summary: string; outlook: string } {
+	const substantive = blocks.filter((block) => isSubstantiveReviewText(block.content));
+	const summary = substantive.find((block) => block.block_id === "summary")
+		?? substantive.find((block) => block.type === "rich_text")
+		?? substantive[0];
+	const outlook = substantive.find((block) => block.block_id === "outlook")
+		?? substantive.find((block) => block.type === "outlook");
+	return {
+		summary: reviewPlainText(summary?.content),
+		outlook: reviewPlainText(outlook?.content),
+	};
+}
+
+export function reportPageLabel(moduleId: ModuleId): string {
+	return REPORT_MODULES.find(({ id }) => id === moduleId)?.pageLabel ?? "";
+}
+
+export function reportPageEyebrow(moduleId: ModuleId, detail: string): string {
+	const pageLabel = reportPageLabel(moduleId);
+	return `Page ${pageLabel} · ${detail}`;
+}
+
+export function reportConstituentsTitle(report: ConstituentIndexIdentity): string {
+	return `The Performance of ${report.constituent_index_code} Constituents`;
+}
+
+export function reportMonthName(report: ReportIdentity): string {
+	const stored = report.latest_document?.content.month_name;
+	if (typeof stored === "string" && stored.trim()) return stored.trim();
+	return new Date(`${report.report_date}T00:00:00Z`).toLocaleDateString("en-HK", {
+		month: "long",
+		timeZone: "UTC",
+	});
+}
+
+export function reportProductTicker(report: ReportIdentity): string {
+	const stored = report.latest_document?.content.product_ticker;
+	return typeof stored === "string" && stored.trim() ? stored.trim() : report.product_code;
+}
+
+export function reportsForContext<T extends ReportContextItem>(reports: T[], productCode: string, reportDate: string): T[] {
+	return reports.filter((report) => report.product_code === productCode && report.report_date === reportDate);
+}
+
+function newestReportFirst(left: InitialReportItem, right: InitialReportItem): number {
+	return (
+		(right.revision ?? 1) - (left.revision ?? 1)
+		|| right.version - left.version
+		|| String(right.created_at ?? "").localeCompare(String(left.created_at ?? ""))
+	);
+}
+
+export function selectReportForMonth<T extends InitialReportItem>(
+	reports: T[],
+	productCode: string,
+	reportDate: string,
+	languageMode?: string,
+): T | undefined {
+	return reportsForContext(reports, productCode, reportDate)
+		.filter((report) => report.lane === "PRODUCTION" && report.status !== "ARCHIVED" && (!languageMode || (report.language_mode ?? "EN") === languageMode))
+		.sort(newestReportFirst)[0];
+}
+
+export function selectInitialReport<T extends InitialReportItem>(reports: T[], productCode: string, languageMode?: string): T | undefined {
+	return [...reports]
+		.filter((report) => report.product_code === productCode && report.lane === "PRODUCTION" && report.status !== "ARCHIVED" && (!languageMode || (report.language_mode ?? "EN") === languageMode))
+		.sort((left, right) => (
+			right.report_date.localeCompare(left.report_date)
+			|| newestReportFirst(left, right)
+		))[0];
+}

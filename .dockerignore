@@ -1,0 +1,33 @@
+# Keep build contexts small and keep secrets out of the image layers.
+.git/
+.github/
+.gitignore
+.gitattributes
+
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+*.tsbuildinfo
+
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.egg-info/
+**/*.egg-info/
+.pytest_cache/
+**/.pytest_cache/
+
+# Runtime products and local databases are mounted or regenerated, never baked in.
+var/
+*.db
+.playwright-cli/
+
+# Secrets: the container gets these from the environment, not from a copied file.
+.env
+**/.env
+
+docs/
+README.md

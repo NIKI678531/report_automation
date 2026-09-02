@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "id": "3033-v1",
+  "reference": "3033_LCD_20260630",
+  "page": {
+    "size": "A4",
+    "orientation": "portrait",
+    "widthPt": 595.2,
+    "heightPt": 841.92,
+    "marginTopMm": 7.0,
+    "marginRightMm": 10.0,
+    "marginBottomMm": 12.0,
+    "marginLeftMm": 10.0
+  },
+  "font": {
+    "family": "Calibri, Carlito, Arial, sans-serif",
+    "bodyPt": 10,
+    "smallPt": 8,
+    "sectionPt": 14,
+    "pageTitlePt": 16,
+    "reportTitlePt": 24
+  },
+  "color": {
+    "brandDeep": "#22327f",
+    "brandTable": "#2660ad",
+    "text": "#000000",
+    "paper": "#ffffff",
+    "muted": "#666666"
+  },
+  "testingBanner": {
+    "label": "TESTING DATA - NOT FOR DISTRIBUTION",
+    "watermark": "TESTING",
+    "color": "#c45f5f",
+    "opacity": 0.12,
+    "watermarkPt": 84,
+    "chipPt": 7,
+    "rotationDeg": -28
+  },
+  "chart": {
+    "sectorDonut": {
+      "viewBoxSize": 120,
+      "outerRadius": 46,
+      "innerRadius": 26,
+      "labelOutsideRadius": 46,
+      "labelInsideThresholdRatio": 0.06,
+      "boxWidthMm": 72,
+      "colorTokens": {
+        "industry.hsics.23": "#5186bd",
+        "industry.hsics.70": "#223a8b",
+        "industry.hsics.28": "#00b0f0",
+        "industry.hsics.10": "#8064a2",
+        "industry.hsics.50": "#2f8f83"
+      },
+      "palette": [
+        "#5186bd",
+        "#223a8b",
+        "#00b0f0",
+        "#8064a2",
+        "#2f8f83",
+        "#d49a2a",
+        "#c45f5f",
+        "#6c7a89"
+      ]
+    }
+  },
+  "rules": {
+    "pages": 4,
+    "constituentRows": 30,
+    "logoPosition": "footer-right",
+    "header": "Monthly Commentary | {report_date_long}"
+  }
+}
