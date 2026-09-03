@@ -35,6 +35,7 @@ from ..models import (
     ReportNewsCandidate,
     ReportNewsSelection,
     SnapshotStatus,
+    news_url_key,
     utcnow,
 )
 from .lifecycle import ensure_report_editable
@@ -60,7 +61,10 @@ def upsert_news_candidates(db: Session, report: Report, candidates: list[dict], 
     for candidate in candidates:
         ticker = candidate.get("ticker")
         security_code = ticker_map.get(str(ticker or "").upper())
-        item = db.scalar(select(NewsItem).where(NewsItem.source_url == candidate["source_url"]))
+        # Matched on the hashed key rather than the URL: it is the column that carries the unique
+        # index, so the lookup and the constraint agree on what "the same article" means.
+        url_key = news_url_key(candidate["source_url"])
+        item = db.scalar(select(NewsItem).where(NewsItem.source_url_hash == url_key))
         report_ids: list[str]
         if item:
             metadata = dict(item.metadata_json or {})
@@ -79,7 +83,7 @@ def upsert_news_candidates(db: Session, report: Report, candidates: list[dict], 
                 else "MEDIUM"
             )
             item = NewsItem(
-                source_name=candidate["source_name"], source_url=candidate["source_url"],
+                source_name=candidate["source_name"], source_url=candidate["source_url"], source_url_hash=url_key,
                 published_at=candidate["published_at"], title=candidate["title"], summary=candidate["summary"],
                 security_code=security_code, ticker=ticker, importance=importance,
                 match_confidence=100 if security_code else 0, metadata_json=metadata,

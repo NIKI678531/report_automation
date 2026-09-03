@@ -12,6 +12,10 @@ __pycache__/
 *.sql
 .env
 .env.*
+# ...but the templates are documentation: compose now fails fast on unset secrets, so the list of
+# variables a deployer has to supply must be readable from a fresh clone.
+!.env.example
+!**/.env.example
 *.log
 
 # Local datasets, rendered reports, and binary office artifacts.
@@ -59,7 +63,6 @@ tmp/
 # Golden-report records are derived from local approved reports and remain local-only.
 backend/tests/fixtures/3033_202606/*.json
 da_report_sqlite_README.md
-docs/
 Automation of Commentary - Bi-Weekly Update v2.pptx
 Automation of Commentary - Bi-Weekly Update v2.pptx.inspect.ndjson
 Automation of Commentary - Bi-Weekly Update.pptx
@@ -200,8 +203,6 @@ Automation of Commentary - Bi-Weekly Update.pptx.inspect.ndjson
 .codex-artifacts/automation-commentary-slide-20260824/template-starter-preview/starter-slide-01.png
 Automation of Commentary - Bi-Weekly Update/slide-1.png
 Automation of Commentary - Bi-Weekly Update v2/slide-1.png
-backend/.env.example
-backend/Dockerfile
 output/playwright/preview-a4-full.png
 output/playwright/preview-page-01.png
 output/playwright/preview-page-02.png

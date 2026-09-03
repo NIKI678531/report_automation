@@ -1,11 +1,21 @@
+# Credentials come from the environment (a `.env` beside this file locally, the platform's secret
+# store in a deployment). Nothing here has a working default: a committed password is a published
+# password, and `${VAR:?message}` fails the `compose up` with that message rather than silently
+# standing up a database everyone can read.
+#
+# The API and worker connect with `charset=utf8mb4`. That is not cosmetic - report content is
+# Traditional and Simplified Chinese, and MySQL's legacy three-byte `utf8` truncates it.
 services:
   db:
     image: mysql:8.4
+    # utf8mb4 + the default collation for MySQL 8, set at the server so a table created outside
+    # alembic cannot inherit latin1 and corrupt Chinese product names.
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
     environment:
       MYSQL_DATABASE: commentary
       MYSQL_USER: commentary
-      MYSQL_PASSWORD: local-only-change-me
-      MYSQL_ROOT_PASSWORD: local-root-change-me
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env or the secret store}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env or the secret store}
     volumes: ["mysql-data:/var/lib/mysql"]
     healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "localhost"], interval: 5s, timeout: 3s, retries: 20 }
   redis:
@@ -15,11 +25,32 @@ services:
   api:
     build: { context: ./backend, dockerfile: Dockerfile }
     environment:
-      DATABASE_URL: mysql+pymysql://commentary:local-only-change-me@db/commentary
-      AUTH_MODE: LOCAL
+      DATABASE_URL: mysql+pymysql://commentary:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@db/commentary?charset=utf8mb4
+      AUTH_MODE: ${AUTH_MODE:-LOCAL}
       TASK_MODE: CELERY
       REDIS_URL: redis://redis:6379/0
-      DOWNLOAD_SECRET: local-compose-secret-change-me
+      DOWNLOAD_SECRET: ${DOWNLOAD_SECRET:?set DOWNLOAD_SECRET to 32+ random characters}
+      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+      ENTRA_AUDIENCE: ${ENTRA_AUDIENCE:-}
+      ENTRA_ISSUER: ${ENTRA_ISSUER:-}
+      ENTRA_ROLE_CLAIM: ${ENTRA_ROLE_CLAIM:-roles}
+      ENTRA_PRODUCT_SCOPE_CLAIM: ${ENTRA_PRODUCT_SCOPE_CLAIM:-product_scope}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:8080}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
+      # Artifact storage. LOCAL is the compose default and uses the bind mount below; a deployment
+      # with no persistent volume must set STORAGE_BACKEND=S3, and the API and worker must name the
+      # same bucket - the worker writes the artifact the API later serves.
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-LOCAL}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_PREFIX: ${S3_PREFIX:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_ADDRESSING_STYLE: ${S3_ADDRESSING_STYLE:-virtual}
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-20971520}
       NEWS_PROVIDER: ${NEWS_PROVIDER:-DA_REPORT}
       MARKETAUX_API_KEY: ${MARKETAUX_API_KEY:-}
       MARKETAUX_BASE_URL: ${MARKETAUX_BASE_URL:-https://api.marketaux.com/v1}
@@ -51,15 +82,39 @@ services:
       FMP_BOUNDARY_LOOKBACK_DAYS: ${FMP_BOUNDARY_LOOKBACK_DAYS:-14}
       FMP_ALLOWED_HOSTS: ${FMP_ALLOWED_HOSTS:-financialmodelingprep.com}
     volumes: ["./var/output:/app/var/output"]
+    # `web` waits for this, so a rolling deploy cannot route traffic at an API whose migrations
+    # are still running. start_period covers `alembic upgrade head` on a cold database.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
     depends_on: { db: { condition: service_healthy }, redis: { condition: service_started } }
   worker:
     build: { context: ./backend, dockerfile: Dockerfile }
     command: ["celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
     environment:
-      DATABASE_URL: mysql+pymysql://commentary:local-only-change-me@db/commentary
+      DATABASE_URL: mysql+pymysql://commentary:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@db/commentary?charset=utf8mb4
+      AUTH_MODE: ${AUTH_MODE:-LOCAL}
       TASK_MODE: CELERY
       REDIS_URL: redis://redis:6379/0
-      DOWNLOAD_SECRET: local-compose-secret-change-me
+      # Must match the API's: the worker writes artifacts whose download links the API signs.
+      DOWNLOAD_SECRET: ${DOWNLOAD_SECRET:?set DOWNLOAD_SECRET to 32+ random characters}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
+      # Artifact storage. LOCAL is the compose default and uses the bind mount below; a deployment
+      # with no persistent volume must set STORAGE_BACKEND=S3, and the API and worker must name the
+      # same bucket - the worker writes the artifact the API later serves.
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-LOCAL}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_PREFIX: ${S3_PREFIX:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_ADDRESSING_STYLE: ${S3_ADDRESSING_STYLE:-virtual}
       DATAWAREHOUSE_PERFORMANCE_ENABLED: ${DATAWAREHOUSE_PERFORMANCE_ENABLED:-true}
       DATAWAREHOUSE_MYSQL_HOST: ${DATAWAREHOUSE_MYSQL_HOST:-}
       DATAWAREHOUSE_MYSQL_PORT: ${DATAWAREHOUSE_MYSQL_PORT:-3306}
@@ -78,7 +133,7 @@ services:
   web:
     build: { context: ., dockerfile: frontend/Dockerfile }
     ports: ["8080:80"]
-    depends_on: [api]
+    depends_on: { api: { condition: service_healthy } }
 volumes:
   mysql-data:
   redis-data:

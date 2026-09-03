@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from app.domain.document import review_display_title
 from app.domain.localization import (
@@ -34,7 +34,12 @@ from app.domain.models import Report
 ROOT = Path(__file__).resolve().parent
 env = Environment(
     loader=FileSystemLoader(ROOT / "templates"),
-    autoescape=select_autoescape(["html", "xml"]),
+    # Unconditionally on, not `select_autoescape(["html", "xml"])`: that helper matches on the
+    # filename *suffix*, and "3033.html.j2" does not end in ".html", so autoescaping silently
+    # evaluated to False and every {{ }} in the report went out unescaped. The two deliberate raw
+    # outputs in the template are `cjk_font_css|safe` (server-generated CSS) and
+    # `block.content|safe` (already run through ReviewHtmlSanitizer's tag allowlist).
+    autoescape=True,
     undefined=StrictUndefined,
 )
 

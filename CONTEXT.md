@@ -199,7 +199,9 @@ _Avoid_: Watermark, disclaimer
 ### Company news
 
 **News item**:
-A deduplicated article from a provider, unique by source URL.
+A deduplicated article from a provider, unique by `source_url_hash` — the SHA-256 of the source URL.
+The URL itself is stored in full and readable but is not the key: InnoDB cannot index a
+1000-character utf8mb4 column, so uniqueness lives on the fixed-width hash.
 _Avoid_: Article, story, headline
 
 **Candidate**:
@@ -215,3 +217,59 @@ _Avoid_: Chosen news, pick, inclusion
 One provider query window, unique per report + snapshot + provider + scope + date range, so the
 same window is never billed or fetched twice.
 _Avoid_: Query, pull, sync
+
+### Access and deployment
+
+**Principal**:
+The caller of one request, reduced to what authorization needs: `subject`, `role`, `product_scope`.
+`SYSTEM_PRINCIPAL` stands in for work no request initiated — a Celery task, a CLI import.
+_Avoid_: User, account, identity, session
+
+**Auth mode**:
+Where a principal comes from. `LOCAL` reads it from request headers, which is a developer
+convenience and not security. `ENTRA` derives it from a validated Microsoft Entra access token and
+ignores those headers entirely. The same value gates every other workstation-only behaviour.
+_Avoid_: Auth backend, login mode, environment
+
+**Role**:
+One of `VIEWER`, `EDITOR`, `REVIEWER`, `ADMIN`, ordered by privilege. Role answers "what kind of
+act", deliberately separate from product scope, which answers "on which rows".
+_Avoid_: Permission, group, access level
+
+**Product scope**:
+The set of `product_code`s a principal may see, or `*` for unrestricted. It filters rows rather
+than gating endpoints: a report outside scope is reported as absent, because a refusal would
+confirm it exists.
+_Avoid_: Tenant, permission, fund access
+
+**Signed download**:
+An artifact URL carrying an HMAC-SHA256 signature over the artifact, the requesting subject and an
+expiry. It authorizes one person to fetch one file until a deadline; it is not a link to forward.
+_Avoid_: Presigned URL, share link, token
+
+**Object storage**:
+Where a render artifact's bytes actually live, reached through one port with two backends:
+`LOCAL` writes under `var/output` for workstations, `S3` addresses any S3-compatible bucket
+(Volcengine TOS, MinIO, AWS S3). The deployment has no persistent volume, so container-local disk
+is not storage — an artifact written there is gone at the next restart and was never visible to
+the other replicas. Distinct from a signed download, which protects the link rather than the store.
+_Avoid_: Filesystem, disk, volume, bucket
+
+**Storage key**:
+The path recorded on an artifact and used to address its object. It is untrusted input on the way
+back in, and S3 has no filesystem to resolve `..` against — a traversal key simply names a
+different object — so a key is validated segment by segment rather than normalized into a valid one.
+_Avoid_: Path, filename, location
+
+**Error envelope**:
+The single shape every failed request returns — `error_code`, `message`, `severity`, `fix_hint`,
+`request_id`, and `findings[]` when a validation produced several. Distinct from a finding's
+`check_id`, which names a data-quality rule rather than a failed request.
+_Avoid_: Error response, detail, exception payload
+
+**Deployment guard**:
+The startup check (`Settings.deployment_problems()`) that lists every reason a configuration must
+not serve traffic — a default signing secret, an unpinned token issuer, the fixture lane, SQLite,
+artifacts still configured to land on container-local disk. A non-empty list refuses the boot;
+discovering these at first use means they were already used.
+_Avoid_: Validation, health check, preflight

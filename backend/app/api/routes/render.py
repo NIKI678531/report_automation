@@ -11,8 +11,9 @@ import time
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.storage import storage
@@ -70,17 +71,40 @@ def render_outputs(
             jobs.append(job)
             continue
         job = RenderJob(report_id=report.id, format=format_name, status=JobStatus.QUEUED, progress=0, stage="queued", idempotency_key=key)
-        db.add(job); db.commit(); db.refresh(job)
+        db.add(job)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Two concurrent requests with the same Idempotency-Key: the SELECT above found
+            # nothing for both, and the unique index arbitrated. The loser adopts the winner's job,
+            # which is what "repeated idempotency keys return the original job" has to mean under
+            # concurrency rather than only in sequence.
+            db.rollback()
+            existing = db.scalar(select(RenderJob).where(RenderJob.idempotency_key == key)) if key else None
+            if existing is None:
+                raise
+            jobs.append(existing)
+            continue
+        db.refresh(job)
         try:
             dispatch_render(job.id, db)
             db.refresh(job)
         except Exception as error:
             job.status, job.stage = JobStatus.FAILED, "failed"
             job.error = {"error_code": "RENDER_FAILED", "message": str(error), "retryable": True}
-        service.audit(db, "render.completed" if job.status == JobStatus.SUCCEEDED else "render.failed", "render_job", job.id, x_request_id, {"format": format_name})
+        # A CELERY dispatch returns with the job still QUEUED: the worker has it and has not
+        # finished. Recording that as "render.failed" put a false failure in the regulated audit
+        # trail on every asynchronous render.
+        service.audit(db, _dispatch_action(job.status), "render_job", job.id, x_request_id, {"format": format_name})
         db.commit(); db.refresh(job)
         jobs.append(job)
     return jobs
+
+
+def _dispatch_action(status_value: JobStatus) -> str:
+    if status_value == JobStatus.SUCCEEDED:
+        return "render.completed"
+    return "render.queued" if status_value == JobStatus.QUEUED else "render.failed"
 
 
 @router.get("/jobs/{job_id}", response_model=JobRead)
@@ -109,4 +133,24 @@ def artifact_content(artifact_id: str, request: Request, expires: int, signature
         raise HTTPException(status_code=404, detail={"error_code": "ARTIFACT_NOT_FOUND"})
     if not storage.verify(artifact.id, request.state.principal.subject, expires, signature):
         raise HTTPException(status_code=403, detail={"error_code": "DOWNLOAD_SIGNATURE_INVALID"})
-    return FileResponse(storage.resolve(artifact.storage_key), media_type=artifact.mime_type, filename=artifact.storage_key.rsplit("/", 1)[-1])
+    try:
+        # Streamed from the object-storage port rather than read from a path: the deployment has no
+        # persistent volume, so the bytes are not necessarily on this container's disk.
+        body = storage.open(artifact.storage_key)
+    except FileNotFoundError:
+        # The row outlived the object. That is what a restart looks like when artifacts were kept
+        # on container-local disk, and reporting it as a 500 would blame the request instead.
+        raise HTTPException(status_code=404, detail={
+            "error_code": "ARTIFACT_CONTENT_MISSING",
+            "message": "The artifact is recorded but its stored object is gone.",
+            "fix_hint": "Re-render the report. If it keeps happening, the deployment is storing artifacts on container-local disk.",
+        })
+    filename = artifact.storage_key.rsplit("/", 1)[-1]
+    return StreamingResponse(
+        body.chunks,
+        media_type=artifact.mime_type,
+        headers={
+            "Content-Length": str(body.size_bytes),
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )

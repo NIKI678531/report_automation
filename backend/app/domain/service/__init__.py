@@ -52,6 +52,7 @@ from .reports import (
     get_report,
     release_gate_checks,
     sync_language_variant,
+    visible_product_codes,
 )
 from .snapshots import (
     apply_import,
@@ -122,4 +123,5 @@ __all__ = [
     "batch_view",
     "update_document",
     "upsert_news_candidates",
+    "visible_product_codes",
 ]

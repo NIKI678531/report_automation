@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import current_principal
 from ..document import bind_snapshot, checksum, initial_document
 from ..localization import (
     ZH_HANS,
@@ -831,9 +832,21 @@ def sync_language_variant(
 
 def get_report(db: Session, report_id: str) -> Report:
     report = db.get(Report, report_id)
-    if not report:
+    # Out-of-scope reports answer 404, not 403: a distinguishable 403 would let a caller enumerate
+    # which funds exist by probing identifiers. Every route reaches a report through here, so the
+    # check cannot be forgotten on a new endpoint.
+    caller = current_principal()
+    if not report or (caller is not None and not caller.may_access_product(report.product_code)):
         raise HTTPException(status_code=404, detail={"error_code": "REPORT_NOT_FOUND", "message": "Report not found."})
     return report
+
+
+def visible_product_codes() -> frozenset[str] | None:
+    """Product codes the current caller may list, or ``None`` when unrestricted."""
+    caller = current_principal()
+    if caller is None or caller.is_unrestricted:
+        return None
+    return caller.product_scope
 
 
 def delete_report(db: Session, report: Report, expected_version: int, request_id: str) -> None:
