@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.storage import storage
+from app.core.storage import StoredObject, storage
 from app.domain.document import content_manifests_match, render_content_manifest, review_display_title
 from app.domain.localization import (
     is_chinese,
@@ -949,6 +949,20 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     document.save(destination)
 
 
+def publish(destination: Path, object_key: str) -> StoredObject:
+    """Store the rendered file under `object_key`, leaving nothing behind on a remote backend.
+
+    Playwright and python-docx both write through a real path, so every format lands on this
+    container's disk first. Where that disk *is* the store the file is the artifact; where it is
+    not, the copy is scratch that nothing reads, and a worker pod that keeps every one of them
+    eventually fills its own writable layer.
+    """
+    stored = storage.put_file(destination, object_key)
+    if storage.backend != "LOCAL":
+        destination.unlink(missing_ok=True)
+    return stored
+
+
 def build_artifact(db: Session, report: Report, document: ReportDocument, format_name: str) -> RenderArtifact:
     if format_name not in MIME:
         raise ValueError(f"Unsupported format: {format_name}")
@@ -1008,7 +1022,7 @@ def build_artifact(db: Session, report: Report, document: ReportDocument, format
                 page.pdf(path=str(destination), format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}, prefer_css_page_size=True)
                 browser.close()
     object_key = f"{format_name}/{destination.name}"
-    stored = storage.put_file(destination, object_key)
+    stored = publish(destination, object_key)
     artifact = RenderArtifact(
         report_id=report.id,
         document_version=document.version,

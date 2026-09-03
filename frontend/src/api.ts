@@ -249,13 +249,96 @@ export interface CalculationResult {
   document_version: number;
 }
 
+export interface ErrorFinding {
+  error_code?: string;
+  message?: string;
+  fix_hint?: string;
+  field?: string | null;
+  row?: number | null;
+  entity_id?: string | null;
+}
+
+/** The structured envelope every backend failure carries. */
+export interface ErrorEnvelope {
+  error_code?: string;
+  message?: string;
+  severity?: string;
+  fix_hint?: string;
+  request_id?: string | null;
+  findings?: ErrorFinding[];
+}
+
+/**
+ * A failed API call, with the envelope kept intact.
+ *
+ * The client used to throw `new Error(await response.text())`, so the raw JSON was what reached
+ * `setError` and the user was shown `{"error_code":"FILE_TOO_LARGE",...}`. The backend already
+ * says what went wrong and how to fix it; this only has to present it. `toString` is overridden
+ * because call sites use `String(caught)`, which would otherwise prefix the name.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly errorCode: string;
+  readonly fixHint: string;
+  readonly requestId: string | null;
+  readonly findings: ErrorFinding[];
+
+  constructor(status: number, envelope: ErrorEnvelope, fallback: string) {
+    const findings = envelope.findings ?? [];
+    const detail = findings
+      .slice(0, 3)
+      .map((finding) => [finding.field, finding.message ?? finding.fix_hint ?? finding.error_code].filter(Boolean).join(": "))
+      .filter(Boolean);
+    super([envelope.message || fallback, envelope.fix_hint, ...detail].filter(Boolean).join(" "));
+    this.name = "ApiError";
+    this.status = status;
+    this.errorCode = envelope.error_code ?? "REQUEST_FAILED";
+    this.fixHint = envelope.fix_hint ?? "";
+    this.requestId = envelope.request_id ?? null;
+    this.findings = findings;
+  }
+
+  toString(): string {
+    return this.message;
+  }
+}
+
+/** Status codes the proxy can answer on its own, before the API ever sees the request. */
+const PROXY_FALLBACKS: Record<number, string> = {
+  401: "Your session has expired. Sign in again.",
+  403: "You do not have permission to do this.",
+  413: "The file is larger than this deployment accepts.",
+  502: "The API did not respond. It may still be starting up.",
+  503: "The service is unavailable. Try again shortly.",
+  504: "The request took too long and was cut off by the gateway.",
+};
+
+async function envelopeOf(response: Response): Promise<ErrorEnvelope> {
+  const body = await response.text();
+  if (!body) return {};
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    // nginx and the browser can both answer with something that is valid JSON but not an envelope.
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as ErrorEnvelope;
+  } catch {
+    // An HTML error page from the proxy. Showing its markup would be worse than the fallback.
+  }
+  return {};
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isForm = init?.body instanceof FormData;
   const response = await fetch(`/api/v1${path}`, {
     ...init,
     headers: { ...(!isForm ? { "Content-Type": "application/json" } : {}), "X-Request-ID": crypto.randomUUID(), ...init?.headers },
   });
-  if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`);
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      await envelopeOf(response),
+      PROXY_FALLBACKS[response.status] ?? `Request failed: ${response.status}`,
+    );
+  }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }

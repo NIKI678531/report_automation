@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import hashlib
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -364,11 +365,25 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+def news_url_key(source_url: str) -> str:
+    """Deduplication key for a news article.
+
+    The URL itself cannot carry the unique index: 1000 utf8mb4 characters are 4000 bytes, and
+    InnoDB caps an index key at 3072, so `CREATE UNIQUE INDEX` on `source_url` fails outright on
+    MySQL. Hashing gives a fixed 64-byte key that indexes on any engine, and the URL stays stored
+    in full for display and citation.
+    """
+    return hashlib.sha256(source_url.strip().encode("utf-8")).hexdigest()
+
+
 class NewsItem(Base):
     __tablename__ = "news_items"
+    __table_args__ = (UniqueConstraint("source_url_hash", name="uq_news_items_source_url_hash"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     source_name: Mapped[str] = mapped_column(String(120))
-    source_url: Mapped[str] = mapped_column(String(1000), unique=True)
+    source_url: Mapped[str] = mapped_column(String(1000))
+    #: sha256 of `source_url`; see :func:`news_url_key`.
+    source_url_hash: Mapped[str] = mapped_column(String(64))
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     title: Mapped[str] = mapped_column(String(1000))
     summary: Mapped[str] = mapped_column(String(5000))

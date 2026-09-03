@@ -36,6 +36,11 @@ def list_reports(db: Db, include_archived: bool = False) -> list[Report]:
     query = select(Report)
     if not include_archived:
         query = query.where(Report.status != ReportStatus.ARCHIVED)
+    # Filtered in SQL rather than after the fetch, so a caller with a narrow product scope never
+    # has out-of-scope rows loaded into the process in the first place.
+    visible = service.visible_product_codes()
+    if visible is not None:
+        query = query.where(Report.product_code.in_(visible))
     return list(db.scalars(query.order_by(Report.created_at.desc())))
 
 

@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from sqlalchemy import or_, select
 
+from app.core.config import settings
 from app.domain import ingestion, service
 from app.domain.industry import parse_industry_master_csv
 from app.domain.models import IndustryMasterRecord, MappingProfile, ProductCatalog
@@ -21,7 +22,8 @@ from app.domain.schemas import (
     ProductImportRead,
     ProductRead,
 )
-from .deps import Db, RequestId
+from .deps import CurrentPrincipal, Db, RequestId, require_role
+from .uploads import read_upload
 
 router = APIRouter()
 
@@ -31,20 +33,19 @@ def list_products(db: Db, as_of_date: date | None = None, include_inactive: bool
     return service.list_products(db, as_of_date or date.today(), include_inactive)
 
 
-@router.post("/products/import", response_model=ProductImportRead)
+@router.post(
+    "/products/import",
+    response_model=ProductImportRead,
+    dependencies=[require_role("ADMIN", error_code="PRODUCT_ADMIN_REQUIRED")],
+)
 async def import_products(
-    request: Request,
     db: Db,
     x_request_id: RequestId,
     file: UploadFile = File(...),
 ) -> dict[str, int]:
-    if request.state.principal.role != "ADMIN":
-        raise HTTPException(status_code=403, detail={"error_code": "PRODUCT_ADMIN_REQUIRED"})
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(status_code=422, detail={"error_code": "PRODUCT_CATALOG_FORMAT", "message": "Product catalog must be a CSV file."})
-    data = await file.read()
-    if len(data) > 2 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE"})
+    data = await read_upload(file, settings.catalog_upload_max_bytes)
     try:
         rows = parse_product_catalog_csv(data)
     except ValueError as error:
@@ -52,20 +53,19 @@ async def import_products(
     return service.import_products(db, rows, x_request_id)
 
 
-@router.post("/industry-master/import", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/industry-master/import",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_role("ADMIN", error_code="INDUSTRY_ADMIN_REQUIRED")],
+)
 async def import_industry_master(
-    request: Request,
     db: Db,
     x_request_id: RequestId,
     file: UploadFile = File(...),
 ) -> dict:
-    if request.state.principal.role != "ADMIN":
-        raise HTTPException(status_code=403, detail={"error_code": "INDUSTRY_ADMIN_REQUIRED"})
     if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(status_code=422, detail={"error_code": "INDUSTRY_MASTER_FORMAT", "message": "Industry master must be a CSV file."})
-    data = await file.read()
-    if len(data) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE"})
+    data = await read_upload(file, settings.catalog_upload_max_bytes)
     try:
         rows = parse_industry_master_csv(data)
     except (UnicodeError, ValueError) as error:
@@ -113,15 +113,18 @@ def list_mapping_profiles(db: Db, dataset_type: str | None = None, include_draft
     return list(db.scalars(query.order_by(MappingProfile.dataset_type, MappingProfile.profile_id, MappingProfile.version.desc())))
 
 
-@router.post("/mapping-profiles", response_model=MappingProfileRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/mapping-profiles",
+    response_model=MappingProfileRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[require_role("ADMIN", error_code="MAPPING_ADMIN_REQUIRED")],
+)
 def create_mapping_profile(
-    request: Request,
     command: MappingProfileCreate,
     db: Db,
     x_request_id: RequestId,
+    caller: CurrentPrincipal,
 ) -> MappingProfile:
-    if request.state.principal.role != "ADMIN":
-        raise HTTPException(status_code=403, detail={"error_code": "MAPPING_ADMIN_REQUIRED"})
     if ingestion.get_spec(command.dataset_type) is None:
         raise HTTPException(status_code=422, detail={
             "error_code": "UNSUPPORTED_DATASET",
@@ -157,7 +160,7 @@ def create_mapping_profile(
         })
     profile = MappingProfile(
         **command.model_dump(),
-        approved_by=request.state.principal.subject if command.status == "APPROVED" else None,
+        approved_by=caller.subject if command.status == "APPROVED" else None,
     )
     db.add(profile)
     db.flush()

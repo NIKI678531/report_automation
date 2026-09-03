@@ -18,7 +18,12 @@ def upgrade() -> None:
         "news_items",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("source_name", sa.String(120), nullable=False),
-        sa.Column("source_url", sa.String(1000), nullable=False, unique=True),
+        # No UNIQUE here. VARCHAR(1000) under utf8mb4 is 4000 bytes and InnoDB caps an index key
+        # at 3072, so a unique index on this column makes CREATE TABLE fail outright on MySQL -
+        # i.e. a fresh production deployment could never reach the later revisions at all.
+        # Uniqueness of an article is enforced from revision d4e1f7a92c30 onwards, on a sha256 of
+        # this URL, which indexes at a fixed 64 bytes on every engine.
+        sa.Column("source_url", sa.String(1000), nullable=False),
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("title", sa.String(1000), nullable=False),
         sa.Column("summary", sa.String(5000), nullable=False),

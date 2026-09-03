@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { api } from "./api";
+import { ApiError, api } from "./api";
 
 describe("FastAPI client", () => {
   it("creates reports through the versioned API", async () => {
@@ -178,6 +178,82 @@ describe("FastAPI client", () => {
     await api.getJob("job-1");
 
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs/job-1", expect.any(Object));
+    fetchMock.mockRestore();
+  });
+});
+
+describe("failed requests", () => {
+  function respondWith(body: BodyInit | null, init: ResponseInit) {
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, init));
+  }
+
+  /** The rejection, or a failure if the call unexpectedly succeeded — a resolved promise is a bug too. */
+  async function failureOf(call: Promise<unknown>): Promise<ApiError> {
+    try {
+      await call;
+    } catch (caught) {
+      return caught as ApiError;
+    }
+    throw new Error("Expected the request to reject, but it resolved.");
+  }
+
+  it("shows the message and the fix hint instead of raw JSON", async () => {
+    const fetchMock = respondWith(JSON.stringify({
+      error_code: "FILE_TOO_LARGE",
+      message: "The upload exceeds the 20 MB limit for this endpoint.",
+      severity: "BLOCKING",
+      fix_hint: "Split the file, or export only the rows for the reporting period.",
+      request_id: "req-1",
+    }), { status: 413 });
+
+    const failure = await failureOf(api.listReports());
+
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(failure.status).toBe(413);
+    expect(failure.errorCode).toBe("FILE_TOO_LARGE");
+    expect(failure.requestId).toBe("req-1");
+    // Call sites use String(caught); it must read as a sentence, not as a serialized envelope.
+    expect(String(failure)).toBe(
+      "The upload exceeds the 20 MB limit for this endpoint. Split the file, or export only the rows for the reporting period.",
+    );
+    expect(String(failure)).not.toContain("error_code");
+    fetchMock.mockRestore();
+  });
+
+  it("names the offending fields from a validation envelope", async () => {
+    const fetchMock = respondWith(JSON.stringify({
+      error_code: "REQUEST_INVALID",
+      message: "The request body or query string failed schema validation.",
+      fix_hint: "",
+      findings: [{ error_code: "REQUEST_FIELD_INVALID", field: "body.source_url", message: "Value error, source_url must be an http:// or https:// address." }],
+    }), { status: 422 });
+
+    const failure = await failureOf(api.listReports());
+
+    expect(failure.findings).toHaveLength(1);
+    expect(String(failure)).toContain("body.source_url");
+    fetchMock.mockRestore();
+  });
+
+  it("falls back to a readable message when the proxy answers instead of the API", async () => {
+    // nginx returns an HTML error page, which must never be rendered into the status rail.
+    const fetchMock = respondWith("<html><body><h1>502 Bad Gateway</h1></body></html>", {
+      status: 502,
+      headers: { "Content-Type": "text/html" },
+    });
+
+    const failure = await failureOf(api.listReports());
+
+    expect(failure.status).toBe(502);
+    expect(String(failure)).not.toContain("<html>");
+    expect(String(failure)).toContain("did not respond");
+    fetchMock.mockRestore();
+  });
+
+  it("stays an Error so existing catch blocks keep working", async () => {
+    const fetchMock = respondWith(null, { status: 403 });
+    const failure = await failureOf(api.listReports());
+    expect(failure).toBeInstanceOf(Error);
     fetchMock.mockRestore();
   });
 });

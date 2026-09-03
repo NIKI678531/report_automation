@@ -1,8 +1,9 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
+from app.core.config import settings
 from .models import JobStatus, ReportStatus, SnapshotStatus
 
 
@@ -228,6 +229,16 @@ class JobRead(BaseModel):
     error: dict[str, Any] | None
     artifact_id: str | None
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status_url(self) -> str:
+        """Where to poll this job.
+
+        A 202 that returns only an id makes every client hard-code the polling path; handing back
+        the URL keeps that one route decision on the server.
+        """
+        return f"{settings.api_prefix}/jobs/{self.id}"
+
 
 class ErrorItem(BaseModel):
     error_code: str
@@ -255,6 +266,19 @@ class NewsCreate(BaseModel):
     security_code: str | None = None
     ticker: str | None = None
     importance: Literal["LOW", "MEDIUM", "HIGH"] = "MEDIUM"
+
+    @field_validator("source_url")
+    @classmethod
+    def _http_url_only(cls, value: str) -> str:
+        """A news citation must be a web address someone can open.
+
+        Accepting an arbitrary string let `javascript:` and `data:` URLs reach the review UI, where
+        the analyst clicking through to check a source would have run the payload instead.
+        """
+        candidate = value.strip()
+        if not candidate.casefold().startswith(("http://", "https://")):
+            raise ValueError("source_url must be an http:// or https:// address.")
+        return candidate
 
 
 class NewsRead(NewsCreate):

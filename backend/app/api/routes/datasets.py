@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.domain import service
 from app.domain.models import (
     DataImport,
@@ -31,6 +32,7 @@ from app.domain.schemas import (
     SnapshotRead,
 )
 from .deps import Db, RequestId
+from .uploads import ensure_total_within, read_upload
 
 router = APIRouter()
 
@@ -93,9 +95,7 @@ async def create_import(
     dataset_type: str = Form(...),
 ) -> ImportCreateRead:
     report = service.get_report(db, report_id)
-    data = await file.read()
-    if len(data) > 20 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE", "message": "Uploads are limited to 20 MB."})
+    data = await read_upload(file, settings.upload_max_bytes)
     item, replacing_dataset = service.stage_import(
         db, report, dataset_type, file.filename or "upload", file.content_type or "", data, x_request_id,
     )
@@ -114,17 +114,17 @@ async def create_import_batch(
     files: list[UploadFile] = File(...),
 ) -> dict:
     report = service.get_report(db, report_id)
-    if not files or len(files) > 20:
-        raise HTTPException(status_code=413, detail={"error_code": "BATCH_FILE_LIMIT", "message": "Select between 1 and 20 files."})
+    if not files or len(files) > settings.upload_batch_max_files:
+        raise HTTPException(status_code=413, detail={
+            "error_code": "BATCH_FILE_LIMIT",
+            "message": f"Select between 1 and {settings.upload_batch_max_files} files.",
+        })
     buffered: list[tuple[str, str, bytes]] = []
     total = 0
     for file in files:
-        data = await file.read()
+        data = await read_upload(file, settings.upload_max_bytes)
         total += len(data)
-        if len(data) > 20 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail={"error_code": "FILE_TOO_LARGE", "message": "Each file is limited to 20 MB."})
-        if total > 100 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail={"error_code": "BATCH_TOO_LARGE", "message": "One batch is limited to 100 MB."})
+        ensure_total_within(total, settings.upload_batch_max_bytes)
         buffered.append((file.filename or "upload", file.content_type or "", data))
     batch = service.create_import_batch(db, report, buffered, x_request_id)
     return service.batch_view(db, batch)
