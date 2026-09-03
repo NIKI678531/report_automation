@@ -31,6 +31,12 @@ jobs:
       # deployment that sets AUTH_MODE=ENTRA or STORAGE_BACKEND=S3 for the first time.
       - run: pip install -e './backend[dev,render,entra,storage]'
       - run: python -m playwright install --with-deps chromium
+      # The same three font packages backend/Dockerfile installs. The visual check renders a real
+      # PDF and compares it with the approved report, so a runner without them is not measuring
+      # this project's rendering -- it is measuring whatever Chromium fell back to. Carlito stands
+      # in for Calibri (metric-compatible); the Noto CJK pair is what the Chinese variants embed.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-noto-cjk fonts-noto-cjk-extra
+      - run: fc-list | grep -Ei 'carlito|notosanscjk' | sort
       - run: python -m pytest backend/tests -q
         env:
           # Points at the service container above, which holds nothing but these migrations - the

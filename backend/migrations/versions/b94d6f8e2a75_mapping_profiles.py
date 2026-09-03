@@ -112,9 +112,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Constraint before index: InnoDB needs the index to enforce the foreign key and refuses to
+    # drop it while the constraint is still there (error 1553).
     with op.batch_alter_table("data_imports") as batch:
-        batch.drop_index("ix_data_imports_mapping_profile_id")
         batch.drop_constraint("fk_data_imports_mapping_profile", type_="foreignkey")
+        batch.drop_index("ix_data_imports_mapping_profile_id")
         batch.drop_column("mapping_version")
         batch.drop_column("mapping_profile_id")
     op.drop_index("ix_mapping_profiles_dataset_type", table_name="mapping_profiles")

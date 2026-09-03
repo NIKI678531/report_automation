@@ -51,6 +51,11 @@
 - `db` 以 `--character-set-server=utf8mb4` 启动，api/worker 连接串带 `?charset=utf8mb4`；
   MySQL 旧版三字节 `utf8` 会截断报告里的繁简中文
 - `api` 有 healthcheck，`web` 依赖其 healthy，滚动发布不会把流量打到迁移未完成的实例
+- 报告字体属于输出契约，不是系统偏好：模板首选 Calibri、3033 基准也是按 Calibri 度量测的，
+  所以凡是要渲染报告的 Linux 镜像/runner 都装 `fonts-crosextra-carlito`（度量兼容、可再分发）
+  加 `fonts-noto-cjk` **和** `fonts-noto-cjk-extra`。`backend/Dockerfile` 与
+  `.github/workflows/ci.yml` 必须同步。缺了它 Chromium 会退到 Arial，整页重排，
+  看起来像渲染回归，其实是少装了一个包。
 - 前端镜像多阶段构建：`node:24-alpine` 执行 `npm ci && npm run build`，产物交给 `nginx:1.29-alpine`
 - CI（`.github/workflows/ci.yml`）：pytest → `npm ci` → `npm test` → `npm run build`
 
@@ -121,6 +126,8 @@
 - 连接池按 MySQL 配置：`pool_pre_ping` + `pool_recycle`（须小于服务端 `wait_timeout`），
   否则闲置后第一笔请求会撞上 "MySQL server has gone away"。
 - 每个迁移都要能**逐条** upgrade 与 downgrade；`backend/tests/test_migrations.py` 会一条条走。
+- downgrade 里**先删外键，再删支撑它的索引**。InnoDB 要靠那个索引来执行外键，顺序反了报 1553；
+  SQLite 是整表重建，两种顺序都收，所以这个错只有跑真机 MySQL 才看得见（CI 已设 `TEST_MYSQL_URL`）。
 
 ### UI
 

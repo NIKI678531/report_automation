@@ -139,14 +139,22 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   `visual_qa.py` structural page checks, `templates/*.j2`, `tokens/3033-v*.json`, `static/`.
   Every format renders through a real path because Chromium and python-docx require one, so
   `artifacts.publish()` deletes that local copy once a remote backend has the object — on `LOCAL`
-  the same file *is* the artifact and is kept.
+  the same file *is* the artifact and is kept. The typeface is part of the output contract: the
+  template asks for Calibri and the 3033 baseline was measured against Calibri metrics, so any
+  Linux image or runner that renders reports installs `fonts-crosextra-carlito` (metric-compatible,
+  redistributable) plus `fonts-noto-cjk` **and** `fonts-noto-cjk-extra` — `backend/Dockerfile` and
+  `.github/workflows/ci.yml` must stay in step. Without them Chromium falls through to Arial and
+  reflows every page, which reads as a rendering regression rather than as a missing package.
 - `app/worker.py` — Celery app and `dispatch_render`, which honours `TASK_MODE`.
 - `migrations/` + `alembic.ini` — every schema change ships an upgrade **and** a downgrade, and both
   are stepped one revision at a time by `backend/tests/test_migrations.py`. Indexed `String` columns
   must declare a length of at most 768 characters: InnoDB caps an index key at 3072 bytes and utf8mb4
   reserves four bytes per character, so a longer column is a `CREATE TABLE` failure on MySQL that
   SQLite accepts silently. Long values are made unique through a hash column instead — that is what
-  `news_items.source_url_hash` is for.
+  `news_items.source_url_hash` is for. A downgrade drops a foreign key **before** the index that
+  backs it: InnoDB keeps that index to enforce the constraint and answers 1553, while SQLite copies
+  the table and accepts either order. `test_migrations_apply_to_a_real_mysql_database` is the run
+  that catches it, and it only runs where `TEST_MYSQL_URL` is set — CI, or a throwaway schema.
 
 ### Frontend layout (`frontend/src/`)
 

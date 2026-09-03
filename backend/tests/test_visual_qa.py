@@ -130,11 +130,20 @@ def test_pixel_difference_does_not_regress(client, tmp_path):
     actual = render_golden_pdf(client, tmp_path / "actual.pdf")
     result = verify_pdf(actual, REFERENCE, tmp_path / "evidence")
 
-    for page in result["pages"]:
-        baseline = PIXEL_DIFFERENCE_BASELINE[page["page"]]
-        assert page["pixel_difference_ratio"] <= baseline + 1e-6, (
-            f"page {page['page']} regressed: {page['pixel_difference_ratio']} > {baseline}"
-        )
+    measured = {page["page"]: page["pixel_difference_ratio"] for page in result["pages"]}
+    regressed = [
+        f"page {number}: {ratio} > {PIXEL_DIFFERENCE_BASELINE[number]}"
+        for number, ratio in sorted(measured.items())
+        if ratio > PIXEL_DIFFERENCE_BASELINE[number] + 1e-6
+    ]
+    # Every page's measurement, not just the first one over the line. These numbers are only
+    # comparable within one font stack, so when this fails on a machine other than the one that
+    # recorded them, the whole set is what says whether the rendering moved or the environment did.
+    assert not regressed, (
+        "pixel difference regressed:\n  " + "\n  ".join(regressed)
+        + f"\nmeasured on this run: {measured}"
+        + f"\nrecorded baseline:    {PIXEL_DIFFERENCE_BASELINE}"
+    )
 
 
 def test_page4_prints_sector_weights_as_on_chart_labels(client, tmp_path):

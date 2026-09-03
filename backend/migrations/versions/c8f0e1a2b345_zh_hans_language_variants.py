@@ -51,14 +51,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The foreign key goes first. InnoDB keeps an index to enforce a foreign key, so dropping the
+    # index while the constraint still references it is error 1553 and the downgrade stops here.
+    # SQLite copies the table instead and accepts either order, which is why this only ever shows
+    # up against the real target.
     with op.batch_alter_table("data_snapshots") as batch:
-        batch.drop_index("ix_data_snapshots_source_snapshot_id")
         batch.drop_constraint("fk_data_snapshots_source_snapshot_id_data_snapshots", type_="foreignkey")
+        batch.drop_index("ix_data_snapshots_source_snapshot_id")
         batch.drop_column("source_snapshot_id")
     with op.batch_alter_table("reports") as batch:
+        batch.drop_constraint("fk_reports_translation_source_report_id_reports", type_="foreignkey")
         batch.drop_constraint("uq_report_language_variant", type_="unique")
         batch.drop_index("ix_reports_translation_source_report_id")
-        batch.drop_constraint("fk_reports_translation_source_report_id_reports", type_="foreignkey")
         batch.drop_column("translation_source_report_id")
     with op.batch_alter_table("industry_master") as batch:
         batch.drop_column("name_zh_hans")

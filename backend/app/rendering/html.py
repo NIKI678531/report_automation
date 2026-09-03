@@ -182,14 +182,17 @@ def _embedded_cjk_font_css(language_mode: str = ZH_HANS) -> str:
             continue
         regular = base64.b64encode(regular_path.read_bytes()).decode("ascii")
         regular_format = "truetype" if regular_path.suffix.lower() == ".ttf" else "collection"
-        if bold_path is None:
+        # Debian ships the CJK bold faces in fonts-noto-cjk-extra, a separate package from the
+        # regular ones. Requiring both used to mean that an image carrying only the regular face
+        # embedded nothing at all and fell back to whatever Chromium had — worse than embedding
+        # the regular face and letting the renderer synthesise bold from it.
+        if bold_path is None or not bold_path.is_file():
             return (
                 f'@font-face{{font-family:"{family}";'
-                f'src:url("data:font/ttf;base64,{regular}") format("{regular_format}");'
+                f'src:url("data:font/{"ttf" if regular_format == "truetype" else "collection"};'
+                f'base64,{regular}") format("{regular_format}");'
                 'font-style:normal;font-weight:100 900;font-display:block;}'
             )
-        if not bold_path.is_file():
-            continue
         bold = base64.b64encode(bold_path.read_bytes()).decode("ascii")
         return (
             f'@font-face{{font-family:"{family}";'
