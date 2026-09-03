@@ -95,14 +95,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_quality_check_results_check_id", table_name="quality_check_results")
-    op.drop_index("ix_quality_check_results_snapshot_id", table_name="quality_check_results")
+    # DROP TABLE takes the table's own indexes with it. Naming them first is redundant, and every
+    # snapshot_id here is a foreign key, so InnoDB refuses outright (1553) — it needs that index to
+    # enforce the constraint.
     op.drop_table("quality_check_results")
-    op.drop_index("ix_module_snapshots_module_code", table_name="module_snapshots")
-    op.drop_index("ix_module_snapshots_snapshot_id", table_name="module_snapshots")
     op.drop_table("module_snapshots")
-    op.drop_index("ix_metric_values_metric_code", table_name="metric_values")
-    op.drop_index("ix_metric_values_snapshot_id", table_name="metric_values")
     op.drop_table("metric_values")
-    op.drop_index("ix_snapshot_datasets_snapshot_id", table_name="snapshot_datasets")
     op.drop_table("snapshot_datasets")

@@ -45,5 +45,6 @@ def downgrade() -> None:
         batch_op.drop_constraint("fk_data_imports_batch_id", type_="foreignkey")
         batch_op.drop_index("ix_data_imports_batch_id")
         batch_op.drop_column("batch_id")
-    op.drop_index(op.f("ix_import_batches_report_id"), table_name="import_batches")
+    # No drop_index here: DROP TABLE takes the table's own indexes with it, and report_id is a
+    # foreign key, so InnoDB refuses to drop the index that enforces it (1553).
     op.drop_table("import_batches")

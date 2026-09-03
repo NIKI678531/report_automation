@@ -119,6 +119,5 @@ def downgrade() -> None:
         batch.drop_index("ix_data_imports_mapping_profile_id")
         batch.drop_column("mapping_version")
         batch.drop_column("mapping_profile_id")
-    op.drop_index("ix_mapping_profiles_dataset_type", table_name="mapping_profiles")
-    op.drop_index("ix_mapping_profiles_profile_id", table_name="mapping_profiles")
+    # DROP TABLE takes the table's own indexes with it; naming them first is redundant.
     op.drop_table("mapping_profiles")

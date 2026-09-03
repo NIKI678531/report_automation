@@ -152,9 +152,11 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   reserves four bytes per character, so a longer column is a `CREATE TABLE` failure on MySQL that
   SQLite accepts silently. Long values are made unique through a hash column instead — that is what
   `news_items.source_url_hash` is for. A downgrade drops a foreign key **before** the index that
-  backs it: InnoDB keeps that index to enforce the constraint and answers 1553, while SQLite copies
-  the table and accepts either order. `test_migrations_apply_to_a_real_mysql_database` is the run
-  that catches it, and it only runs where `TEST_MYSQL_URL` is set — CI, or a throwaway schema.
+  backs it, and **never** names an index it is about to `drop_table` anyway: InnoDB keeps that index
+  to enforce the constraint and answers 1553, while SQLite copies the table and accepts either order.
+  Autogenerate emits `drop_index` before every `drop_table` — delete those lines, `DROP TABLE` takes
+  its own indexes with it. `test_migrations_apply_to_a_real_mysql_database` is the run that catches
+  it, and it only runs where `TEST_MYSQL_URL` is set — CI, or a throwaway schema.
 
 ### Frontend layout (`frontend/src/`)
 

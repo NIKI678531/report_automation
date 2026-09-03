@@ -52,9 +52,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_news_fetch_runs_snapshot_id", table_name="news_fetch_runs")
-    op.drop_index("ix_news_fetch_runs_report_id", table_name="news_fetch_runs")
+    # DROP TABLE takes the table's own indexes with it. Naming them first is redundant, and where
+    # the column carries a foreign key InnoDB refuses outright (1553) because it needs that index
+    # to enforce the constraint.
     op.drop_table("news_fetch_runs")
-    op.drop_index("ix_report_news_candidates_news_item_id", table_name="report_news_candidates")
-    op.drop_index("ix_report_news_candidates_report_id", table_name="report_news_candidates")
     op.drop_table("report_news_candidates")

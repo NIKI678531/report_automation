@@ -126,8 +126,10 @@
 - 连接池按 MySQL 配置：`pool_pre_ping` + `pool_recycle`（须小于服务端 `wait_timeout`），
   否则闲置后第一笔请求会撞上 "MySQL server has gone away"。
 - 每个迁移都要能**逐条** upgrade 与 downgrade；`backend/tests/test_migrations.py` 会一条条走。
-- downgrade 里**先删外键，再删支撑它的索引**。InnoDB 要靠那个索引来执行外键，顺序反了报 1553；
-  SQLite 是整表重建，两种顺序都收，所以这个错只有跑真机 MySQL 才看得见（CI 已设 `TEST_MYSQL_URL`）。
+- downgrade 里**先删外键，再删支撑它的索引**；而**要 `drop_table` 的表根本不要写 `drop_index`**——
+  `DROP TABLE` 本来就会带走自己的索引，autogenerate 生成的那几行纯属冗余，列上带外键时还会直接报错。
+  InnoDB 要靠那个索引来执行外键，顺序反了或先删索引都报 1553；SQLite 是整表重建，两种写法都收，
+  所以这个错只有跑真机 MySQL 才看得见（CI 已设 `TEST_MYSQL_URL`）。
 
 ### UI
 

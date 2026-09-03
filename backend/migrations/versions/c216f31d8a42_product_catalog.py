@@ -72,6 +72,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_product_catalog_ticker", table_name="product_catalog")
-    op.drop_index("ix_product_catalog_product_code", table_name="product_catalog")
+    # DROP TABLE takes the table's own indexes with it; naming them first is redundant.
     op.drop_table("product_catalog")

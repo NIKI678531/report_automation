@@ -39,6 +39,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_industry_master_version", table_name="industry_master")
-    op.drop_index("ix_industry_master_taxonomy", table_name="industry_master")
+    # DROP TABLE takes the table's own indexes with it; naming them first is redundant.
     op.drop_table("industry_master")
