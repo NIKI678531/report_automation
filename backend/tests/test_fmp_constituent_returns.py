@@ -11,6 +11,7 @@ from app.domain.service.snapshots import (
     has_approved_constituent_bundle,
 )
 from app.integrations.fmp import FmpProviderError, fmp_symbol, load_constituent_returns
+from conftest import require_fixtures
 
 
 def test_fmp_loads_selected_month_total_returns_with_auditable_observations(monkeypatch):
@@ -256,6 +257,7 @@ def test_applying_constituent_identity_auto_populates_page_04_returns(client, mo
         json={"product_code": "3033", "report_date": "2026-06-30"},
     ).json()
     fixture = Path(__file__).parent / "fixtures" / "ingestion" / "index_constituents.csv"
+    require_fixtures(fixture)
     staged = client.post(
         f"/api/v1/reports/{report['id']}/imports",
         data={"dataset_type": "index_constituents"},

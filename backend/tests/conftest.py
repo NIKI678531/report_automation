@@ -1,4 +1,5 @@
 from datetime import date
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,56 @@ from app.core.database import Base, get_db
 from app.core.config import settings
 from app.domain.models import MappingProfile, ProductCatalog
 from app.main import create_app
+
+# Data that is not the source code's to publish: the golden records are transcribed from an
+# approved published report and the ingestion samples are vendor EOD extracts, so a checkout can
+# legitimately arrive without them. A module that reads one at import time turns that into a
+# collection error, which stops the whole run and reads as a broken suite rather than as absent
+# data — so the rule is: present, run; absent, skip and say why.
+FIXTURE_ROOT = Path(__file__).parent / "fixtures"
+GOLDEN_FIXTURE_DIR = FIXTURE_ROOT / "3033_202606"
+INGESTION_FIXTURE_DIR = FIXTURE_ROOT / "ingestion"
+
+_ABSENT = (
+    "{names} not in this checkout. The approved golden records and the vendor ingestion samples "
+    "are kept out of the published source snapshot; run this suite where backend/tests/fixtures/ "
+    "is populated to cover it."
+)
+
+
+def require_fixtures(*paths: Path, module_level: bool = False) -> None:
+    """Skip rather than fail when local-only approved data is absent.
+
+    `module_level=True` is for a module that reads a fixture while being imported, where a plain
+    `pytest.skip` would be an error instead of a skip.
+    """
+    missing = [path for path in paths if not path.exists()]
+    if not missing:
+        return
+    names = ", ".join(str(path.relative_to(FIXTURE_ROOT)) for path in missing)
+    pytest.skip(_ABSENT.format(names=names), allow_module_level=module_level)
+
+
+class _FixtureAwareClient(TestClient):
+    """A TestClient that reports an absent golden fixture as a skip, not as a failed assertion.
+
+    The TESTING lane reads `snapshot.json` inside the application, so a test that exercises it
+    never touches the file itself — it posts `source_policy=GOLDEN_FIXTURE` and gets a 503
+    `FIXTURE_MISSING` back. Recognising that one error code here keeps the alternative (a
+    `require_fixtures` call at the top of every such test) from being spread across the suite,
+    where it would be forgotten by the next test that needs it.
+    """
+
+    def post(self, *args, **kwargs):
+        response = super().post(*args, **kwargs)
+        if response.status_code == 503:
+            try:
+                error_code = response.json().get("error_code")
+            except ValueError:
+                error_code = None
+            if error_code == "FIXTURE_MISSING":
+                require_fixtures(GOLDEN_FIXTURE_DIR / "snapshot.json")
+        return response
 
 
 @pytest.fixture()
@@ -219,5 +270,5 @@ def client(monkeypatch):
             yield session
 
     app.dependency_overrides[get_db] = override_db
-    with TestClient(app) as test_client:
+    with _FixtureAwareClient(app) as test_client:
         yield test_client

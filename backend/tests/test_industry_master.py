@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.domain.industry import normalize_hsics_code, parse_industry_master_csv
+from conftest import require_fixtures
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ingestion" / "index_constituents.csv"
@@ -27,6 +28,7 @@ def test_hsics_codes_restore_level_width_and_validate_hierarchy():
 
 
 def test_imported_effective_hsics_maps_snapshot_source_codes(client):
+    require_fixtures(FIXTURE)
     imported = client.post(
         "/api/v1/industry-master/import",
         files={"file": ("hsics.csv", master_csv(), "text/csv")},

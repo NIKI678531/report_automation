@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 
+from conftest import require_fixtures
+
 FIXTURES = Path(__file__).parent / "fixtures" / "ingestion"
 
 
@@ -66,6 +68,9 @@ def bloomberg_static_fallback_workbook() -> bytes:
 
 
 def upload(client, report_id: str, dataset_type: str, path: Path, filename: str | None = None):
+    # Guarding here rather than in each caller: every vendor sample this module uploads arrives
+    # through this one helper, and a per-test guard is the kind that the next test forgets.
+    require_fixtures(path)
     mime = "text/csv" if path.suffix == ".csv" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     return client.post(
         f"/api/v1/reports/{report_id}/imports",
@@ -537,6 +542,8 @@ def test_required_logical_slots_auto_calculate_without_golden_fixture(client):
 
 
 def test_total_return_slot_rolls_back_immediately_when_period_calculation_fails(client):
+    # Reads the vendor samples directly instead of going through `upload`, so it needs its own guard.
+    require_fixtures(FIXTURES / "index_constituents.csv", FIXTURES / "bloomberg_monthly.xlsx")
     client.post(
         "/api/v1/industry-master/import",
         files={"file": ("hsics.csv", hsics_master_csv(), "text/csv")},

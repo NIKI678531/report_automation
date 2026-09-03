@@ -18,6 +18,7 @@ from app.integrations.da_report import (
 )
 from app.integrations.datawarehouse import DataWarehouseProviderError
 from app.domain.service import news as news_service
+from conftest import require_fixtures
 
 
 INGESTION_FIXTURE = Path(__file__).parent / "fixtures" / "ingestion" / "index_constituents.csv"
@@ -77,6 +78,7 @@ def build_da_snapshot(path) -> None:
 
 
 def test_automatic_ensure_skips_a_pending_snapshot(client):
+    require_fixtures(INGESTION_FIXTURE)
     report = client.post("/api/v1/reports", json={"product_code": "SLOT", "report_date": "2026-06-30"}).json()
     uploaded = client.post(
         f"/api/v1/reports/{report['id']}/imports",

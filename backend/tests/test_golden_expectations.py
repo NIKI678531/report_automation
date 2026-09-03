@@ -14,7 +14,12 @@ from pathlib import Path
 
 import pytest
 
+from conftest import require_fixtures
+
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "3033_202606"
+# Both files are read while this module is imported, so an absent fixture has to be answered here:
+# further down it would already be a collection error.
+require_fixtures(FIXTURE_DIR / "expected.json", FIXTURE_DIR / "snapshot.json", module_level=True)
 EXPECTED = json.loads((FIXTURE_DIR / "expected.json").read_text(encoding="utf-8"))
 PAYLOAD = json.loads((FIXTURE_DIR / "snapshot.json").read_text(encoding="utf-8"))
 

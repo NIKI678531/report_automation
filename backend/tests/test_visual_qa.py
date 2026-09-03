@@ -9,8 +9,11 @@ from pathlib import Path
 import pypdfium2 as pdfium
 
 from app.rendering.visual_qa import verify_pdf
+from conftest import require_fixtures
 
 REFERENCE = Path(__file__).parent / "fixtures" / "3033_202606" / "reference.pdf"
+# Every test here compares against the approved report, so there is nothing left to run without it.
+require_fixtures(REFERENCE, module_level=True)
 
 # Recorded baselines, not targets. The specification asks for <= 0.5%; the current output
 # is far from that (see docs/implementation-status.md). Asserting "never worse than the

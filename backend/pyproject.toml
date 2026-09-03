@@ -42,3 +42,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# A skip is how this suite says "the local-only approved data is not in this checkout". `-rs`
+# prints every reason, so a run that covers less than it appears to says so in its own log
+# instead of looking like a clean pass.
+addopts = "-rs"

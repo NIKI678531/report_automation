@@ -24,6 +24,11 @@
 - 前端开发：`npm run dev`（Vite，`http://localhost:5173`，`/api` 代理到 8000）
 - 后端开发：`.\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --reload --port 8000`
 - 后端测试：`.\.venv\Scripts\python -m pytest backend/tests`
+  - `backend/tests/fixtures/` 是不便随源码发布的数据（照批准报告转录的金标准、供应商 EOD 样本），
+    所以检出里可能没有它。需要它的用例一律调 `conftest.require_fixtures()`，缺失就**跳过**而不是失败；
+    `addopts = "-rs"` 会把每条跳过原因打进日志，覆盖变少时日志自己会说。导入期就读基准文件的模块必须
+    用 `module_level=True`，否则整轮在收集阶段就死。TESTING 通道的用例不碰文件：应用返回 503
+    `FIXTURE_MISSING`，conftest 的测试客户端把这一个错误码转成同样的跳过。
 - 真机 MySQL 迁移验证：设 `TEST_MYSQL_URL` 指向**一次性**库后跑 `backend/tests/test_migrations.py`
   （该用例会先 downgrade 到 base，切勿指向有数据的库）
 - 前端测试：`npm test`；生产构建：`npm run build`
