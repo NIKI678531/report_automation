@@ -24,8 +24,9 @@
 - 前端开发：`npm run dev`（Vite，`http://localhost:5173`，`/api` 代理到 8000）
 - 后端开发：`.\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --reload --port 8000`
 - 后端测试：`.\.venv\Scripts\python -m pytest backend/tests`
-  - `backend/tests/fixtures/` 是不便随源码发布的数据（照批准报告转录的金标准、供应商 EOD 样本），
-    所以检出里可能没有它。需要它的用例一律调 `conftest.require_fixtures()`，缺失就**跳过**而不是失败；
+  - `backend/tests/fixtures/` 是批准的基准数据（照已发布报告转录的金标准、供应商 EOD 样本），
+    随仓库一起发布；但它也是检出里唯一可能缺席的部分（精简导出、稀疏克隆）。
+    需要它的用例一律调 `conftest.require_fixtures()`，缺失就**跳过**而不是失败；
     `addopts = "-rs"` 会把每条跳过原因打进日志，覆盖变少时日志自己会说。导入期就读基准文件的模块必须
     用 `module_level=True`，否则整轮在收集阶段就死。TESTING 通道的用例不碰文件：应用返回 503
     `FIXTURE_MISSING`，conftest 的测试客户端把这一个错误码转成同样的跳过。

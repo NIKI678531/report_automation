@@ -1,0 +1,293 @@
+{
+  "pages": 4,
+  "page_info": [
+    {
+      "page": 1,
+      "width_pt": 595.2,
+      "height_pt": 841.92,
+      "fonts": [
+        [
+          "BCDFEE+Calibri",
+          3114
+        ],
+        [
+          "BCDEEE+Calibri-Bold",
+          468
+        ],
+        [
+          "BCDGEE+Calibri",
+          125
+        ]
+      ],
+      "sizes": [
+        [
+          11.0,
+          2229
+        ],
+        [
+          10.6,
+          847
+        ],
+        [
+          10.0,
+          182
+        ],
+        [
+          11.1,
+          157
+        ],
+        [
+          14.0,
+          129
+        ],
+        [
+          12.0,
+          123
+        ],
+        [
+          24.0,
+          39
+        ],
+        [
+          8.0,
+          1
+        ]
+      ],
+      "colors": [
+        [
+          "(0.0,)",
+          3435
+        ],
+        [
+          "(0.133, 0.196, 0.498)",
+          202
+        ],
+        [
+          "(1.0,)",
+          69
+        ],
+        [
+          "(0.537,)",
+          1
+        ]
+      ],
+      "rects": 6,
+      "lines": 1,
+      "images": 1,
+      "text": "                                                                                  \n    Monthly Commentary | June 30, 2026                                            \n                                                                                  \n    CSOP    Hang    Seng   TECH    Index   ETF   (3033.HK)                        \n                                                                                  \n    June in Review                                                                \n                                                                                  \n    The correction in the Hang Seng TECH Index during June was primarily driven by valuation compression and a rotation in\n    investor positioning, rather than a deterioration in the underlying technology cycle. While the index experienced a broad-based\n    pullback, performance within the sector remained differentiated. Traditional internet platforms, consumer technology, and\n    electric vehicle supply chains faced greater pressure, whereas AI-related sectors, semiconductors, and companies benefiting\n    from domestic technology substitution demonstrated relatively stronger resilience.\n    Overall, June’s correction should not be interpreted as a loss of confidence in China's technology sector. Rather, it reflects a\n    transition from pricing AI narratives to evaluating AI earnings delivery, with investors seeking greater evidence of sustainable\n    profit growth.                                                                \n    Key Drivers of the Correction           Key Areas to Monitor                  \n                                                                                  \n    1. Higher Interest Rate Expectations Weighed on 1. Q2 Earnings and Guidance   \n      Valuations                            Q2 earnings results, particularly trends in advertising, e-\n      The primary driver of the correction was continued commerce monetization, cloud services, and AI\n      uncertainty surrounding earnings delivery. A more commercialization among platform companies, will be\n      hawkish tone from the U.S. Federal Reserve in June critical in determining the pace of valuation recovery.\n      pushed Treasury yields and U.S. dollar strength higher, 2. Liquidity Conditions\n      placing additional valuation pressure on Hong Kong- Investors should continue to monitor U.S. interest rates,\n      listed growth stocks and tightening liquidity conditions RMB exchange rate movements, Southbound capital\n      for offshore Chinese equities.        flows, and Hong Kong equity risk premiums. A more\n    2. Preference for Earnings Visibility and Cash Flow sustained recovery in the Hang Seng TECH Index will\n      Certainty                             likely require stabilisation in external liquidity conditions.\n      Against a tighter liquidity backdrop, investors became                      \n      increasingly selective, favouring companies with                            \n      stronger cash flow generation, clearer earnings Outlook                     \n      visibility, and more tangible order pipelines. Internet                     \n                                            The June correction was primarily driven by short-term\n      platform companies continued to face headwinds from                         \n                                            valuation compression and sector rotation, rather than a\n      promotional competition, AI investment spending, and                        \n                                            structural deterioration in the sector's fundamentals.\n      a gradual consumer recovery, while electric vehicle and                     \n                                            Looking ahead, the sustainability of any recovery will\n      consumer hardware companies remained exposed to                             \n                                            depend on companies' ability to deliver earnings growth\n      pricing pressure, inventory adjustments, and uncertain                      \n                                            and on AI-related investments transitioning from\n      demand.                                                                     \n                                            thematic enthusiasm to tangible commercial and\n    3. AI Exposure Increased but Requires Further Earnings                        \n                                            financial results.                    \n      Validation                                                                  \n      The June index review added AI-related companies                            \n      such as Zhipu and MiniMax, increasing the index's AI                        \n      exposure. However, these additions are not yet                              \n      sufficiently large to materially alter the overall index                    \n      composition. In addition, following the strong rally in                     \n      AI-related stocks, investors have increasingly shifted                      \n      their focus towards valuation sustainability, share                         \n      unlocks, and the pace of commercialisation.                                 \n                Historical Performance of 3033.HK and Hang Seng TECH Index*       \n                 1-month return (%) 3-month return (%) 6-month return (%) YTD return (%)\n    3033.HK           -8.22           -3.50           -18.79          -18.79      \n    HSTECHN Index     -8.14           -3.24           -18.38          -18.38      \n    *Bloomberg, as of 30/06/2026. 1-month return: 29/05/2026-30/06/2026, 3-month return: 31/03/2026-30/06/2026, 6-month\n    return: 31/12/2025-30/06/2026, YTD return: 31/12/2025-30/06/2026.             \n                                                                                  \n                                                                                  \n                                                                                1 "
+    },
+    {
+      "page": 2,
+      "width_pt": 595.2,
+      "height_pt": 841.92,
+      "fonts": [
+        [
+          "BCDFEE+Calibri",
+          4588
+        ],
+        [
+          "BCDEEE+Calibri-Bold",
+          521
+        ],
+        [
+          "BCDGEE+Calibri",
+          59
+        ],
+        [
+          "BCDIEE+Calibri-Bold",
+          18
+        ],
+        [
+          "BCDHEE+SymbolMT",
+          7
+        ]
+      ],
+      "sizes": [
+        [
+          10.0,
+          5146
+        ],
+        [
+          12.0,
+          34
+        ],
+        [
+          14.0,
+          12
+        ],
+        [
+          8.0,
+          1
+        ]
+      ],
+      "colors": [
+        [
+          "(0.0,)",
+          4619
+        ],
+        [
+          "(0.184, 0.329, 0.588)",
+          527
+        ],
+        [
+          "(0.133, 0.196, 0.498)",
+          46
+        ],
+        [
+          "(0.537,)",
+          1
+        ]
+      ],
+      "rects": 1,
+      "lines": 1,
+      "images": 1,
+      "text": "                                                                                  \n    Monthly Commentary | June 30, 2026                                            \n                                                                                  \n    Company News                                                                  \n                                                                                  \n   • NetEase (9999.HK) games’ Eggy Party PC version goes live                     \n     NetEase Games’ party game Eggy Party today (June 5) launched on Windows, bringing the full experience to PC players with cross-\n     platform account and data synchronization between mobile and PC. Players can seamlessly switch between devices while retaining\n     their progress. The PC version preserves popular game modes, including Peak Party, Casual Party, and Eggy Farm.\n     It also introduces a PC-exclusive map editor, which allows creators to take advantage of the precision of keyboard-and-mouse\n     controls and the larger screen format to build more sophisticated and higher-quality custom maps. A Mac version is also currently\n     in development and is expected to launch in the near future.                 \n                                                                                  \n   • SMIC (0981.HK) raises full-year outlook as domestic orders drive Q2 guidance well above consensus\n     Semiconductor Manufacturing International Corporation (SMIC) reported first-quarter 2026 revenue of US$2.505 billion, up 0.7%\n     sequentially. For Q2, the company guided revenue to US$2.86 billion to US$2.90 billion, implying quarter-on-quarter growth of\n     14% to 16%.                                                                  \n     Gross margin held at 20.1% in Q1, a 0.9-percentage-point sequential improvement, with Q2 gross margin guided in the 20%-22%\n     range — the upper end of which would represent the company's strongest margin performance in several quarters. Management\n                                                                                  \n     attributed the upgraded outlook to rising customer demand and a recovery in on-hand orders, stating the company is \"more\n     optimistic about overall operations this year compared to last quarter.\"     \n   • BYD (1211.HK) chairman says firm will be world’s biggest automaker in 5 years\n     BYD chairman Wang Chuanfu on June 9 said he expects the Chinese firm to become the world’s largest automaker within five\n                                                                                  \n     years, as he sought to reassure investors following a steep decline in the company’s share price.\n     BYD, which ranked sixth globally in 2025 with 4.6 million vehicles sold, has struggled to restore growth after its domestic sales\n     were hit by intensified competition with local peers over the past year. Shares of the company have dropped more than 45 per\n     cent from their peak in Hong Kong over the past year, while its Shenzhen-listed stock has fallen 33 per cent.\n     Speaking at the company’s annual shareholder meeting at its Shenzhen headquarters, Wang addressed nearly 1,000 shareholders,\n     emphasising a focus on ramping up the output of its second-generation Blade Battery, which he identified as 2026’s key growth\n     bottleneck, according to the state-owned Shanghai Securities News.           \n                                                                                  \n   • Meituan (3690.HK)’s reset starts with narrower delivery losses               \n     In the first quarter of 2026, Meituan recorded RMB 91 billion (US$13.4 billion) in revenue, up 5.6% year-on-year and broadly in line\n     with expectations. The stronger signal was its operating loss, which narrowed to RMB 6.5 billion (US$957.5 million) from RMB 16.1\n     billion (US$2.4 billion) in the previous quarter. Its core local commerce segment, the group’s most scrutinized business, cut its\n     operating loss to RMB 2 billion (US$294.6 million) from RMB 10 billion (US$1.5 billion), materially better than analysts’\n     expectations of RMB 4.0–4.5 billion (US$589.2–662.9 million).                \n                                                                                  \n   • Baidu AI chip unit Kunlunxin targets US$50 billion valuation in Hong Kong IPO, report says\n     As of 28 June, the Information reported that Baidu's AI chip unit Kunlunxin is planning a Hong Kong IPO targeting a valuation of\n     US$50 billion, after Baidu said in January that the unit had confidentially filed a listing application with the Hong Kong stock\n     exchange. The report said prospective investors were asked to buy chips worth three to seven times the value of their planned IPO\n     share subscription, while Reuters said it could not immediately verify the report and Baidu did not immediately comment. The\n     planned deal matters for investors because it points to renewed momentum in Hong Kong and China's tech fundraising, with\n     Kunlunxin also drawing commercial interest as ByteDance was considering using its chips and Tencent is already a customer.\n                                                                                  \n   • Zhipu AI market cap tops HK$1 trillion as GLM-5.2 developer's shares soar    \n     On 22 June, Zhipu AI's market capitalisation surpassed HK$1 trillion (US$128 billion) after its Hong Kong-listed shares surged as\n     much as 42% in Monday morning trading to a peak of HK$2,980. The rally followed the release last week of Zhipu's open-source\n     GLM-5.2 model, which features a 1-million-token context window, boosting investor optimism as the company competes more\n     directly with US artificial intelligence rivals. For investors, the move underscores strong market enthusiasm for China AI names and\n     highlights how product launches can quickly re-rate valuations in the sector.\n                                                                                  \n   • MiniMax (0100.HK) plans China IPO as it eyes local rivals like DeepSeek      \n                                                                                  \n     China’s MiniMax Group has begun preparations for a domestic initial public offering (IPO), according to a regulatory filing, as the\n     fast-growing artificial intelligence (AI) startup challenges local rivals including DeepSeek. The filing comes after the Shanghai-based\n     company listed in Hong Kong in January, joining a wave of Chinese AI firms turning to public markets to fund costly model\n     development and expansion.                                                   \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                2 "
+    },
+    {
+      "page": 3,
+      "width_pt": 595.2,
+      "height_pt": 841.92,
+      "fonts": [
+        [
+          "BCDFEE+Calibri",
+          1827
+        ],
+        [
+          "BCDEEE+Calibri-Bold",
+          158
+        ],
+        [
+          "BCDGEE+Calibri",
+          61
+        ]
+      ],
+      "sizes": [
+        [
+          10.0,
+          1931
+        ],
+        [
+          12.0,
+          76
+        ],
+        [
+          16.0,
+          38
+        ],
+        [
+          8.0,
+          1
+        ]
+      ],
+      "colors": [
+        [
+          "(0.0,)",
+          1701
+        ],
+        [
+          "(1.0,)",
+          230
+        ],
+        [
+          "(0.133, 0.196, 0.498)",
+          72
+        ],
+        [
+          "(0.129,)",
+          42
+        ],
+        [
+          "(0.537,)",
+          1
+        ]
+      ],
+      "rects": 39,
+      "lines": 42,
+      "images": 1,
+      "text": "                                                                                  \n    Monthly Commentary | June 30, 2026                                            \n                                                                                  \n                                                                                  \n                      The Performance of HSTECH Constituents                      \n                                                                                  \n                          (*Next Rebalancing Date: 4 September 2026)              \n                                                                                  \n     Stock             Closing Price Weighting 1-month 3-month 6-month  YTD return\n            Stock Name                                                            \n     Code                (HKD)     (%)    return (%) return (%) return (%) (%)    \n      981     SMIC                          9.56     76.33     25.12     25.12    \n                         89.4     10.15                                           \n     9999    NTES - S                       4.89     19.40      -4.19    -4.19    \n                         202.4    9.53                                            \n      700    TENCENT                        0.61     -10.17    -27.41    -27.41   \n                         429.8    8.30                                            \n     3690  MEITUAN - W                      -6.74    -17.42    -33.69    -33.69   \n                         68.5     7.45                                            \n     1211  BYD COMPANY                     -20.26    -31.19    -23.65    -23.65   \n                         72.45    6.97                                            \n     1810   XIAOMI - W                     -22.82    -31.86    -44.94    -44.94   \n                         21.64    6.80                                            \n     9988    BABA - W                      -22.50    -21.27    -34.39    -34.39   \n                         92.85    6.60                                            \n     1347 HUA HONG GRACE                   33.42     177.14    189.64    189.64   \n                         215.2    5.14                                            \n     9888   BIDU - SW    109.6    4.96     -15.69     3.69     -16.65    -16.65   \n     9618    JD - SW                       -12.56    -9.26      -7.95    -7.95    \n                         99.25    4.73                                            \n      992  LENOVO GROUP                     -4.08    151.58    148.60    148.60   \n                         23.02    4.70                                            \n     1024  KUAISHOU - W                     -7.11    -6.25     -33.85    -33.85   \n                         41.6     3.79                                            \n     9961   TRIP.COM - S                   -15.51    -18.17    -43.75    -43.75   \n                         311.6    2.57                                            \n     9868   XPENG - W                      -20.67    -22.61    -36.17    -36.17   \n                         50.65    2.47                                            \n     2015   LI AUTO - W                    -20.35    -31.94    -28.94    -28.94   \n                         46.08    1.93                                            \n      300  MIDEA GROUP                      1.36      3.72      2.32     2.32     \n                         82.6     1.53                                            \n     6690 HAIER SMARTHOME                   1.42     -3.57     -17.71    -17.71   \n                         19.98    1.45                                            \n     9660 HORIZONROBOT - W                 -22.87    -38.37    -52.89    -52.89   \n                         4.08     1.43                                            \n      20   SENSETIME - W                   -19.28    -27.17    -39.09    -39.09   \n                         1.34     1.38                                            \n     2382  SUNNY OPTICAL                   -26.12    15.83      -5.55    -5.55    \n                          61      1.28                                            \n     9626   BILIBILI - W                    -3.37    -22.85    -31.73    -31.73   \n                         131.7    1.26                                            \n     2513 KNOWLEDGE ATLAS                  31.91     203.39    1710.67  1710.67   \n                         2104     1.11                                            \n     6618   JD HEALTH                      -14.48    -30.22    -40.83    -40.83   \n                         32.84    1.10                                            \n     9863   LEAPMOTOR                      -12.26    -26.67    -29.08    -29.08   \n                         34.48    0.76                                            \n     9866    NIO - SW                       -8.85    -11.67     -5.42    -5.42    \n                         38.74    0.72                                            \n      241   ALI HEALTH                     -15.15    -33.91    -39.01    -39.01   \n                         3.08     0.60                                            \n      780 TONGCHENGTRAVEL                  -13.56    -32.00    -45.45    -45.45   \n                         11.99    0.51                                            \n      285  BYD ELECTRONIC                  -27.78    -23.64    -37.35    -37.35   \n                         20.92    0.49                                            \n      100  MINIMAX - W                     -50.36    -55.14    152.73    152.73   \n                         417      0.23                                            \n     1698    TME - SW    32.88    0.06      -6.96    -9.29     -51.12    -51.12   \n    Source: Bloomberg, Hang Seng Indexes Company Limited, as of 30/06/2026 *Rebalancing will be conducted after closing of the 1st\n    Friday in March, June, September and December. 1-month return: 12/05/2026-12/06/2026, 3-month return: 12/03/2026-12/06/2026,\n    6-month return: 12/12/2025-12/06/2026, YTD return: 31/12/2025-12/06/2026. If the listing history of the stock is less than the\n    calculating period of the return, the value will show “#N/A”.                 \n                                                                                3 "
+    },
+    {
+      "page": 4,
+      "width_pt": 595.2,
+      "height_pt": 841.92,
+      "fonts": [
+        [
+          "BCDFEE+Calibri",
+          615
+        ],
+        [
+          "BCDEEE+Calibri-Bold",
+          246
+        ],
+        [
+          "BCDJEE+ArialMT",
+          4
+        ],
+        [
+          "BCDGEE+Calibri",
+          2
+        ]
+      ],
+      "sizes": [
+        [
+          12.0,
+          571
+        ],
+        [
+          10.0,
+          124
+        ],
+        [
+          14.0,
+          73
+        ],
+        [
+          10.6,
+          65
+        ],
+        [
+          11.0,
+          18
+        ],
+        [
+          8.0,
+          6
+        ],
+        [
+          6.7,
+          6
+        ],
+        [
+          9.4,
+          4
+        ]
+      ],
+      "colors": [
+        [
+          "(0.0,)",
+          692
+        ],
+        [
+          "(0.133, 0.196, 0.498)",
+          107
+        ],
+        [
+          "(1.0,)",
+          63
+        ],
+        [
+          "(0.251,)",
+          4
+        ],
+        [
+          "(0.537,)",
+          1
+        ]
+      ],
+      "rects": 13,
+      "lines": 23,
+      "images": 1,
+      "text": "                                                                                  \n    Monthly Commentary | June 30, 2026                                            \n                                                                                  \n                                                                                  \n        Top 10 Index Constituents* (%)             Index Sectors Breakdown*       \n                                                                                  \n    SEMICONDUCTOR MANUFACTURING  10.15                                            \n                                                                1.3%              \n                                                    1.7%                          \n    NETEASE INC                  9.53                                             \n    TENCENT HOLDINGS LTD         8.30                                             \n                                                                                  \n    MEITUAN                      7.45                                             \n                                                                   47.8%          \n    BYD CO LTD                   6.97                                             \n                                                  49.3%                           \n    XIAOMI CORP                  6.80                                             \n                                                                                  \n    ALIBABA GROUP HOLDING LTD    6.60                                             \n                                                                                  \n    HUA HONG SEMICONDUCTOR LTD   5.14                                             \n                                             Consumer Discretionary Information Technology\n    BAIDU INC                    4.96                                             \n                                             Healthcare        Industrials        \n    JD.COM INC                   4.73                                             \n                                                                                  \n                                                                                  \n    Top Performers in June**              Bottom Performers in June**             \n                                                                                  \n     Issuer               June Return (%)   Issuer              June Return (%)   \n                                                                                  \n    HUA HONG                                                                      \n                             33.42         SUNNY OPTICAL           -26.12         \n    SEMICONDUCTOR LTD                                                             \n    KNOWLEDGE ATLAS          31.91         BYD ELECTRONIC          -27.78         \n                                                                                  \n    SEMICONDUCTOR                                                                 \n                              9.56         MINIMAX - W             -50.36         \n    MANUFACTURING                                                                 \n                                                                                  \n    3033.HK Portfolio Analysis                                                    \n                                                                                  \n     Asset Under Management (HKD)^                     67,536.55 million          \n                                                                                  \n     Average Daily Turnover (HKD)^^                     12,882 million            \n                                                                                  \n     Number of holdings                                     30                    \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                  \n    *Hang Seng Indexes, as of 30/06/2026.**Wind, 29/05/2026 – 30/06/2026. ^CSOP, asof30/06/2026. ^^Bloomberg, 01/06/2026 –\n    30/06/2026.                                                                   \n                                                                                  \n                                                                                  \n                                                                                  \n                                                                                4 "
+    }
+  ]
+}

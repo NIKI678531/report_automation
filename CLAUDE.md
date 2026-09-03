@@ -34,10 +34,11 @@ Run from the repo root unless noted. Windows/PowerShell paths shown, since that 
   - Against real MySQL: `$env:TEST_MYSQL_URL = "mysql+pymysql://user:pw@host/scratch?charset=utf8mb4"`
     enables `test_migrations_apply_to_a_real_mysql_database`. It downgrades the target to base first,
     so it must point at a throwaway schema.
-  - `backend/tests/fixtures/` holds data the source is not free to publish — golden records
-    transcribed from an approved report, vendor EOD samples — so a checkout can arrive without it.
-    Anything that needs one calls `require_fixtures()` from `conftest.py` and **skips** when it is
-    absent; `addopts = "-rs"` prints each reason, so a thinner run says so in its own log. A module
+  - `backend/tests/fixtures/` holds the approved reference data — golden records transcribed from a
+    published report, vendor EOD samples. It ships with the repository, but it is the one part a
+    checkout can arrive without (sanitized export, sparse clone), so anything that needs a fixture
+    calls `require_fixtures()` from `conftest.py` and **skips** when it is absent instead of
+    failing; `addopts = "-rs"` prints each reason, so a thinner run says so in its own log. A module
     that reads a fixture at import time must guard with `module_level=True`, or the whole run dies
     in collection. TESTING-lane tests never touch the files: the app answers 503 `FIXTURE_MISSING`
     and the test client in `conftest.py` turns that one code into the same skip.

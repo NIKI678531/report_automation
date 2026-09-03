@@ -12,24 +12,25 @@ from app.core.config import settings
 from app.domain.models import MappingProfile, ProductCatalog
 from app.main import create_app
 
-# Data that is not the source code's to publish: the golden records are transcribed from an
-# approved published report and the ingestion samples are vendor EOD extracts, so a checkout can
-# legitimately arrive without them. A module that reads one at import time turns that into a
-# collection error, which stops the whole run and reads as a broken suite rather than as absent
-# data — so the rule is: present, run; absent, skip and say why.
+# The golden records are transcribed from an approved published report and the ingestion samples
+# are vendor EOD extracts. They travel with this repository, but they are the one part of it that a
+# checkout can legitimately arrive without — a sanitized export, a sparse or partial clone, an
+# LFS-less fetch. A module that reads one at import time turns that into a collection error, which
+# stops the whole run and reads as a broken suite rather than as absent data, so the rule is:
+# present, run; absent, skip and say which file and why.
 FIXTURE_ROOT = Path(__file__).parent / "fixtures"
 GOLDEN_FIXTURE_DIR = FIXTURE_ROOT / "3033_202606"
 INGESTION_FIXTURE_DIR = FIXTURE_ROOT / "ingestion"
 
 _ABSENT = (
     "{names} not in this checkout. The approved golden records and the vendor ingestion samples "
-    "are kept out of the published source snapshot; run this suite where backend/tests/fixtures/ "
-    "is populated to cover it."
+    "live under backend/tests/fixtures/ in this repository; restore them (a full clone of the "
+    "default branch carries them) to cover this."
 )
 
 
 def require_fixtures(*paths: Path, module_level: bool = False) -> None:
-    """Skip rather than fail when local-only approved data is absent.
+    """Skip rather than fail when the approved reference data is absent.
 
     `module_level=True` is for a module that reads a fixture while being imported, where a plain
     `pytest.skip` would be an error instead of a skip.
