@@ -1,4 +1,5 @@
 from pathlib import Path
+import argparse
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,10 +9,12 @@ from app.rendering.visual_qa import verify_pdf
 
 
 if __name__ == "__main__":
-    actual = Path(sys.argv[1]) if len(sys.argv) > 1 else max(
-        (ROOT / "var" / "output" / "pdf").glob("*.pdf"),
-        key=lambda path: path.stat().st_mtime,
-    )
+    parser = argparse.ArgumentParser(description="Compare a downloaded PDF with the approved visual baseline.")
+    parser.add_argument("pdf", type=Path, help="PDF saved by an on-demand download")
+    args = parser.parse_args()
+    actual = args.pdf
+    if not actual.is_file():
+        parser.error("The downloaded PDF does not exist.")
     reference = ROOT / "backend" / "tests" / "fixtures" / "3033_202606" / "reference.pdf"
     evidence = ROOT / "var" / "artifacts" / "visual" / "latest"
     result = verify_pdf(actual, reference, evidence)

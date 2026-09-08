@@ -80,7 +80,7 @@
     [data-page="1"] .page-body { padding-top:2mm; }
 {%- if testing_banner %}
     /* Absolutely positioned on purpose: the lane mark must contribute zero height, or it would
-       reflow the page and trip the footer safe-area guard in artifacts.build_artifact. */
+       reflow the page and trip the footer safe-area guard in artifacts.generate_export. */
     .testing-mark { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; overflow:hidden; z-index:5; }
     .testing-watermark { transform:rotate({{ testing_banner.rotationDeg }}deg); color:{{ testing_banner.color }}; opacity:{{ testing_banner.opacity }}; font-size:{{ testing_banner.watermarkPt }}pt; font-weight:700; letter-spacing:.08em; white-space:nowrap; }
     .testing-chip { position:absolute; top:1.2mm; right:7mm; padding:.4mm 1.6mm; border:.6pt solid {{ testing_banner.color }}; color:{{ testing_banner.color }}; font-size:{{ testing_banner.chipPt }}pt; font-weight:700; letter-spacing:.04em; pointer-events:none; z-index:6; }

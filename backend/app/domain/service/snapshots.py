@@ -205,7 +205,7 @@ def has_approved_constituent_bundle(payload: dict) -> bool:
     canonical = datasets.get("constituent_performance")
     identity = datasets.get("index_constituents") or canonical
     returns = datasets.get("constituent_returns") or canonical
-    approved = {"UPLOAD", "CDB", "CDB_MYSQL", "DA_REPORT_SQLITE", "DATAWAREHOUSE_SQLITE", "FMP_API"}
+    approved = {"UPLOAD", "CDB", "CDB_MYSQL", "DA_REPORT_SQLITE", "DA_REPORT_MYSQL", "DATAWAREHOUSE_SQLITE", "FMP_API"}
     return (
         isinstance(identity, dict)
         and isinstance(returns, dict)
@@ -606,7 +606,7 @@ def _stage_auto_snapshot(
     ):
         mapping_versions.append("datawarehouse-performance-v1")
     if any(
-        isinstance(metadata, dict) and metadata.get("source_type") == "DA_REPORT_SQLITE"
+        isinstance(metadata, dict) and metadata.get("source_type") in {"DA_REPORT_SQLITE", "DA_REPORT_MYSQL"}
         for metadata in dataset_metadata.values()
     ):
         mapping_versions.append("da-report-monthly-v1")
@@ -896,8 +896,8 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
         else "DATAWAREHOUSE_PLUS_UPLOAD"
         if bool({"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"} & automatic_source_types)
         else "DA_REPORT_FMP_PLUS_UPLOAD"
-        if {"DA_REPORT_SQLITE", "FMP_API"} <= automatic_source_types
-        else "DA_REPORT_PLUS_UPLOAD" if "DA_REPORT_SQLITE" in automatic_source_types
+        if ("FMP_API" in automatic_source_types and bool({"DA_REPORT_SQLITE", "DA_REPORT_MYSQL"} & automatic_source_types))
+        else "DA_REPORT_PLUS_UPLOAD" if bool({"DA_REPORT_SQLITE", "DA_REPORT_MYSQL"} & automatic_source_types)
         else "FMP_PLUS_UPLOAD" if "FMP_API" in automatic_source_types
         else "UPLOAD_OVERRIDE"
     )

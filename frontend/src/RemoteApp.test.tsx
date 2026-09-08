@@ -31,7 +31,7 @@ it("keeps host history/language untouched and cleans up on strict-mode unmount",
 });
 
 it("preserves the signed download query and refuses off-site download URLs", () => {
-  const signed = "/api/v1/artifacts/a/content?expires=123&signature=a%2Bb%3D";
+  const signed = "/api/v1/reports/a/exports/pdf/content?version=1&expires=123&signature=a%2Bb%3D";
   expect(artifactUrl(signed)).toBe(`/remote/fund-cmt-auto${signed}`);
   for (const url of ["https://example.com/file", "//example.com/file", "/api/v1/reports"]) {
     expect(() => artifactUrl(url)).toThrow("Invalid artifact download URL");

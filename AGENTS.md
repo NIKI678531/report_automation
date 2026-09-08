@@ -8,15 +8,14 @@
 
 - 后端：Python 3.12+、FastAPI、Pydantic v2、SQLAlchemy 2、Alembic、PyMySQL
 - 前端：React 18 + TypeScript + Webpack Module Federation（Vitest 使用 Vite 转换）
-- 任务：Celery + Redis
-- 数据：**上线一律 MySQL 8（utf8mb4）**；SQLite 只是本地回退，部署进程会拒绝以 SQLite 启动 + 对象存储
+- 任务：`TASK_MODE=EAGER`，API 内按需导出／同步翻译；不安装 Celery/Redis，不运行独立 worker（ADR-0028）
+- 数据：**上线一律 MySQL 8（utf8mb4）**；SQLite 只是本地回退，部署进程会拒绝以 SQLite 启动；定稿文档、快照和导出审计保存在数据库
 - 认证：`AUTH_MODE=REMOTE`（远程平台准入，共享操作身份）/ `AUTH_MODE=LOCAL`（请求头断言身份，仅限本机）/ `AUTH_MODE=ENTRA`（校验 Microsoft Entra
   访问令牌，需装 `entra` extra，即 `pyjwt[crypto]`）
-- 产物存储：`STORAGE_BACKEND=LOCAL`（写 `var/output`，仅本机）/ `STORAGE_BACKEND=S3`
-  （任何 S3 兼容对象存储：火山 TOS、MinIO、AWS S3，需 `storage` extra 即 `boto3`）
+- 成品导出：按定稿版本即时生成 HTML/PDF/DOCX，每请求独立临时目录，响应完成或失败后清理；不依赖对象存储（ADR-0029）。
 - 渲染：Jinja2 规范 HTML → Playwright/Chromium PDF；python-docx 生成 DOCX
-- Python 包管理：`pip -e ./backend[dev,render]`（`backend/pyproject.toml`；上线加 `entra,storage`。
-  生产镜像已内置 `[render,entra,storage]`，切模式时不需要再装东西）
+- Python 包管理：`pip -e ./backend[dev,render]`（`backend/pyproject.toml`；可选认证加 `entra`。
+  生产镜像已内置 `[render,entra]`，切模式时不需要再装东西）
 - Node 包管理：**`npm`**（根 `package.json` 的 npm workspaces，工作区为 `frontend`）
 
 ## 启动与常用命令
@@ -37,23 +36,23 @@
 - 全栈容器：`docker compose up --build`（仅用户手动验证镜像，参见 `k8s/README.md`）
 - 上线前自检：`.\.venv\Scripts\python scripts/check_deployment.py [--token "$ACCESS_TOKEN"]`
   （跑一遍会拒绝启动的那些检查，外加数据库可连/是否在 head/列是否 utf8mb4、JWKS 是否可达、
-  产物桶是否可达；给了 token 还会解析出真实的 subject / 角色 / 产品范围。退出码非 0 表示该环境
+  导出临时目录可写且可清理；给了 token 还会解析出真实的 subject / 角色 / 产品范围。退出码非 0 表示该环境
   不得对外提供服务）
   - `--env-file <路径>`：改为体检该文件描述的环境。生产配置在任何进程读它之前就已经写好，
     所有守卫都是配置的纯函数，因此可以在开发机上先把生产环境证明干净，再发布
-  - `--skip-network`：只看配置，不去连租户和对象存储
+  - `--skip-network`：跳过租户 JWKS 请求（提供 --token 时仍校验）；数据库与临时目录检查继续执行
 
 ## 容器与部署现状
 
 - 以用户提供的 deploy-conventions（2026-09）为基础，项目适配见 `docs/adr/0026-remote-app-deployment-conventions.md`。
 - 部署手册为 `k8s/README.md`；UAT / PRD 的 EKS 清单位于 `k8s/uat` / `k8s/prd`，namespace 为 `ih`。
 - 根目录 `docker-compose.uat.yml` / `docker-compose.prd.yml` 只用于构建推送；旧 VM 文件已移除。
-- `compose.yaml` 仅作用户手动镜像验证：临时 MySQL/Redis + migrate/srvapp/worker/webapp，不自动启动。
+- `compose.yaml` 仅作用户手动镜像验证：临时 MySQL + migrate/srvapp/webapp，不自动启动。
 - 远程应用平台负责入口和访问准入；无独立 Ingress、域名、证书和登录。
-  `AUTH_MODE=REMOTE` 使用共享 `remote-app` 身份，仍执行 MySQL/S3/签名密钥/测试通道校验。
+  `AUTH_MODE=REMOTE` 使用共享 `remote-app` 身份，仍执行 MySQL/签名密钥/测试通道校验。
   `LOCAL` 只用于工作站；现有可选 `ENTRA` 能力不属于本次部署。
 - Secret 来自根目录 `.env.<env>`，模板 `.env.<env>.example`；`k8s/create-secret.sh` 解析而非 source。
-- 镜像非 root、只读根文件系统，仅有界 emptyDir/tmpfs 可写；数据与产物存外部 MySQL/TOS。
+- 镜像非 root、只读根文件系统，仅有界 emptyDir/tmpfs 可写；业务数据存外部 MySQL，成品下载后不保留。
 - `backend/requirements.lock` 在 Linux Python 3.12 生成，Dockerfile 做离线依赖漂移检查。
 - 报告字体固定安装 `fonts-crosextra-carlito`、`fonts-noto-cjk`、`fonts-noto-cjk-extra`，与 CI 同步。
 - 前端 npm workspaces / Node 24 构建，nginx-unprivileged 在 3030 运行，`/remote/fund-cmt-auto/api/v1` 反代到 `/api/v1`；接入见 `k8s/REMOTE.md`。
@@ -80,7 +79,7 @@
     在 `quality_checks`。01 Review 与 03 Company News 无数值计算，故此处不设文件。
     从具体模块 import，包顶层不做平铺 re-export。
 - 渲染：`backend/app/rendering/`（`templates/*.j2`、`tokens/3033-v*.json`、`artifacts.py`、`visual_qa.py`）
-- 外部适配器：`backend/app/integrations/`（`da_report.py` 只读快照新闻、`marketaux.py` 可选远程源）
+- 外部适配器：`backend/app/integrations/`（新闻仅使用 `da_report.py`，在 Production 只读查询 DA MySQL，UAT/本地保留 SQLite 快照（ADR-0030 / ADR-0031））
 - 前端：`frontend/src/`（`components/` 通用件、`features/<domain>/` 业务工作台、
   `styles/tokens.css` 设计令牌、`styles.css` 组件样式）
 - 运行时产物：`var/`（已 gitignore，容器内不得作为持久化依赖）
@@ -92,12 +91,10 @@
 - 后端开发与部署**不能依赖任何 PVC**。
 - 如有文件存储、媒体（media）等需求，后端必须使用云对象存储（当前为 TOS）或直接存入数据库。
 - 后端容器内不得保留 media 等持久化文件；生产 K8s 环境不提供 PVC。
-- 这条已经由配置守卫兜住：非 LOCAL 认证下 `STORAGE_BACKEND=LOCAL` 与 SQLite 同级，直接拒绝启动。
-  `STORAGE_BACKEND` 填了没人实现的值（比如以为写 `TOS` 就行）也会拒绝——以前它会静默退回本地磁盘，
-  于是环境看着配好了、其实什么都没存。
-- 下载路由从对象存储端口**流式**读取，不再按路径读文件；产物记录还在但对象没了时返回 404
-  `ARTIFACT_CONTENT_MISSING`——那正是"产物落在容器本地磁盘 + 重启"的样子，报 500 等于把问题
-  算到请求头上。
+- 按需导出是临时文件处理，不持久化成品，不写数据库 BLOB，不需要 S3/TOS（ADR-0029）。
+- 下载固定读取 `finalized_document_version`；定稿和已归档定稿可下载，草稿不可下载。
+- 每次导出写 `export.generated` / `export.failed` 审计；成功仅表示生成完成，不表示用户已保存文件。
+- 历史 RenderArtifact / RenderJob 表记录保留，但不再创建新记录或提供旧成品链接。
 
 ### 安全边界
 
@@ -138,4 +135,3 @@
   **不得**在组件中硬编码。详见 `CLAUDE.md` 的「设计系统」一节。
 - 错误提示走 `api.ts` 的 `ApiError`（已把 message / fix_hint / findings 拼成可读句子）。
   调用点用 `String(caught)` 渲染，**不得**把原始 JSON 或 nginx 的 HTML 错误页塞进状态栏。
-

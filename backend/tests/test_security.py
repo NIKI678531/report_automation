@@ -24,8 +24,7 @@ import pytest
 from app.core import entra
 from app.core.config import ConfigurationError, DEFAULT_DOWNLOAD_SECRET, Settings, settings
 from app.core.security import _API_CSP, _DOCUMENT_CSP, Principal
-from app.core.storage import LocalObjectStorage, S3ObjectStorage, storage
-from app.domain.models import RenderArtifact
+from app.core import download_signing
 from app.main import create_app
 
 ISSUER = "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
@@ -367,178 +366,32 @@ def test_batch_upload_refuses_an_oversized_total(client, monkeypatch):
 
 
 # --------------------------------------------------------------------------------------------
-# Signed downloads and the object root
+# Signed download grants
 # --------------------------------------------------------------------------------------------
 
 
 def test_a_download_signature_is_bound_to_one_caller_and_one_deadline():
     expires = int(time.time()) + 300
-    signature = storage.sign("artifact-1", "alice", expires)
-    assert storage.verify("artifact-1", "alice", expires, signature)
+    signature = download_signing.sign("artifact-1", "alice", expires)
+    assert download_signing.verify("artifact-1", "alice", expires, signature)
     # A link copied to a colleague is not a second grant.
-    assert not storage.verify("artifact-1", "bob", expires, signature)
+    assert not download_signing.verify("artifact-1", "bob", expires, signature)
     # Nor does it unlock a different artifact.
-    assert not storage.verify("artifact-2", "alice", expires, signature)
+    assert not download_signing.verify("artifact-2", "alice", expires, signature)
     # Nor can the deadline be pushed out by editing the query string.
-    assert not storage.verify("artifact-1", "alice", expires + 60, signature)
+    assert not download_signing.verify("artifact-1", "alice", expires + 60, signature)
 
 
 def test_an_expired_download_signature_is_refused():
     expired = int(time.time()) - 1
-    assert not storage.verify("artifact-1", "alice", expired, storage.sign("artifact-1", "alice", expired))
+    assert not download_signing.verify("artifact-1", "alice", expired, download_signing.sign("artifact-1", "alice", expired))
 
 
 def test_a_tampered_download_signature_is_refused():
     expires = int(time.time()) + 300
-    signature = storage.sign("artifact-1", "alice", expires)
+    signature = download_signing.sign("artifact-1", "alice", expires)
     tampered = ("0" if signature[0] != "0" else "1") + signature[1:]
-    assert not storage.verify("artifact-1", "alice", expires, tampered)
-
-
-def test_a_storage_key_cannot_escape_the_object_root(tmp_path):
-    """`storage_key` reaches `resolve()` from the database, so it is not a trusted string."""
-    local = LocalObjectStorage(tmp_path / "objects")
-    (tmp_path / "objects").mkdir()
-    (tmp_path / "secret.txt").write_bytes(b"private")
-    for key in ("../secret.txt", "../../secret.txt", "nested/../../secret.txt"):
-        with pytest.raises(FileNotFoundError):
-            local.resolve(key)
-
-
-def test_a_stored_object_cannot_be_written_outside_the_object_root(tmp_path):
-    local = LocalObjectStorage(tmp_path / "objects")
-    (tmp_path / "objects").mkdir()
-    source = tmp_path / "source.bin"
-    source.write_bytes(b"payload")
-    with pytest.raises(ValueError):
-        local.put_file(source, "../escaped.bin")
-    assert not (tmp_path / "escaped.bin").exists()
-
-
-def test_the_artifact_download_endpoint_needs_a_valid_signature(client):
-    """Without a signature the content route must not fall through to the file."""
-    response = client.get("/api/v1/artifacts/does-not-exist/content", params={"expires": 0, "signature": "x"})
-    assert response.status_code == 404
-    assert response.json()["error_code"] == "ARTIFACT_NOT_FOUND"
-
-
-# --------------------------------------------------------------------------------------------
-# The object-storage port: the same key rules must hold on a bucket, where no filesystem checks them
-# --------------------------------------------------------------------------------------------
-
-
-class _FakeS3Client:
-    """Enough of the S3 client to prove the adapter, since no bucket exists in the test run."""
-
-    def __init__(self, objects: dict[str, bytes] | None = None):
-        self.objects = dict(objects or {})
-
-    def put_object(self, Bucket: str, Key: str, Body):  # noqa: N803 - the boto3 signature
-        self.bucket = Bucket
-        self.objects[Key] = Body.read()
-
-    def get_object(self, Bucket: str, Key: str):  # noqa: N803 - the boto3 signature
-        if Key not in self.objects:
-            raise _NoSuchKey({"Error": {"Code": "NoSuchKey"}})
-        return {"Body": io.BytesIO(self.objects[Key]), "ContentLength": len(self.objects[Key])}
-
-
-class _NoSuchKey(Exception):
-    def __init__(self, response):
-        super().__init__("NoSuchKey")
-        self.response = response
-
-
-def test_an_s3_key_cannot_address_another_prefix(tmp_path):
-    """S3 has no filesystem to resolve `..` against: the key simply names a different object,
-    potentially one belonging to another environment sharing the bucket."""
-    remote = S3ObjectStorage("bucket", prefix="prod", client=_FakeS3Client())
-    source = tmp_path / "source.bin"
-    source.write_bytes(b"payload")
-    for key in ("../uat/leaked.pdf", "nested/../../uat/leaked.pdf", "/absolute.pdf", ""):
-        with pytest.raises(ValueError):
-            remote.put_file(source, key)
-    assert remote.client.objects == {}
-
-
-def test_an_s3_object_round_trips_under_its_prefix(tmp_path):
-    remote = S3ObjectStorage("bucket", prefix="prod", client=_FakeS3Client())
-    source = tmp_path / "artifact.pdf"
-    source.write_bytes(b"%PDF-1.7 body")
-    stored = remote.put_file(source, "reports/r1/report.pdf")
-    # The recorded key stays relative: the prefix is a property of the deployment, not the artifact.
-    assert stored.key == "reports/r1/report.pdf"
-    assert stored.checksum == hashlib.sha256(b"%PDF-1.7 body").hexdigest()
-    assert "prod/reports/r1/report.pdf" in remote.client.objects
-    body = remote.open("reports/r1/report.pdf")
-    assert b"".join(body.chunks) == b"%PDF-1.7 body"
-    assert body.size_bytes == len(b"%PDF-1.7 body")
-
-
-def test_a_missing_s3_object_reads_as_a_missing_file():
-    """The route turns FileNotFoundError into a 404; a vendor exception would be a 500."""
-    remote = S3ObjectStorage("bucket", client=_FakeS3Client())
-    with pytest.raises(FileNotFoundError):
-        remote.open("reports/r1/gone.pdf")
-
-
-def test_an_artifact_whose_object_vanished_is_a_404_not_a_500(client):
-    """Exactly what a restart looks like when artifacts were kept on container-local disk.
-
-    The row survives in MySQL and the object does not, so the signature verifies and the read then
-    fails. Reported as a 500 that would read as a bug in the request rather than a lost artifact.
-    """
-    report_id = client.post("/api/v1/reports", json={"product_code": "3033", "report_date": "2026-06-30"}).json()["id"]
-    with client.app.state.testing_sessionmaker() as db:
-        artifact = RenderArtifact(
-            report_id=report_id, document_version=1, format="PDF",
-            storage_key="reports/never-written/report.pdf", mime_type="application/pdf",
-            size_bytes=0, checksum="0" * 64, template_version="3033-v2", renderer_version="chromium-v1",
-            content_manifest={},
-        )
-        db.add(artifact)
-        db.commit()
-        artifact_id = artifact.id
-
-    signed = client.get(f"/api/v1/artifacts/{artifact_id}/download").json()
-    response = client.get(signed["download_url"])
-    assert response.status_code == 404
-    assert response.json()["error_code"] == "ARTIFACT_CONTENT_MISSING"
-
-
-def test_publishing_to_a_bucket_does_not_leave_the_render_behind(tmp_path, monkeypatch):
-    """Chromium and python-docx render through a real path, so every format touches local disk.
-
-    On a remote backend that copy is scratch nothing reads, and a worker pod that keeps one per
-    render fills its own writable layer over a deployment's lifetime.
-    """
-    from app.rendering import artifacts
-
-    remote = S3ObjectStorage("bucket", prefix="prod", client=_FakeS3Client())
-    monkeypatch.setattr(artifacts, "storage", remote)
-    scratch = tmp_path / "report.pdf"
-    scratch.write_bytes(b"%PDF-1.7 body")
-
-    stored = artifacts.publish(scratch, "pdf/report.pdf")
-
-    assert stored.checksum == hashlib.sha256(b"%PDF-1.7 body").hexdigest()
-    assert remote.client.objects["prod/pdf/report.pdf"] == b"%PDF-1.7 body"
-    assert not scratch.exists()
-
-
-def test_publishing_to_local_disk_keeps_the_file_that_is_the_artifact(tmp_path, monkeypatch):
-    """The mirror of the test above: on LOCAL the destination *is* the stored object, so the same
-    cleanup would delete the artifact it had just recorded."""
-    from app.rendering import artifacts
-
-    monkeypatch.setattr(artifacts, "storage", LocalObjectStorage(tmp_path))
-    scratch = tmp_path / "pdf" / "report.pdf"
-    scratch.parent.mkdir()
-    scratch.write_bytes(b"%PDF-1.7 body")
-
-    artifacts.publish(scratch, "pdf/report.pdf")
-
-    assert scratch.read_bytes() == b"%PDF-1.7 body"
+    assert not download_signing.verify("artifact-1", "alice", expires, tampered)
 
 
 # --------------------------------------------------------------------------------------------
@@ -864,9 +717,6 @@ def _deployed(**overrides) -> Settings:
         "entra_allowed_algorithms": ("RS256",),
         "allow_testing_lane": False,
         "database_url": "mysql+pymysql://user:pw@db/commentary?charset=utf8mb4",
-        "storage_backend": "S3",
-        "s3_bucket": "commentary-artifacts",
-        "s3_endpoint_url": "https://tos-cn-hongkong.volces.com",
     }
     return Settings(**{**base, **overrides})
 
@@ -920,25 +770,6 @@ def test_sqlite_is_refused_outside_local():
     assert any("SQLite" in problem for problem in problems)
 
 
-def test_container_local_artifact_storage_is_refused_outside_local():
-    """The deployment target has no persistent volume, so local disk is not storage: the artifact
-    is gone at the next restart and a second replica cannot serve one the first produced."""
-    problems = _deployed(storage_backend="LOCAL").deployment_problems()
-    assert any("STORAGE_BACKEND=LOCAL" in problem for problem in problems)
-
-
-def test_a_storage_backend_nothing_implements_is_refused():
-    """`STORAGE_BACKEND=TOS` reads as configured and used to fall through to local disk in silence."""
-    problems = _deployed(storage_backend="TOS").deployment_problems()
-    assert any("not a backend anything implements" in problem for problem in problems)
-
-
-def test_object_storage_without_a_bucket_or_an_endpoint_is_refused():
-    assert any("S3_BUCKET" in problem for problem in _deployed(s3_bucket=None).deployment_problems())
-    problems = _deployed(s3_endpoint_url=None, s3_region=None).deployment_problems()
-    assert any("S3_REGION" in problem for problem in problems)
-
-
 def test_the_application_refuses_to_start_on_an_unsafe_configuration(monkeypatch):
     """Discovering these in production means they were already used to serve traffic."""
     monkeypatch.setattr(settings, "auth_mode", "ENTRA")
@@ -964,14 +795,21 @@ def test_container_entrypoint_guard_accepts_production_configuration_without_net
     _run_container_entrypoint_guard(monkeypatch)
 
 
+@pytest.mark.parametrize("mode", ["CELERY", "UNKNOWN", ""])
+@pytest.mark.parametrize("auth_mode", ["LOCAL", "REMOTE"])
+def test_removed_queue_modes_are_rejected_at_api_startup(monkeypatch, mode, auth_mode):
+    monkeypatch.setattr(settings, "task_mode", mode)
+    monkeypatch.setattr(settings, "auth_mode", auth_mode)
+    with pytest.raises(ConfigurationError, match="TASK_MODE"):
+        create_app()
+
+
 @pytest.mark.parametrize("overrides", [
     {"auth_mode": "LOCAL"},
     {"database_url": "sqlite:///local.db"},
     {"database_url": "postgresql://user:password@db/app"},
     {"database_url": "mysql+pymysql://user:password@db/app?charset=utf8"},
     {"database_url": "not-a-url"},
-    {"storage_backend": "LOCAL"},
-    {"s3_endpoint_url": "http://storage.example.invalid"},
     {"task_mode": "CELERY"},
     {"allow_testing_lane": True},
     {"download_secret": "short"},
@@ -997,46 +835,81 @@ def _k8s_secret_builder():
     return runpy.run_path(str(path))["build_secret"]
 
 
-def _k8s_secret_values():
-    return {
+def _k8s_secret_values(environment="uat"):
+    values = {
         "DATABASE_URL": "mysql+pymysql://test:test@db.invalid/app?charset=utf8mb4",
         "DOWNLOAD_SECRET": "test-generated-placeholder-" * 3,
-        "S3_ACCESS_KEY_ID": "test-key",
-        "S3_SECRET_ACCESS_KEY": "literal$KEY with spaces=and-equals",
+        "DA_REPORT_DATABASE_URL": "",
         "DA_REPORT_OBJECT_URL": "",
         "DA_REPORT_SQLITE_SHA256": "",
         "DATAWAREHOUSE_MYSQL_HOST": "",
         "DATAWAREHOUSE_MYSQL_DATABASE": "",
         "DATAWAREHOUSE_MYSQL_USERNAME": "",
-        "DATAWAREHOUSE_MYSQL_PASSWORD": "",
+        "DATAWAREHOUSE_MYSQL_PASSWORD": "literal$KEY with spaces=and-equals",
         "FMP_API_KEY": "",
-        "MARKETAUX_API_KEY": "",
         "TRANSLATION_API_KEY": "",
     }
+    if environment == "prd":
+        values.pop("DA_REPORT_OBJECT_URL")
+        values.pop("DA_REPORT_SQLITE_SHA256")
+        values["DA_REPORT_DATABASE_URL"] = "mysql+pymysql://readonly:test@da.invalid/da"
+    return values
 
 
-def test_k8s_secret_builder_preserves_literal_values_and_all_optional_keys(tmp_path):
+@pytest.mark.parametrize("environment", ["uat", "prd"])
+def test_k8s_secret_builder_preserves_literal_values_and_all_optional_keys(tmp_path, environment):
     import base64
 
-    values = _k8s_secret_values()
+    values = _k8s_secret_values(environment)
     env_file = tmp_path / ".env.secrets"
     env_file.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
-    secret = _k8s_secret_builder()("uat", "ih", env_file)
-    assert secret["metadata"]["name"] == "ih-uat-remote-fund-cmt-auto-srvapp-secret"
+    secret = _k8s_secret_builder()(environment, "ih", env_file)
+    assert secret["metadata"]["name"] == f"ih-{environment}-remote-fund-cmt-auto-srvapp-secret"
     assert {key: base64.b64decode(value).decode("utf-8") for key, value in secret["data"].items()} == values
     assert "stringData" not in secret
 
 
-@pytest.mark.parametrize("change", ["missing", "empty", "unexpected", "short", "namespace"])
-def test_k8s_secret_builder_refuses_incomplete_or_unsafe_input_without_leaking_values(tmp_path, change):
+def test_production_requires_its_da_database_while_uat_keeps_snapshot_configuration(tmp_path):
     values = _k8s_secret_values()
+    values["DA_REPORT_OBJECT_URL"] = "https://objects.invalid/uat.sqlite"
+    values["DA_REPORT_SQLITE_SHA256"] = "a" * 64
+    path = tmp_path / ".env.test"
+    path.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
+    _k8s_secret_builder()("uat", "ih", path)
+    values = _k8s_secret_values("prd")
+    values["DA_REPORT_DATABASE_URL"] = ""
+    path.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
+    with pytest.raises(ValueError, match="DA_REPORT_DATABASE_URL"):
+        _k8s_secret_builder()("prd", "ih", path)
+    values["DA_REPORT_DATABASE_URL"] = "mysql+pymysql://readonly:test@da.invalid/da"
+    path.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
+    _k8s_secret_builder()("prd", "ih", path)
+
+
+@pytest.mark.parametrize("retired_key", ["DA_REPORT_OBJECT_URL", "DA_REPORT_SQLITE_SHA256"])
+def test_production_secret_refuses_retired_snapshot_keys(tmp_path, retired_key):
+    values = _k8s_secret_values("prd")
+    values[retired_key] = "do-not-print-retired-secret"
+    path = tmp_path / ".env.prd"
+    path.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
+    with pytest.raises(ValueError) as raised:
+        _k8s_secret_builder()("prd", "ih", path)
+    assert "do-not-print-retired-secret" not in str(raised.value)
+
+
+@pytest.mark.parametrize("environment", ["uat", "prd"])
+@pytest.mark.parametrize("change", ["missing", "empty", "unexpected", "retired", "short", "namespace"])
+def test_k8s_secret_builder_refuses_incomplete_or_unsafe_input_without_leaking_values(tmp_path, change, environment):
+    values = _k8s_secret_values(environment)
     namespace = "ih"
     if change == "missing":
-        values.pop("MARKETAUX_API_KEY")
+        values.pop("FMP_API_KEY")
     elif change == "empty":
         values["DATABASE_URL"] = ""
     elif change == "unexpected":
         values["AUTH_MODE"] = "LOCAL"
+    elif change == "retired":
+        values["MARKETAUX_API_KEY"] = "literal$KEY-retired-secret"
     elif change == "short":
         values["DOWNLOAD_SECRET"] = "short"
     else:
@@ -1044,7 +917,7 @@ def test_k8s_secret_builder_refuses_incomplete_or_unsafe_input_without_leaking_v
     env_file = tmp_path / ".env.secrets"
     env_file.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
     with pytest.raises(ValueError) as raised:
-        _k8s_secret_builder()("prd", namespace, env_file)
+        _k8s_secret_builder()(environment, namespace, env_file)
     assert "literal$KEY" not in str(raised.value)
 
 
@@ -1054,7 +927,6 @@ def test_remote_mode_needs_no_entra_but_still_enforces_deployment_guards():
     assert configured.deployment_problems() == []
     for changes, expected in [
         ({"database_url": "sqlite:///local.db"}, "DATABASE_URL"),
-        ({"storage_backend": "LOCAL"}, "STORAGE_BACKEND"),
         ({"download_secret": "short"}, "DOWNLOAD_SECRET"),
         ({"allow_testing_lane": True}, "ALLOW_TESTING_LANE"),
     ]:
@@ -1108,10 +980,9 @@ def test_deep_health_redacts_failures_and_never_changes_shallow_probe(client, mo
     def unavailable():
         raise RuntimeError("mysql://private:password@secret-host")
     monkeypatch.setattr(health, "database_check", unavailable)
-    monkeypatch.setattr(health, "storage_check", lambda: None)
     response = client.get("/api/v1/health/deep")
     assert response.status_code == 503
-    assert response.json() == {"status": "degraded", "dependencies": {"database": "unavailable", "storage": "ok"}}
+    assert response.json() == {"status": "degraded", "dependencies": {"database": "unavailable"}}
     assert "private" not in response.text
     assert client.get("/api/v1/health").status_code == 200
     assert client.get("/api/v1/health/deep", headers={"X-User-Role": "VIEWER"}).status_code == 403

@@ -52,8 +52,6 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
-        - name: output
-          mountPath: /app/var/output
         resources:
           requests:
             cpu: 250m
@@ -86,9 +84,6 @@ spec:
       - name: tmp
         emptyDir:
           sizeLimit: 1Gi
-      - name: output
-        emptyDir:
-          sizeLimit: 1Gi
       initContainers:
       - name: migrate
         image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-srvapp:latest
@@ -107,8 +102,6 @@ spec:
         volumeMounts:
         - name: tmp
           mountPath: /tmp
-        - name: output
-          mountPath: /app/var/output
         resources:
           requests:
             cpu: 250m

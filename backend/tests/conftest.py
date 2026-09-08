@@ -273,3 +273,17 @@ def client(monkeypatch):
     app.dependency_overrides[get_db] = override_db
     with _FixtureAwareClient(app) as test_client:
         yield test_client
+
+
+def download_report(client, report_id, format_name, *, headers=None):
+    grant = client.get(f"/api/v1/reports/{report_id}/exports/{format_name}/download", headers=headers)
+    assert grant.status_code == 200, grant.text
+    response = client.get(grant.json()["download_url"], headers=headers)
+    assert response.status_code == 200, response.text
+    return response
+
+
+def export_records(client, report_id):
+    response = client.get(f"/api/v1/audit?report_id={report_id}")
+    assert response.status_code == 200, response.text
+    return [event["details"] for event in response.json() if event["action"] == "export.generated"]

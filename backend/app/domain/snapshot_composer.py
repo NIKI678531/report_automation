@@ -69,7 +69,7 @@ def compose_da_report_fragment(product: ProductCatalog, report_date: date) -> tu
             "message": error.message,
             "actual": None,
             "threshold": "A complete read-only DA-Report monthly-data snapshot",
-            "fix_hint": "Refresh the approved DA-Report SQLite snapshot, then retry automatic data refresh.",
+            "fix_hint": "Check the configured DA-Report source, schema and read permissions, then retry automatic data refresh.",
         })
     else:
         findings.extend(da_report_fragment.pop("_findings", []))

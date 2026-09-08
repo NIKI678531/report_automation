@@ -1,3 +1,4 @@
+from conftest import download_report, export_records
 import io
 import unicodedata
 
@@ -147,22 +148,12 @@ def test_report_golden_lifecycle_and_preview(client):
     assert clear_finalized.status_code == 409
     assert clear_finalized.json()["error_code"] == "REPORT_FINALIZED"
 
-    rendered = client.post(
-        f"/api/v1/reports/{report['id']}/renders",
-        json={"formats": ["html", "pdf", "docx"]},
-        headers={"Idempotency-Key": "golden-render"},
-    )
-    assert rendered.status_code == 202, rendered.text
-    assert [job["status"] for job in rendered.json()] == ["SUCCEEDED", "SUCCEEDED", "SUCCEEDED"]
+    downloads = {format_name: download_report(client, report['id'], format_name) for format_name in ["html", "pdf", "docx"]}
     outputs = {}
-    for job in rendered.json():
-        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download")
-        assert signed.status_code == 200
-        assert "signature=" in signed.json()["download_url"]
-        download = client.get(signed.json()["download_url"])
+    for format_name, download in downloads.items():
         assert download.status_code == 200
         assert len(download.content) > 1000
-        outputs[job["format"]] = download.content
+        outputs[format_name] = download.content
 
     expected_titles = (
         "The Performance of 3033.HK Constituents",
@@ -184,9 +175,9 @@ def test_report_golden_lifecycle_and_preview(client):
 
     document = Document(io.BytesIO(outputs["docx"]))
     assert all(title in all_docx_text(document) for title in expected_titles)
-    artifacts = client.get(f"/api/v1/reports/{report['id']}").json()["artifacts"]
-    assert len({item["content_manifest_checksum"] for item in artifacts}) == 1
-    assert artifacts[0]["content_manifest_checksum"]
+    artifacts = export_records(client, report["id"])
+    assert len({item["content_manifest"]["checksum"] for item in artifacts}) == 1
+    assert artifacts[0]["content_manifest"]["checksum"]
 
 
 def test_recalculation_replaces_existing_final_analytics_snapshot(client):
@@ -371,20 +362,13 @@ def test_simplified_chinese_variant_rebuilds_snapshot_lineage_and_is_independent
         json={"version": saved.json()["version"]},
     )
     assert finalized.status_code == 200, finalized.text
-    rendered = client.post(
-        f"/api/v1/reports/{variant['id']}/renders",
-        json={"formats": ["html", "pdf", "docx"]},
-        headers={"Idempotency-Key": "zh-hans-render"},
-    )
-    assert rendered.status_code == 202, rendered.text
-    assert [job["status"] for job in rendered.json()] == ["SUCCEEDED"] * 3
+    downloads = {format_name: download_report(client, variant['id'], format_name) for format_name in ["html", "pdf", "docx"]}
 
     outputs = {}
-    for job in rendered.json():
-        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
-        response = client.get(signed["download_url"])
+    for format_name, download in downloads.items():
+        response = download
         assert "_ZH-HANS_" in response.headers["content-disposition"]
-        outputs[job["format"]] = response.content
+        outputs[format_name] = response.content
 
     html = outputs["html"].decode("utf-8")
     assert 'data-layout-mode="continuous"' in html
@@ -691,19 +675,12 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     assert 'lang="zh-HK"' in preview.text
     assert preview.text.count('<header class="page-header">') == 4
 
-    rendered = client.post(
-        f"/api/v1/reports/{target_id}/renders",
-        json={"formats": ["html", "pdf", "docx"]},
-        headers={"Idempotency-Key": "zh-hant-render"},
-    )
-    assert rendered.status_code == 202, rendered.text
-    assert [job["status"] for job in rendered.json()] == ["SUCCEEDED"] * 3
+    downloads = {format_name: download_report(client, target_id, format_name) for format_name in ["html", "pdf", "docx"]}
     outputs = {}
-    for job in rendered.json():
-        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
-        response = client.get(signed["download_url"])
+    for format_name, download in downloads.items():
+        response = download
         assert "_ZH-HANT_" in response.headers["content-disposition"]
-        outputs[job["format"]] = response.content
+        outputs[format_name] = response.content
 
     html = outputs["html"].decode("utf-8")
     assert 'lang="zh-HK"' in html
@@ -803,14 +780,7 @@ def test_finalize_allows_missing_snapshot_for_direct_download(client):
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "FINALIZED"
 
-    rendered = client.post(
-        f"/api/v1/reports/{report['id']}/renders",
-        json={"formats": ["html"]},
-        headers={"Idempotency-Key": "direct-incomplete-download"},
-    )
-    assert rendered.status_code == 202, rendered.text
-    assert rendered.json()[0]["status"] == "SUCCEEDED"
-    assert rendered.json()[0]["artifact_id"]
+    downloads = {format_name: download_report(client, report['id'], format_name) for format_name in ["html"]}
 
 
 def test_finalized_report_creates_a_separate_revision(client):

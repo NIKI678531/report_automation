@@ -46,17 +46,19 @@ administrator. That is a workstation convenience, not security — see
 
 ## Deployment
 
-UAT / Production use the company remote-application conventions: one backend image (API + Celery)
-and one nginx-unprivileged frontend image, external MySQL/Redis/TOS, and plain YAML in `k8s/uat`
+UAT / Production use the company remote-application conventions: one backend image (API with synchronous rendering/translation)
+and one nginx-unprivileged frontend image, external MySQL, and plain YAML in `k8s/uat`
 and `k8s/prd`. The existing remote application platform handles access; there is no standalone
 Ingress, domain/certificate setup or application login in this deployment. `AUTH_MODE=REMOTE`
-uses the shared `remote-app` actor while retaining deployment storage and signing-key guards.
+uses the shared `remote-app` actor while retaining MySQL and signing-key guards.
 
 See [the deployment manual](k8s/README.md), [runbook](k8s/RUNBOOK.md) and
 [release checklist](k8s/CHECKLIST.md). Build manifests are `docker-compose.uat.yml` and
 `docker-compose.prd.yml`; copy the matching `.env.<env>.example` for Secret generation.
 The optional local image-validation stack is `compose.yaml` (Docker Compose >= 2.30); its
-MySQL/Redis data is disposable and it requires an object-storage configuration in `.env`.
+MySQL data is disposable; configure its credentials and the download signing key in `.env`.
+`TASK_MODE=EAGER` requires no Redis or separate worker; render/translation requests wait for completion.
+See [ADR-0028](docs/adr/0028-synchronous-jobs-without-redis.md) for limits and migration notes.
 Development remains `npm run dev` and uvicorn as described above.
 
 The old VM files have been replaced. [ADR-0026](docs/adr/0026-remote-app-deployment-conventions.md)
@@ -72,7 +74,7 @@ The first module defaults to `<Month> in Review` in `3033-v2`. Its report title 
 
 Final Analytics takes its displayed month and fund ticker from the canonical report document. Changing the top report date navigates to the latest report for that fund and date, or opens the create-report state when none exists. Company News loads HKT report-month candidates matched to the active constituent snapshot.
 
-Report creation loads Historical Performance directly from the read-only CDB warehouse. Page 04 can load report-month HSTECH identity, closing price, weight and HSICS codes from CDB, then calculate 1M/3M/6M/YTD returns from FMP dividend-adjusted EOD history without waiting for a CSV; a constituent CSV remains a separate explicit override. Applying or refreshing data creates a new immutable mixed-source snapshot and derives Final Analytics on the server. Finalization generates HTML, PDF and DOCX outputs with download controls. See [docs/news-sources-and-data-imports.md](docs/news-sources-and-data-imports.md).
+Report creation loads Historical Performance directly from the read-only CDB warehouse. Page 04 can load report-month HSTECH identity, closing price, weight and HSICS codes from CDB, then calculate 1M/3M/6M/YTD returns from FMP dividend-adjusted EOD history without waiting for a CSV; a constituent CSV remains a separate explicit override. Applying or refreshing data creates a new immutable mixed-source snapshot and derives Final Analytics on the server. Finalization locks the document version. Each subsequent HTML, PDF or DOCX download generates that version anew and deletes its temporary files after the response; no finished files are stored. See [ADR-0029](docs/adr/0029-on-demand-report-downloads.md). See [docs/news-sources-and-data-imports.md](docs/news-sources-and-data-imports.md).
 
 ## Verification
 
@@ -83,4 +85,4 @@ npm run build
 ```
 
 The checked-in 3033 visual baseline is under `backend/tests/fixtures/3033_202606`.
-`scripts/verify_visual.py` selects the most recently generated PDF and records page-4 text and donut-presence checks in `var/artifacts/visual/latest/manifest.json` in addition to the strict pixel comparison.
+`scripts/verify_visual.py <downloaded.pdf>` checks an explicitly saved download and records page-4 text and donut-presence checks in `var/artifacts/visual/latest/manifest.json` in addition to the strict pixel comparison.

@@ -1,3 +1,4 @@
+from conftest import download_report
 import io
 from datetime import datetime, timezone
 
@@ -151,14 +152,8 @@ def test_selected_news_survives_recalculation_and_renders_source_only(client):
         json={"version": latest["latest_document"]["version"]},
     )
     assert finalized.status_code == 200, finalized.text
-    rendered = client.post(
-        f"/api/v1/reports/{report_id}/renders",
-        json={"formats": ["docx"]},
-        headers={"Idempotency-Key": f"news-source-only-{report_id}"},
-    )
-    assert rendered.status_code == 202, rendered.text
-    signed = client.get(f"/api/v1/artifacts/{rendered.json()[0]['artifact_id']}/download").json()
-    document = Document(io.BytesIO(client.get(signed["download_url"]).content))
+    downloads = {format_name: download_report(client, report_id, format_name) for format_name in ["docx"]}
+    document = Document(io.BytesIO(downloads["docx"].content))
     docx_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
     assert "Reuters" in docx_text
     assert "2026-06-12" not in docx_text
@@ -264,17 +259,10 @@ def test_review_preview_compacts_sparse_block_heights_without_changing_columns(c
     assert preview.status_code == 200, preview.text
     finalized = client.post(f"/api/v1/reports/{report_id}/finalize", json={"version": saved.json()["version"]})
     assert finalized.status_code == 200, finalized.text
-    rendered = client.post(
-        f"/api/v1/reports/{report_id}/renders",
-        json={"formats": ["html", "pdf"]},
-        headers={"Idempotency-Key": f"compact-review-{report_id}"},
-    )
-    assert rendered.status_code == 202, rendered.text
+    downloads = {format_name: download_report(client, report_id, format_name) for format_name in ["html", "pdf"]}
     artifacts = {}
-    for job in rendered.json():
-        assert job["status"] == "SUCCEEDED", job
-        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
-        artifacts[job["format"]] = client.get(signed["download_url"]).content
+    for format_name, download in downloads.items():
+        artifacts[format_name] = download.content
     continuous_html = artifacts["html"].decode("utf-8")
     pdf_path = tmp_path / "compact-review.pdf"
     pdf_path.write_bytes(artifacts["pdf"])
@@ -390,18 +378,11 @@ def test_review_blocks_render_to_html_and_editable_docx(client):
     assert saved.status_code == 200, saved.text
     finalized = client.post(f"/api/v1/reports/{report_id}/finalize", json={"version": saved.json()["version"]})
     assert finalized.status_code == 200, finalized.text
-    rendered = client.post(
-        f"/api/v1/reports/{report_id}/renders",
-        json={"formats": ["html", "docx"]},
-        headers={"Idempotency-Key": f"review-layout-{report_id}"},
-    )
-    assert rendered.status_code == 202, rendered.text
-    assert [job["status"] for job in rendered.json()] == ["SUCCEEDED", "SUCCEEDED"]
+    downloads = {format_name: download_report(client, report_id, format_name) for format_name in ["html", "docx"]}
 
     artifacts = {}
-    for job in rendered.json():
-        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
-        artifacts[job["format"]] = client.get(signed["download_url"]).content
+    for format_name, download in downloads.items():
+        artifacts[format_name] = download.content
     assert b'data-block-id="summary"' in artifacts["html"]
     assert b"Editable custom review content" in artifacts["html"]
     docx = Document(io.BytesIO(artifacts["docx"]))

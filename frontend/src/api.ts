@@ -230,7 +230,6 @@ export interface Report {
   finalized_document_version: number | null;
   latest_document?: { version: number; checksum: string; content: Record<string, unknown> } | null;
   quality_results?: Array<{ check_id: string; status: string; severity: string; fix_hint: string }>;
-  artifacts?: Array<{ id: string; format: OutputFormat; size_bytes: number; checksum: string; document_version?: number; renderer_version?: string; language_mode?: ReportLanguage; is_current?: boolean }>;
   created_at?: string;
   updated_at?: string;
 }
@@ -248,15 +247,6 @@ export interface TranslationJob {
   request_id: string;
 }
 
-export interface RenderJob {
-  id: string;
-  format: OutputFormat;
-  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED";
-  progress: number;
-  stage: string;
-  error: { error_code?: string; message?: string } | null;
-  artifact_id: string | null;
-}
 
 export interface CalculationResult {
   snapshot_id: string;
@@ -343,9 +333,9 @@ async function envelopeOf(response: Response): Promise<ErrorEnvelope> {
   return {};
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchChecked(url: string, init?: RequestInit): Promise<Response> {
   const isForm = init?.body instanceof FormData;
-  const response = await fetch(apiUrl(path), {
+  const response = await fetch(url, {
     ...init,
     headers: { ...(!isForm ? { "Content-Type": "application/json" } : {}), "X-Request-ID": crypto.randomUUID(), ...init?.headers },
   });
@@ -356,11 +346,36 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       PROXY_FALLBACKS[response.status] ?? `Request failed: ${response.status}`,
     );
   }
+  return response;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetchChecked(apiUrl(path), init);
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
 export const api = {
+  downloadReport: async (id: string, format: OutputFormat) => {
+    const signed = await request<{ download_url: string }>(`/reports/${encodeURIComponent(id)}/exports/${format}/download`);
+    const response = await fetchChecked(artifactUrl(signed.download_url));
+    const expectedMime = { html: "text/html", pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }[format];
+    if (response.headers.get("Content-Type")?.split(";")[0] !== expectedMime) {
+      throw new ApiError(502, {}, "The download response has an unexpected format. Please retry.");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    try {
+      link.href = url;
+      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? `report.${format}`;
+      document.body.appendChild(link);
+      link.click();
+    } finally {
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  },
   listProducts: (asOfDate: string) => request<Product[]>(`/products?as_of_date=${encodeURIComponent(asOfDate)}`),
   listReports: (options?: { includeArchived?: boolean }) => request<Report[]>(
     `/reports${options?.includeArchived ? "?include_archived=true" : ""}`,
@@ -377,8 +392,6 @@ export const api = {
   calculate: (id: string) => request<CalculationResult>(`/reports/${id}/calculations`, { method: "POST", body: JSON.stringify({}) }),
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
   saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PATCH", body: JSON.stringify({ version, content }) }),
-  render: (id: string, formats: OutputFormat[]) => request<RenderJob[]>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats }), headers: { "Idempotency-Key": crypto.randomUUID() } }),
-  getJob: (id: string) => request<RenderJob>(`/jobs/${id}`),
   listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),
   uploadDataset: (id: string, datasetType: DatasetType, file: File) => { const body = new FormData(); body.append("dataset_type", datasetType); body.append("file", file); return request<ImportResult>(`/reports/${id}/imports`, { method: "POST", body }); },
   uploadImportBatch: (id: string, files: File[]) => { const body = new FormData(); files.forEach((file) => body.append("files", file)); return request<ImportBatch>(`/reports/${id}/import-batches`, { method: "POST", body }); },
@@ -415,5 +428,4 @@ export const api = {
     const items = selections.map((item, position) => typeof item === "string" ? { news_item_id: item, position } : item);
     return request<{ version: number }>(`/reports/${id}/news`, { method: "PUT", body: JSON.stringify({ version, items }) });
   },
-  downloadArtifact: async (id: string) => { const signed = await request<{ download_url: string }>(`/artifacts/${id}/download`); window.location.assign(artifactUrl(signed.download_url)); },
 };

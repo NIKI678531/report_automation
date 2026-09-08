@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.domain.service import translations
 from app.domain.schemas import TranslationJobRead
 from app.worker import dispatch_translation
-from app.domain.models import DataSnapshot, RenderArtifact, Report, ReportStatus
+from app.domain.models import DataSnapshot, Report, ReportStatus
 from app.domain.schemas import (
     AiDraftRequest,
     DocumentUpdate,
@@ -31,7 +31,6 @@ from app.domain.schemas import (
     RevisionCreate,
 )
 from app.rendering.html import render_html
-from app.rendering.artifacts import renderer_version_for
 from .deps import Db, RequestId
 
 router = APIRouter()
@@ -126,7 +125,6 @@ def detail(db: Session, report: Report) -> ReportDetail:
     if report.active_snapshot_id:
         snapshot = db.get(DataSnapshot, report.active_snapshot_id)
         quality = snapshot.quality_results if snapshot else []
-    artifacts = list(db.scalars(select(RenderArtifact).where(RenderArtifact.report_id == report.id).order_by(RenderArtifact.created_at.desc())))
     base = ReportRead.model_validate(report).model_dump()
     return ReportDetail(
         **base,
@@ -134,22 +132,6 @@ def detail(db: Session, report: Report) -> ReportDetail:
         translation_source_language_mode=source.language_mode if source else None,
         latest_document={"version": document.version, "checksum": document.checksum, "content": document.content},
         quality_results=quality,
-        artifacts=[{
-            "id": item.id,
-            "format": item.format,
-            "mime_type": item.mime_type,
-            "size_bytes": item.size_bytes,
-            "checksum": item.checksum,
-            "content_manifest_checksum": item.content_manifest.get("checksum"),
-            "document_version": item.document_version,
-            "renderer_version": item.renderer_version,
-            "language_mode": item.content_manifest.get("language_mode", report.language_mode),
-            "is_current": (
-                item.document_version == document.version
-                and item.content_manifest.get("language_mode", report.language_mode) == report.language_mode
-                and item.renderer_version == renderer_version_for(item.format)
-            ),
-        } for item in artifacts],
     )
 
 

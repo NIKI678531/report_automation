@@ -81,7 +81,7 @@ class Principal:
         return product_code.upper() in self.product_scope
 
 
-#: A caller for work that no request initiated - Celery tasks, CLI imports, migrations.
+#: A caller for work that no request initiated - CLI imports and migrations.
 SYSTEM_PRINCIPAL = Principal(subject="system", role="ADMIN", product_scope=frozenset({UNRESTRICTED_SCOPE}))
 
 _current_principal: ContextVar[Principal | None] = ContextVar("current_principal", default=None)

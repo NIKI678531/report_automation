@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
+from dataclasses import dataclass
 from io import BytesIO
 from html.parser import HTMLParser
 from pathlib import Path
@@ -15,12 +17,9 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.storage import StoredObject, storage
-from app.domain.document import content_manifests_match, render_content_manifest, review_display_title
+from app.domain.document import render_content_manifest, review_display_title
 from app.domain.localization import (
     is_chinese,
     is_zh_hans,
@@ -30,7 +29,7 @@ from app.domain.localization import (
     term,
 )
 from app.domain.metrics.final_analytics import normalize_portfolio_rows
-from app.domain.models import RenderArtifact, Report, ReportDocument
+from app.domain.models import Report, ReportDocument
 from .html import (
     _render_tokens,
     localized_document,
@@ -949,37 +948,41 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     document.save(destination)
 
 
-def publish(destination: Path, object_key: str) -> StoredObject:
-    """Store the rendered file under `object_key`, leaving nothing behind on a remote backend.
+@dataclass
+class GeneratedExport:
+    directory: TemporaryDirectory
+    path: Path
+    filename: str
+    mime_type: str
+    size_bytes: int
+    checksum: str
+    content_manifest: dict
 
-    Playwright and python-docx both write through a real path, so every format lands on this
-    container's disk first. Where that disk *is* the store the file is the artifact; where it is
-    not, the copy is scratch that nothing reads, and a worker pod that keeps every one of them
-    eventually fills its own writable layer.
-    """
-    stored = storage.put_file(destination, object_key)
-    if storage.backend != "LOCAL":
-        destination.unlink(missing_ok=True)
-    return stored
+    def cleanup(self) -> None:
+        self.directory.cleanup()
 
 
-def build_artifact(db: Session, report: Report, document: ReportDocument, format_name: str) -> RenderArtifact:
+def generate_export(report: Report, document: ReportDocument, format_name: str) -> GeneratedExport:
+    """Render one fixed document into isolated scratch space; caller owns cleanup after delivery."""
     if format_name not in MIME:
         raise ValueError(f"Unsupported format: {format_name}")
-    content_manifest = render_content_manifest(document.content)
-    existing = list(db.scalars(select(RenderArtifact).where(
-        RenderArtifact.report_id == report.id,
-        RenderArtifact.document_version == document.version,
-    )))
-    if any(not content_manifests_match(item.content_manifest, content_manifest) for item in existing):
-        raise ValueError("QC-010: canonical content manifest differs across output formats")
-    directory = settings.output_root / format_name
-    directory.mkdir(parents=True, exist_ok=True)
-    # The lane is part of the file's identity, not only of its contents: an artifact copied out of
-    # the tool loses its database row but keeps its name.
-    lane_prefix = "TESTING-" if str(document.content.get("lane", "PRODUCTION")) == "TESTING" else ""
-    language_tag = "ZH-HANS" if report.language_mode == "ZH_HANS" else report.language_mode.replace("_", "-")
-    destination = directory / f"{lane_prefix}{report.product_code}_{report.report_date.isoformat()}_{language_tag}_v{document.version}.{format_name}"
+    directory = TemporaryDirectory(prefix="commentary-export-")
+    destination = Path(directory.name) / f"output.{format_name}"
+    lane_prefix = "TESTING-" if document.content.get("lane") == "TESTING" else ""
+    language = str(document.content.get("language_mode") or report.language_mode)
+    language_tag = language.replace("_", "-")
+    product = re.sub(r"[^A-Za-z0-9._-]", "_", report.product_code)
+    filename = f"{lane_prefix}{product}_{report.report_date.isoformat()}_{language_tag}_v{document.version}.{format_name}"
+    try:
+        _render_file(report, document, format_name, destination)
+        return GeneratedExport(directory, destination, filename, MIME[format_name],
+                               destination.stat().st_size, sha256(destination), render_content_manifest(document.content))
+    except BaseException:
+        directory.cleanup()
+        raise
+
+
+def _render_file(report: Report, document: ReportDocument, format_name: str, destination: Path) -> None:
     if format_name == "html":
         html = render_html(report, document.content, layout_mode="continuous")
         destination.write_text(html, encoding="utf-8")
@@ -1021,21 +1024,3 @@ def build_artifact(db: Session, report: Report, document: ReportDocument, format
                     raise ValueError(f"PDF_LAYOUT_OVERFLOW: report content enters the footer safe area: {overflow}")
                 page.pdf(path=str(destination), format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}, prefer_css_page_size=True)
                 browser.close()
-    object_key = f"{format_name}/{destination.name}"
-    stored = publish(destination, object_key)
-    artifact = RenderArtifact(
-        report_id=report.id,
-        document_version=document.version,
-        format=format_name,
-        storage_key=stored.key,
-        mime_type=MIME[format_name],
-        size_bytes=stored.size_bytes,
-        checksum=stored.checksum,
-        template_version=document.template_version,
-        renderer_version=renderer_version_for(format_name),
-        content_manifest=content_manifest,
-    )
-    db.add(artifact)
-    db.commit()
-    db.refresh(artifact)
-    return artifact

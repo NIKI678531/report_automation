@@ -37,10 +37,7 @@ def _verify_deployment_configuration() -> None:
 def create_app() -> FastAPI:
     configure_logging()
     _verify_deployment_configuration()
-    # Imported here, not at module scope, so the guard above is genuinely the first thing that
-    # runs. `app.api.routes` pulls in the object-storage backend, which raises on a STORAGE_BACKEND
-    # nothing implements - as a module-level import that error arrived before the guard could
-    # report the rest of the configuration alongside it.
+    # Validate configuration before importing and assembling the business routes.
     from app.api.routes import router
 
     application = FastAPI(

@@ -495,8 +495,8 @@ def apply_import_batch(
         report_id=report.id,
         as_of_date=report.report_date,
         source_policy=(
-            "DA_REPORT_FMP_PLUS_UPLOAD" if {"DA_REPORT_SQLITE", "FMP_API"} <= source_types
-            else "DA_REPORT_PLUS_UPLOAD" if "DA_REPORT_SQLITE" in source_types
+            "DA_REPORT_FMP_PLUS_UPLOAD" if ("FMP_API" in source_types and bool({"DA_REPORT_SQLITE", "DA_REPORT_MYSQL"} & source_types))
+            else "DA_REPORT_PLUS_UPLOAD" if bool({"DA_REPORT_SQLITE", "DA_REPORT_MYSQL"} & source_types)
             else "FMP_PLUS_UPLOAD" if "FMP_API" in source_types
             else "UPLOAD_OVERRIDE"
         ),

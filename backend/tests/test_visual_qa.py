@@ -1,3 +1,4 @@
+from conftest import download_report
 """Visual regression anchor for the canonical four-page output.
 
 This suite renders the *actual* PDF from the golden fixture and compares it with the
@@ -105,17 +106,9 @@ def render_golden_pdf(client, destination: Path) -> Path:
     )
     assert finalized.status_code == 200, finalized.text
 
-    rendered = client.post(
-        f"/api/v1/reports/{report['id']}/renders",
-        json={"formats": ["pdf"]},
-        headers={"Idempotency-Key": "visual-qa-render"},
-    )
-    assert rendered.status_code == 202, rendered.text
-    job = rendered.json()[0]
-    assert job["status"] == "SUCCEEDED", job
+    downloads = {format_name: download_report(client, report['id'], format_name) for format_name in ["pdf"]}
 
-    signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
-    download = client.get(signed["download_url"])
+    download = downloads["pdf"]
     assert download.status_code == 200
 
     destination.write_bytes(download.content)

@@ -32,3 +32,5 @@ var/
 **/credentials*
 **/*.log
 **/*.zip
+# Public AWS trust roots only; all other PEM/private-key files remain excluded.
+!app/integrations/certs/aws-rds-ap-east-1.pem

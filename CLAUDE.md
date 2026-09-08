@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   package from `backend/pyproject.toml` (`pip install -e "./backend[dev,render]"`); no `uv` in this repo.
 - Frontend: React 18 + TypeScript + Webpack Module Federation (managed with **`npm` workspaces**; root `package.json` declares
   `"workspaces": ["frontend"]`, the workspace package is `@commentary/web`).
-- Tasks: Celery + Redis. `TASK_MODE=EAGER` (default) runs renders inline; `TASK_MODE=CELERY` dispatches to a worker.
+- Tasks: `TASK_MODE=EAGER` only; on-demand exports and translation run inline in API requests. No Celery/Redis package or separate worker (ADR-0028).
 - DB: MySQL 8 in compose, and MySQL is the only supported deployment target — `deployment_problems()`
   refuses to start a non-LOCAL process on SQLite. Default local fallback (no env):
   `sqlite:///var/commentary.db`, anchored to the repo root rather than the CWD so alembic (runs in
@@ -17,11 +17,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   `AUTH_MODE=LOCAL` (default) trusts request headers and is for workstations only;
   `AUTH_MODE=ENTRA` validates a Microsoft Entra access token and needs the `entra` extra
   (`pip install -e "./backend[entra]"`, i.e. `pyjwt[crypto]`).
-- Artifact storage: `STORAGE_BACKEND=LOCAL` (default) writes to `var/output`; `STORAGE_BACKEND=S3`
-  is any S3-compatible store (Volcengine TOS, MinIO, AWS S3) and needs the `storage` extra
-  (`pip install -e "./backend[storage]"`, i.e. `boto3`). `deployment_problems()` refuses to start a
-  non-LOCAL process on `LOCAL` storage — the deployment has no persistent volume. The production
-  image installs `[render,entra,storage]` so promoting it never depends on a pip install.
+- Exports: generate HTML/PDF/DOCX for each download from the finalized document version; delete
+  temporary files after response completion or failure. No S3/TOS, storage extra or persistent volume
+  is required. The production image installs `[render,entra]`. See ADR-0029.
 - Rendering: Jinja2 canonical HTML → Playwright/Chromium PDF; python-docx DOCX.
 
 ## Common commands
@@ -43,21 +41,20 @@ Run from the repo root unless noted. Windows/PowerShell paths shown, since that 
     that reads a fixture at import time must guard with `module_level=True`, or the whole run dies
     in collection. TESTING-lane tests never touch the files: the app answers 503 `FIXTURE_MISSING`
     and the test client in `conftest.py` turns that one code into the same skip.
-- Frontend tests: `npm test` (vitest). Production build: `npm run build` (`tsc -b && vite build`).
+- Frontend tests: `npm test` (vitest). Production build: `npm run build` (`tsc -b && webpack --config webpack.config.cjs --mode production`).
 - Alembic migrations:
   - Upgrade: `cd backend && ..\.venv\Scripts\python -m alembic upgrade head`.
   - Autogenerate: `cd backend && ..\.venv\Scripts\python -m alembic revision --autogenerate -m "message"`.
-- Visual QA one-off: `.\.venv\Scripts\python scripts/verify_visual.py` (writes evidence under `var/artifacts/visual/`).
+- Visual QA one-off: `.\.venv\Scripts\python scripts/verify_visual.py <downloaded.pdf>` (writes evidence under `var/artifacts/visual/`).
 - Deployment preflight: `.\.venv\Scripts\python scripts/check_deployment.py` — runs the startup
   refusal checks plus the ones the app only reaches at first use (database reachable and at head,
-  JWKS answering, artifact bucket addressable). `--token "$ACCESS_TOKEN"` additionally resolves a
+  JWKS answering, export scratch writable and removable). `--token "$ACCESS_TOKEN"` additionally resolves a
   real token to a subject, role and product scope; `--env-file path` checks the environment that
   file describes instead of the current one, so the production settings can be proved clean from a
-  workstation before any process reads them; `--skip-network` reports configuration without calling
-  the tenant or the bucket. Exit 1 means the environment must not serve traffic.
+  workstation before any process reads them; `--skip-network` skips tenant JWKS requests unless a token is supplied; database and scratch checks still run. Exit 1 means the environment must not serve traffic.
 - Full stack via Docker: `docker compose up --build`.
   - Frontend (nginx): `http://localhost:3030/remote/fund-cmt-auto/`; API is reached at `/remote/fund-cmt-auto/api/v1`. See `k8s/REMOTE.md` for the host registration contract.
-  - Services: disposable `mysql`, `redis`, `migrate`, `srvapp`, `worker` (Celery), `webapp` (nginx).
+  - Services: disposable `mysql`, `migrate`, `srvapp`, `webapp` (nginx).
 
 **Never introduce `pnpm` or `yarn` commands, lockfiles, or `packageManager` fields.** The project was
 migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deliberately removed.
@@ -75,7 +72,7 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   (422 adds `findings[]`). OpenAPI lives at `/api/v1/openapi.json`, docs at `/docs`.
 - `app/api/routes/` — the API surface, one module per area: `reports.py` (lifecycle, document,
   review, finalize, preview), `datasets.py` (snapshots, imports, import batches, calculations),
-  `news.py`, `render.py` (render jobs, artifacts), `catalog.py`, `admin.py` (audit trail), with shared
+  `news.py`, `render.py` (signed on-demand downloads), `catalog.py`, `admin.py` (audit trail), with shared
   dependencies in `deps.py` (`principal`, `require_role`, `require_product_access`, `request_id`) and
   bounded upload reading in `uploads.py`; the router is assembled in `__init__.py`. Add a new endpoint
   to the module that owns its area and keep it under `/api/v1`.
@@ -83,8 +80,8 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   `load_dotenv(backend/.env, override=False)` so the real process environment always wins) and
   `ConfigurationError`. Key fields: `database_url`, `db_pool_*`, `api_prefix`, `template_version`,
   `auth_mode`, `task_mode`, `download_secret`, `download_ttl_seconds`, `entra_*`, `upload_*`,
-  `cors_allow_origins`, `allow_testing_lane`, `da_report_*`, `datawarehouse_*`, `fmp_*`,
-  `marketaux_*`. `output_root` resolves to `var/output`. `deployment_problems()` returns every reason
+  `cors_allow_origins`, `allow_testing_lane`, `da_report_*`, `datawarehouse_*`, `fmp_*`.
+  `deployment_problems()` returns every reason
   the configuration must not serve traffic (default/short `DOWNLOAD_SECRET`, unknown `AUTH_MODE`,
   missing Entra audience/issuer/JWKS, symmetric or `none` algorithms, `ALLOW_TESTING_LANE`, SQLite);
   LOCAL is exempt by design. Env parsing goes through `_env_bool/_env_int/_env_float/_env_csv`, which
@@ -109,14 +106,8 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   `TokenError`s carrying the error code the envelope reports (`TOKEN_EXPIRED`,
   `TOKEN_AUDIENCE_REJECTED`, `TOKEN_ALGORITHM_REJECTED`, `ROLE_NOT_ASSIGNED`, …).
   `ensure_available()` is called at startup so a missing PyJWT fails the boot, not the first request.
-- `app/core/storage.py` — the object-storage port and its two backends, selected by
-  `STORAGE_BACKEND`: `LocalObjectStorage` (filesystem, workstations and UAT) and `S3ObjectStorage`
-  (any S3-compatible store; the boto3 client is built lazily so importing never needs the extra and
-  a test can inject a stub). `build_storage()` raises on a backend nothing implements rather than
-  falling back to disk. Downloads are HMAC-SHA256 signed, TTL-bound and tied to the caller's
-  subject. A `storage_key` arrives from the database, so `resolve()`, `put_file()` and `open()` all
-  refuse one that escapes the object root — on S3 there is no filesystem to catch `..`, so the key
-  is validated segment by segment instead.
+- `app/core/download_signing.py` — HMAC-SHA256 grants bind report, finalized version, format,
+  subject and expiry; authorization is checked again when generating the download.
 - `app/domain/` — keep these layers distinct:
   - `models.py` SQLAlchemy ORM · `schemas.py` Pydantic request/response · `document.py` the
     `ReportDocument` content model · `imports.py` CSV/XLSX parsing, validation and diff ·
@@ -134,19 +125,19 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
     and `quality_checks.py` for the QC/KPI gate, which spans modules. 01 Review and 03 Company News
     have no arithmetic and deliberately have no module here. Import from the specific module —
     there is no flat re-export.
-- `app/integrations/` — external adapters behind stable interfaces (`da_report.py` reads the approved
-  read-only SQLite snapshot, `marketaux.py` is the optional remote vendor; both fail closed).
+- `app/integrations/` — external adapters behind stable interfaces (`da_report.py` reads Production DA MySQL with TLS/read-only transactions; UAT/local retain
+  the SQLite snapshot (ADR-0030); DA_REPORT is the only news provider (ADR-0031) and fails closed).
 - `app/rendering/` — `html.py` canonical HTML, `artifacts.py` PDF/DOCX products + checksum,
   `visual_qa.py` structural page checks, `templates/*.j2`, `tokens/3033-v*.json`, `static/`.
-  Every format renders through a real path because Chromium and python-docx require one, so
-  `artifacts.publish()` deletes that local copy once a remote backend has the object — on `LOCAL`
-  the same file *is* the artifact and is kept. The typeface is part of the output contract: the
+  `generate_export()` uses an isolated TemporaryDirectory; `download_response.ExportResponse`
+  clears it after success, disconnect or response failure. Generation failures also clean up.
+  No artifact bytes are persisted. The typeface is part of the output contract: the
   template asks for Calibri and the 3033 baseline was measured against Calibri metrics, so any
   Linux image or runner that renders reports installs `fonts-crosextra-carlito` (metric-compatible,
   redistributable) plus `fonts-noto-cjk` **and** `fonts-noto-cjk-extra` — `backend/Dockerfile` and
   `.github/workflows/ci.yml` must stay in step. Without them Chromium falls through to Arial and
   reflows every page, which reads as a rendering regression rather than as a missing package.
-- `app/worker.py` — Celery app and `dispatch_render`, which honours `TASK_MODE`.
+- `app/worker.py` — synchronous translation dispatch; also opens a database session for callers outside HTTP requests.
 - `migrations/` + `alembic.ini` — every schema change ships an upgrade **and** a downgrade, and both
   are stepped one revision at a time by `backend/tests/test_migrations.py`. Indexed `String` columns
   must declare a length of at most 768 characters: InnoDB caps an index key at 3072 bytes and utf8mb4
@@ -171,12 +162,12 @@ migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deli
   must not reach the status rail. Add new failure text to `PROXY_FALLBACKS`, not to a call site.
 - The workspace is six report modules: Review, Historical Performance, Company News,
   Constituent Performance, Final Analytics, Footnotes & Disclosures.
-- Behind nginx in Docker the app is served at `/`, so API calls hit same-origin `/api/v1/...`.
+- Behind nginx the remote is served at `/remote/fund-cmt-auto/`; API calls use `/remote/fund-cmt-auto/api/v1/...`.
 
 ### Data flow
 
-`ReportConfig → DataSnapshot → MetricValue → ReportDocument → RenderArtifact`. Every artifact must be
-traceable back to a snapshot, a `formula_version` and a document version. HTML, PDF and DOCX all read the
+`ReportConfig → DataSnapshot → MetricValue → ReportDocument → on-demand export`. Each export audit
+records source and renderer versions, content manifest, byte count and checksum; file bytes are not retained. HTML, PDF and DOCX all read the
 **same** finalized `ReportDocument` and the same design-token version.
 
 ### Deployment and the security boundary
@@ -200,11 +191,9 @@ Rules to keep intact when touching this area:
   403 — a 403 confirms the report exists.
 - Uploads are bounded while streaming, never after buffering the body, and the ceiling must stay at
   or below nginx's `client_max_body_size`. A proxy-level 413 carries none of the error envelope.
-- Artifacts go to object storage, never to container-local disk. The deployment provides no
-  persistent volume, so `STORAGE_BACKEND=LOCAL` outside LOCAL auth is a startup refusal alongside
-  SQLite. The download route streams from the port rather than reading a path, and an artifact row
-  whose object is gone answers 404 `ARTIFACT_CONTENT_MISSING` — that is what a restart looks like
-  when the rule was broken, and a 500 would blame the request instead.
+- Downloads read `finalized_document_version`, including archived finalized reports, and never
+  refresh upstream data. Audit metadata is retained; file bytes are not. Historical RenderArtifact
+  and RenderJob rows remain intact but old render/job/artifact routes are retired (ADR-0029).
 - Download URLs are HMAC-signed, TTL-bound and tied to the requesting subject; a signature is not a
   capability someone else can replay.
 - Jinja autoescape is `autoescape=True`, not `select_autoescape([...])` — the templates are named
@@ -250,7 +239,7 @@ product-UI design system to report output, and do not apply report tokens to the
 - **No hardcoded report facts.** Numbers, dates, security names, sectors and footnotes come from snapshots,
   derived metrics or versioned configuration. Golden values live only in `backend/tests/fixtures/`.
 - **No authoritative calculation in the browser.** React handles interaction, editing and preview only.
-- **Nothing immutable is overwritten.** Snapshots, documents and artifacts are append-only; refresh, edit and
+- **Nothing immutable is overwritten.** Snapshots, documents and export audits are append-only; refresh, edit and
   re-render create new versions and keep lineage.
 - **No implicit mixing of CDB and uploaded files.** One effective source per dataset; overrides record
   reason, actor and diff.
@@ -293,4 +282,4 @@ runtime directories. The user controls service startup; do not start the fronten
 The user explicitly selected remote-app hosting without separate Ingress, domain, certificate
 or Entra login. `AUTH_MODE=REMOTE` supplies a shared `remote-app` actor and retains deployment
 guards. Existing optional Entra code remains supported for other installations.
-`compose.yaml` is a disposable local validation stack: mysql/redis/migrate/srvapp/worker/webapp.
+`compose.yaml` is a disposable local validation stack: mysql/migrate/srvapp/webapp.

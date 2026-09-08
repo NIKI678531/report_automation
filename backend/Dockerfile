@@ -7,7 +7,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \
     TZ=Asia/Hong_Kong \
     AUTH_MODE=REMOTE \
-    STORAGE_BACKEND=S3 \
     TASK_MODE=EAGER
 WORKDIR /app/backend
 # Calibri-compatible Carlito and both Noto packages are the existing report font contract.
@@ -19,7 +18,7 @@ RUN apt-get update \
  && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin commentary
 COPY pyproject.toml requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock \
- && python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb'))['project']; print(*p['dependencies'], *[d for e in ('render','storage','entra') for d in p['optional-dependencies'][e]], sep=chr(10))" > /tmp/requirements-check.txt \
+ && python -c "import tomllib; p=tomllib.load(open('pyproject.toml','rb'))['project']; print(*p['dependencies'], *[d for e in ('render','entra') for d in p['optional-dependencies'][e]], sep=chr(10))" > /tmp/requirements-check.txt \
  && pip install --no-index --no-deps -r /tmp/requirements-check.txt \
  && pip check \
  && rm /tmp/requirements-check.txt \
@@ -30,8 +29,7 @@ COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini entrypoint.sh ./
 RUN chmod 0555 entrypoint.sh \
- && mkdir -p /app/var/output \
- && chmod 1777 /tmp /app/var/output
+ && python -c "import ssl; ssl.create_default_context(cafile='app/integrations/certs/aws-rds-ap-east-1.pem')"
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

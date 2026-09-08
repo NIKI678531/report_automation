@@ -1,3 +1,4 @@
+from conftest import download_report
 from copy import deepcopy
 from datetime import date
 
@@ -112,7 +113,6 @@ def test_translation_job_appends_once_and_can_be_replayed(client, enabled_transl
     response = client.post(url, json=command, headers={"Idempotency-Key": "one"})
     assert response.status_code == 202, response.text
     job = response.json()
-    assert job["status"] == "SUCCEEDED", job
     current = client.get(f"/api/v1/reports/{target['id']}").json()
     assert current["latest_document"]["content"]["sections"]["month_in_review"]["summary"] == "市场回顾"
     assert current["latest_document"]["version"] == 2
@@ -176,6 +176,42 @@ def test_provider_failure_never_appends_or_exposes_body(client, enabled_translat
     assert client.get(f"/api/v1/reports/{target['id']}").json()["latest_document"]["version"] == 1
 
 
+@pytest.mark.parametrize("failures,expected", [(2, "SUCCEEDED"), (3, "FAILED")])
+@pytest.mark.parametrize("own_session", [False, True])
+def test_synchronous_translation_finishes_retries_without_a_queue(client, enabled_translation, monkeypatch, failures, expected, own_session):
+    from sqlalchemy.orm import sessionmaker
+    from app import worker
+    from app.api.routes import reports as routes
+    from app.core.database import get_db
+    from app.domain.service import translations
+
+    source, target = report_pair(client)
+    original = translations.translate_texts
+    calls = []
+
+    def flaky(*args):
+        calls.append(args)
+        if len(calls) <= failures:
+            raise TranslationError("TRANSLATION_PROVIDER_UNAVAILABLE", retryable=True)
+        return original(*args)
+
+    monkeypatch.setattr(translations, "translate_texts", flaky)
+    if own_session:
+        with next(client.app.dependency_overrides[get_db]()) as db:
+            monkeypatch.setattr(worker, "SessionLocal", sessionmaker(bind=db.get_bind(), expire_on_commit=False))
+        monkeypatch.setattr(routes, "dispatch_translation", lambda job_id, db: worker.dispatch_translation(job_id))
+    response = client.post(f"/api/v1/reports/{source['id']}/language-variants/{target['id']}/translations",
+                           json={"source_document_version": 2, "target_document_version": 1},
+                           headers={"Idempotency-Key": "retry-inline"})
+    assert response.status_code == 202, response.text
+    job = response.json()
+    assert len(calls) == 3
+    assert job["status"] == expected
+    assert client.get(job["status_url"]).json()["status"] == expected
+    detail = client.get(f"/api/v1/reports/{target['id']}").json()
+    assert detail["latest_document"]["version"] == (2 if expected == "SUCCEEDED" else 1)
+
+
 def test_unknown_numbers_fail_before_applying(client, enabled_translation):
     source, target = report_pair(client)
     current = client.get(f"/api/v1/reports/{source['id']}").json()
@@ -208,21 +244,19 @@ def test_translated_document_is_shared_by_html_pdf_and_docx(client, enabled_tran
     from docx import Document
     from sqlalchemy import select
     from app.core.database import get_db
-    from app.domain.models import RenderArtifact
+    from app.domain.models import AuditEvent
 
     source, target = report_pair(client)
     translated = client.post(f"/api/v1/reports/{source['id']}/language-variants/{target['id']}/translations", json={"source_document_version": 2, "target_document_version": 1}, headers={"Idempotency-Key": "outputs"}).json()
     assert translated["status"] == "SUCCEEDED", translated
     document = client.get(f"/api/v1/reports/{target['id']}").json()["latest_document"]
     assert client.post(f"/api/v1/reports/{target['id']}/finalize", json={"version": document["version"]}).status_code == 200
-    jobs = client.post(f"/api/v1/reports/{target['id']}/renders", json={"formats": ["html", "pdf", "docx"]}, headers={"Idempotency-Key": "translated-output"}).json()
-    for job in jobs:
-        assert job["status"] == "SUCCEEDED", job
-        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
-        body = client.get(signed["download_url"]).content
-        if job["format"] == "html":
+    downloads = {format_name: download_report(client, target['id'], format_name) for format_name in ["html", "pdf", "docx"]}
+    for format_name, download in downloads.items():
+        body = download.content
+        if format_name == "html":
             assert "市场回顾" in body.decode("utf-8")
-        elif job["format"] == "docx":
+        elif format_name == "docx":
             output = Document(BytesIO(body))
             assert "市场回顾" in " ".join(paragraph.text for paragraph in output.paragraphs)
         else:
@@ -232,6 +266,6 @@ def test_translated_document_is_shared_by_html_pdf_and_docx(client, enabled_tran
             finally:
                 output.close()
     with next(client.app.dependency_overrides[get_db]()) as db:
-        artifacts = list(db.scalars(select(RenderArtifact).where(RenderArtifact.report_id == target["id"])))
+        artifacts = [event.details for event in db.scalars(select(AuditEvent).where(AuditEvent.entity_id == target["id"], AuditEvent.action == "export.generated"))]
         assert len(artifacts) == 3
-        assert all(artifact.document_version == document["version"] and artifact.content_manifest["language_mode"] == "ZH_HANS" and artifact.content_manifest["document_checksum"] == document["checksum"] for artifact in artifacts)
+        assert all(artifact["document_version"] == document["version"] and artifact["content_manifest"]["language_mode"] == "ZH_HANS" and artifact["content_manifest"]["document_checksum"] == document["checksum"] for artifact in artifacts)

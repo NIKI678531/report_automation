@@ -76,7 +76,6 @@ function report(id: string, reportDate: string, status: Report["status"] = "DRAF
       },
     },
     quality_results: [],
-    artifacts: [],
   };
 }
 
@@ -174,7 +173,6 @@ describe("report center navigation", () => {
     const archived = report("archived", "2026-07-31", "ARCHIVED");
     const archivedChinese = report("archived-chinese", "2026-07-31", "ARCHIVED", 1, "ZH_HANS");
     archived.finalized_document_version = 1;
-    archived.artifacts = [{ id: "pdf", format: "pdf", size_bytes: 10, checksum: "pdf", is_current: false }];
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockResolvedValue([archived, archivedChinese]);
     vi.spyOn(api, "getReport").mockImplementation(async (id) => id === archivedChinese.id ? archivedChinese : archived);
@@ -186,6 +184,9 @@ describe("report center navigation", () => {
     expect(screen.queryByRole("button", { name: "Review & finalize" })).toBeNull();
     expect(screen.getByRole("button", { name: "Assisted draft" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Downloads" })).toHaveProperty("disabled", false);
+    fireEvent.click(screen.getByRole("button", { name: "Downloads" }));
+    const formats = screen.getAllByRole("menuitem");
+    expect(formats).toHaveLength(3);
 
     fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-Hans" } });
     await waitFor(() => expect(window.location.pathname).toBe("/reports/" + archivedChinese.id));
@@ -343,10 +344,7 @@ describe("3033 product scope", () => {
       current = report("ready", "2026-07-31", "FINALIZED");
       return current;
     });
-    const renderOutputs = vi.spyOn(api, "render").mockResolvedValue([
-      { id: "html-job", format: "html", status: "SUCCEEDED", progress: 100, stage: "complete", error: null, artifact_id: "html-artifact" },
-    ]);
-    const downloadArtifact = vi.spyOn(api, "downloadArtifact").mockResolvedValue(undefined);
+    const downloadReport = vi.spyOn(api, "downloadReport").mockResolvedValue(undefined);
 
     renderAt(`/reports/${current.id}`);
     const reviewButton = await screen.findByRole("button", { name: "Review & finalize" });
@@ -354,15 +352,14 @@ describe("3033 product scope", () => {
 
     await waitFor(() => expect(finalize).toHaveBeenCalledTimes(1));
     expect(review).not.toHaveBeenCalled();
-    expect(renderOutputs).not.toHaveBeenCalled();
+    expect(downloadReport).not.toHaveBeenCalled();
     const menu = await screen.findByRole("menu", { name: "Download report" });
     expect(within(menu).getByRole("menuitem", { name: /PDF/ })).toBeTruthy();
     expect(within(menu).getByRole("menuitem", { name: /Word/ })).toBeTruthy();
     const html = within(menu).getByRole("menuitem", { name: /HTML/ });
     fireEvent.click(html);
 
-    await waitFor(() => expect(renderOutputs).toHaveBeenCalledWith("ready", ["html"]));
-    await waitFor(() => expect(downloadArtifact).toHaveBeenCalledWith("html-artifact"));
+    await waitFor(() => expect(downloadReport).toHaveBeenCalledWith("ready", "html"));
     expect(screen.queryByText(/blocking checks/i)).toBeNull();
     expect(screen.queryByText(/SNAPSHOT_INCOMPLETE/i)).toBeNull();
   });

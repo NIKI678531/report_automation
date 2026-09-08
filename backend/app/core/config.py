@@ -8,15 +8,12 @@ from pydantic import BaseModel, Field
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]  # backend/
 _WORKSPACE_ROOT = _SERVICE_ROOT.parent  # repository root
 
-# Load service-local secrets (DATAWAREHOUSE_MYSQL_PASSWORD, MARKETAUX_API_KEY, ...) before defaults
+# Load service-local secrets (DATAWAREHOUSE_MYSQL_PASSWORD, FMP_API_KEY, ...) before defaults
 # below. Real process environment always wins, so container/CI settings are never overwritten by a
 # stray .env.
 load_dotenv(_SERVICE_ROOT / ".env", override=False)
 
 DEFAULT_DOWNLOAD_SECRET = "local-development-secret-change-me"
-# Backends `app.core.storage` actually implements. A value outside this list used to fall through
-# to local disk without a word, so `STORAGE_BACKEND=TOS` looked configured and stored nothing.
-SUPPORTED_STORAGE_BACKENDS = ("LOCAL", "S3")
 # The one auth mode that trusts request headers. Everything that is only safe on a developer
 # workstation - home-directory probing, header-supplied identity, the public default signing key -
 # is gated on this single value. REMOTE is a deployment, not a LOCAL exemption.
@@ -124,19 +121,6 @@ class Settings(BaseModel):
     translation_timeout_seconds: float = _env_float("TRANSLATION_TIMEOUT_SECONDS", 45)
     translation_max_characters: int = _env_int("TRANSLATION_MAX_CHARACTERS", 30000)
     translation_max_tokens: int = _env_int("TRANSLATION_MAX_TOKENS", 16000)
-    storage_backend: str = _env_str("STORAGE_BACKEND", "LOCAL").upper()
-    # S3-compatible object storage: Volcengine TOS, MinIO and AWS S3 all speak this API. A bucket
-    # is the only hard requirement; credentials may instead come from the pod's assumed role, and
-    # the endpoint is only needed for a vendor that is not AWS.
-    s3_bucket: str | None = os.getenv("S3_BUCKET")
-    s3_endpoint_url: str | None = os.getenv("S3_ENDPOINT_URL")
-    s3_region: str | None = os.getenv("S3_REGION")
-    # Every artifact key is written below this prefix, so one bucket can hold several environments.
-    s3_prefix: str = _env_str("S3_PREFIX", "")
-    s3_access_key_id: str | None = Field(default=os.getenv("S3_ACCESS_KEY_ID"), repr=False)
-    s3_secret_access_key: str | None = Field(default=os.getenv("S3_SECRET_ACCESS_KEY"), repr=False)
-    # `virtual` is bucket.endpoint (TOS, AWS); `path` is endpoint/bucket (MinIO and most gateways).
-    s3_addressing_style: str = _env_str("S3_ADDRESSING_STYLE", "virtual")
     download_secret: str = _env_str("DOWNLOAD_SECRET", DEFAULT_DOWNLOAD_SECRET)
     download_ttl_seconds: int = _env_int("DOWNLOAD_TTL_SECONDS", 300)
     # Microsoft Entra ID. `entra_audience` is the API's application ID URI or client id; a token
@@ -169,13 +153,10 @@ class Settings(BaseModel):
     )
     # Which adapter in app.integrations.news.REGISTRY answers a fetch that names no provider.
     news_provider: str = _env_str("NEWS_PROVIDER", "DA_REPORT")
-    marketaux_api_key: str | None = Field(default=os.getenv("MARKETAUX_API_KEY"), repr=False)
-    marketaux_base_url: str = _env_str("MARKETAUX_BASE_URL", "https://api.marketaux.com/v1")
-    marketaux_timeout_seconds: float = _env_float("MARKETAUX_TIMEOUT_SECONDS", 15)
-    marketaux_max_results: int = _env_int("MARKETAUX_MAX_RESULTS", 100)
-    marketaux_language: str = _env_str("MARKETAUX_LANGUAGE", "en")
-    marketaux_allowed_hosts: tuple[str, ...] = _env_csv("MARKETAUX_ALLOWED_HOSTS", "api.marketaux.com")
     da_report_sqlite_path: Path | None = _developer_snapshot("DA_REPORT_SQLITE_PATH", _LOCAL_DA_REPORT_CANDIDATES)
+    da_report_database_url: str | None = Field(default=os.getenv("DA_REPORT_DATABASE_URL"), repr=False)
+    da_report_mysql_ssl_ca: Path | None = _env_path("DA_REPORT_MYSQL_SSL_CA")
+    da_report_mysql_ssl_verify_identity: bool = _env_bool("DA_REPORT_MYSQL_SSL_VERIFY_IDENTITY", True)
     da_report_sqlite_sha256: str | None = os.getenv("DA_REPORT_SQLITE_SHA256")
     da_report_object_url: str | None = os.getenv("DA_REPORT_OBJECT_URL")
     da_report_cache_dir: Path = Path(_env_str("DA_REPORT_CACHE_DIR", str(Path(tempfile.gettempdir()) / "commentary-da")))
@@ -241,10 +222,6 @@ class Settings(BaseModel):
     service_root: Path = _SERVICE_ROOT
 
     @property
-    def output_root(self) -> Path:
-        return self.workspace_root / "var" / "output"
-
-    @property
     def is_local_auth(self) -> bool:
         """True when identity comes from request headers instead of a validated token."""
         return self.auth_mode == _LOCAL_AUTH_MODE
@@ -269,12 +246,14 @@ class Settings(BaseModel):
         """Every reason this configuration must not serve traffic, in one pass.
 
         Returned rather than raised so the caller can log all of them at once; ``create_app``
-        turns a non-empty list into a startup failure. LOCAL is exempt by design: it is the
-        developer mode where headers are the identity and the signing key is public.
+        turns a non-empty list into a startup failure. LOCAL is exempt from deployment-only
+        guards: headers are the identity and the signing key is public. Task mode must still
+        be supported in every environment.
         """
         problems: list[str] = []
         if self.task_mode != "EAGER":
             problems.append("TASK_MODE must be EAGER; queue execution is no longer installed (ADR-0028).")
+        problems.extend(self.da_report_mysql_problems())
         if self.is_local_auth:
             return problems
         if self.download_secret == DEFAULT_DOWNLOAD_SECRET:
@@ -309,8 +288,30 @@ class Settings(BaseModel):
                 "DATABASE_URL points at SQLite; a deployed environment must use the MySQL service "
                 "so migrations, concurrency and durability match what was tested."
             )
-        problems.extend(self._storage_problems())
         problems.extend(self.translation_problems())
+        return problems
+
+    def da_report_mysql_problems(self) -> list[str]:
+        if not self.da_report_database_url:
+            return []
+        from sqlalchemy.engine import make_url
+
+        problems = []
+        try:
+            url = make_url(self.da_report_database_url)
+            valid = (url.drivername == "mysql+pymysql" and url.host and url.database and url.username
+                     and (url.port is None or 1 <= url.port <= 65535)
+                     and all(key == "charset" and value == "utf8mb4" for key, value in url.query.items()))
+        except Exception:
+            valid = False
+        if not valid:
+            problems.append("DA_REPORT_DATABASE_URL must be a mysql+pymysql URL with host, database and user; only charset=utf8mb4 is allowed in its query.")
+        if self.da_report_mysql_ssl_ca and not self.da_report_mysql_ssl_ca.is_file():
+            problems.append("DA_REPORT_MYSQL_SSL_CA must point to a readable CA bundle.")
+        if not self.is_local_auth and not self.da_report_mysql_ssl_verify_identity:
+            problems.append("DA_REPORT_MYSQL_SSL_VERIFY_IDENTITY must be true in deployments.")
+        if not 1 <= self.da_report_timeout_seconds <= 60:
+            problems.append("DA_REPORT_TIMEOUT_SECONDS must be between 1 and 60 for MySQL reads.")
         return problems
 
     def translation_problems(self) -> list[str]:
@@ -338,34 +339,6 @@ class Settings(BaseModel):
             problems.append("TRANSLATION_MAX_TOKENS must be between 256 and 32000.")
         return problems
 
-    def _storage_problems(self) -> list[str]:
-        """Why the artifact store would lose or fail to serve a rendered report.
-
-        The deployment target has no persistent volume, so container-local disk is not storage:
-        the artifact disappears at the next restart, and a second replica cannot serve a download
-        the first one produced. This is the same class of refusal as SQLite.
-        """
-        if self.storage_backend not in SUPPORTED_STORAGE_BACKENDS:
-            return [
-                f"STORAGE_BACKEND={self.storage_backend!r} is not a backend anything implements "
-                f"(supported: {', '.join(SUPPORTED_STORAGE_BACKENDS)})."
-            ]
-        if self.storage_backend == "LOCAL":
-            return [
-                "STORAGE_BACKEND=LOCAL keeps rendered artifacts on container-local disk. The "
-                "deployment provides no persistent volume, so every artifact is lost on restart "
-                "and a second replica cannot serve one the first produced. Set STORAGE_BACKEND=S3 "
-                "and S3_BUCKET to the approved object store."
-            ]
-        problems = []
-        if not self.s3_bucket:
-            problems.append("S3_BUCKET is required when STORAGE_BACKEND=S3; there is nowhere to write.")
-        if not self.s3_endpoint_url and not self.s3_region:
-            problems.append(
-                "S3_REGION or S3_ENDPOINT_URL is required so the client knows which endpoint to "
-                "address and which region to sign for."
-            )
-        return problems
 
 
 settings = Settings()

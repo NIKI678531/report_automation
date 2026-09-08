@@ -107,7 +107,10 @@ def fail_translation(db: Session, job_id: str, code: str) -> None:
 
 
 def execute_translation(db: Session, job_id: str) -> str:
-    claimed = db.execute(update(TranslationJob).where(TranslationJob.id == job_id, TranslationJob.status == "QUEUED", TranslationJob.expires_at > utcnow()).values(status="RUNNING", attempts=TranslationJob.attempts + 1))
+    # Let the database evaluate expiry. After a retry, an already-loaded job can contain a
+    # timezone-naive MySQL/SQLite timestamp; ORM "evaluate" would compare it with utcnow()
+    # in Python and raise before claiming the next attempt. expire_all below reloads state.
+    claimed = db.execute(update(TranslationJob).where(TranslationJob.id == job_id, TranslationJob.status == "QUEUED", TranslationJob.expires_at > utcnow()).values(status="RUNNING", attempts=TranslationJob.attempts + 1).execution_options(synchronize_session=False))
     db.commit()
     if not claimed.rowcount:
         return "IGNORED"

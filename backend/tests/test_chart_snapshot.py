@@ -1,3 +1,4 @@
+from conftest import download_report
 """The `industry_breakdown` chart snapshot contract (rules document §4.3).
 
 The chart is structured data, never a screenshot, and it is the single place where ordering,
@@ -172,16 +173,11 @@ def test_every_output_format_reads_the_same_display_value(client, tmp_path):
     assert expected == ["47.8%", "49.3%", "1.7%", "1.3%"]
 
     client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": detail["version"]})
-    rendered = client.post(
-        f"/api/v1/reports/{report['id']}/renders",
-        json={"formats": ["html", "docx"]},
-        headers={"Idempotency-Key": "chart-contract"},
-    ).json()
+    downloads = {format_name: download_report(client, report['id'], format_name) for format_name in ["html", "docx"]}
 
     artifacts = {}
-    for job in rendered:
-        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
-        artifacts[job["format"]] = client.get(signed["download_url"]).content
+    for format_name, download in downloads.items():
+        artifacts[format_name] = download.content
 
     html = artifacts["html"].decode("utf-8")
     for value in expected:

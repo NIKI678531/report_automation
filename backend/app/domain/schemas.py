@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from app.core.config import settings
-from .models import JobStatus, ReportStatus, SnapshotStatus
+from .models import ReportStatus, SnapshotStatus
 
 
 class ReportCreate(BaseModel):
@@ -136,7 +136,6 @@ class ReportDetail(ReportRead):
     translation_source_language_mode: str | None = None
     latest_document: dict[str, Any] | None = None
     quality_results: list[dict[str, Any]] = Field(default_factory=list)
-    artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SnapshotCreate(BaseModel):
@@ -238,32 +237,6 @@ class FinalizeRequest(BaseModel):
 
 class RevisionCreate(BaseModel):
     reason: str = Field(min_length=5, max_length=500)
-
-
-class RenderRequest(BaseModel):
-    formats: list[Literal["html", "pdf", "docx"]] = ["html", "pdf", "docx"]
-
-
-class JobRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: str
-    report_id: str
-    format: str
-    status: JobStatus
-    progress: int
-    stage: str
-    error: dict[str, Any] | None
-    artifact_id: str | None
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def status_url(self) -> str:
-        """Where to poll this job.
-
-        A 202 that returns only an id makes every client hard-code the polling path; handing back
-        the URL keeps that one route decision on the server.
-        """
-        return f"{settings.api_prefix}/jobs/{self.id}"
 
 
 class ErrorItem(BaseModel):

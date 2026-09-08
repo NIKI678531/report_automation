@@ -1,3 +1,4 @@
+from conftest import download_report, export_records
 """Logical dataset slot ingestion and immutable snapshot composition."""
 
 from io import BytesIO
@@ -525,18 +526,10 @@ def test_required_logical_slots_auto_calculate_without_golden_fixture(client):
         json={"version": selected.json()["version"]},
     )
     assert finalized.status_code == 200, finalized.text
-    rendered = client.post(
-        f"/api/v1/reports/{report_id}/renders",
-        json={"formats": ["html", "pdf", "docx"]},
-        headers={"Idempotency-Key": f"slot-lifecycle-{report_id}"},
-    )
-    assert rendered.status_code == 202, rendered.text
-    assert [job["status"] for job in rendered.json()] == ["SUCCEEDED", "SUCCEEDED", "SUCCEEDED"]
-    artifacts = client.get(f"/api/v1/reports/{report_id}").json()["artifacts"]
-    assert len({artifact["content_manifest_checksum"] for artifact in artifacts}) == 1
-    for artifact in artifacts:
-        signed = client.get(f"/api/v1/artifacts/{artifact['id']}/download").json()
-        downloaded = client.get(signed["download_url"])
+    downloads = {format_name: download_report(client, report_id, format_name) for format_name in ["html", "pdf", "docx"]}
+    artifacts = export_records(client, report_id)
+    assert len({artifact["content_manifest"]["checksum"] for artifact in artifacts}) == 1
+    for downloaded in downloads.values():
         assert downloaded.status_code == 200
         assert downloaded.content
 

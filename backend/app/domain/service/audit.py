@@ -16,7 +16,7 @@ def audit_actor(override: str | None = None) -> str:
     """Who to attribute an event to.
 
     Read from the request context rather than passed down through every call site, so that adding
-    an audited action cannot silently omit the actor. Work with no request behind it - a Celery
+    an audited action cannot silently omit the actor. Work with no request behind it - a standalone
     render, an alembic data fix - is attributed to ``system`` rather than to whoever happened to
     trigger it last.
     """

@@ -2,8 +2,8 @@
 
 Providers register a spec here and the caller selects one by key; every adapter raises
 ``NewsProviderError`` and returns the same normalized candidate shape, so nothing downstream knows
-which source answered. ``DA_REPORT`` reads the approved local snapshot and is the default; remote
-vendors are opt-in and only reachable when their credential is present.
+which source answered. ``DA_REPORT`` is the only supported provider and reads the configured
+read-only MySQL or SQLite source.
 """
 
 from __future__ import annotations
@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from datetime import date
 from importlib import import_module
 from typing import Any, Literal
-
-import httpx
 
 from app.core.config import settings
 
@@ -34,11 +32,8 @@ class NewsProviderSpec:
     key: str
     title: str
     description: str
-    #: Imported lazily, so a provider nobody selected never loads and never reads its secret.
+    #: Imported lazily to avoid a cycle with the adapter's shared error type.
     module: str
-    secret_setting: str | None
-    auth_style: Literal["HEADER", "QUERY", "NONE"]
-    needs_constituent_context: bool = False
 
 
 REGISTRY: dict[str, NewsProviderSpec] = {
@@ -47,19 +42,6 @@ REGISTRY: dict[str, NewsProviderSpec] = {
         title="DA-Report",
         description="Approved regional company news matched strictly to the active constituent snapshot.",
         module="app.integrations.da_report",
-        secret_setting=None,
-        auth_style="NONE",
-        needs_constituent_context=True,
-    ),
-    "MARKETAUX": NewsProviderSpec(
-        key="MARKETAUX",
-        title="Marketaux",
-        description="Global equity news with per-article entity tagging, including Hong Kong listings.",
-        module="app.integrations.marketaux",
-        secret_setting="marketaux_api_key",
-        # Marketaux has no header auth: `api_token` is a query parameter or nothing. See
-        # docs/news-sources-and-data-imports.md for the deviation and how the key is kept out of logs.
-        auth_style="QUERY",
     ),
 }
 
@@ -78,15 +60,13 @@ def get_spec(key: str | None) -> NewsProviderSpec:
 
 
 def is_configured(spec: NewsProviderSpec) -> bool:
-    if spec.secret_setting:
-        return bool(getattr(settings, spec.secret_setting, None))
     adapter = import_module(spec.module)
     checker = getattr(adapter, "is_configured", None)
     return bool(checker and checker())
 
 
 def list_providers() -> list[dict[str, Any]]:
-    """Which providers exist and which of them actually hold a credential in this environment.
+    """Which providers exist and have a data source configured in this environment.
 
     Only the boolean is exposed. The credential itself never leaves the process.
     """
@@ -110,26 +90,18 @@ async def fetch_news(
     to_date: date,
     page: int,
     limit: int,
-    client: httpx.AsyncClient | None = None,
     constituents: list[dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Dispatch to the selected adapter and return ``(provider_key, candidates)``."""
     spec = get_spec(provider)
     adapter = import_module(spec.module)
-    # `client` stays out of the call unless a caller supplied one, so adapters (and the test doubles
-    # that stand in for them) keep the six-argument signature they already have.
-    if spec.needs_constituent_context:
-        candidates = await adapter.fetch_news(
-            scope,
-            symbols,
-            from_date,
-            to_date,
-            page,
-            limit,
-            constituents=constituents,
-        )
-    elif client is None:
-        candidates = await adapter.fetch_news(scope, symbols, from_date, to_date, page, limit)
-    else:
-        candidates = await adapter.fetch_news(scope, symbols, from_date, to_date, page, limit, client)
+    candidates = await adapter.fetch_news(
+        scope,
+        symbols,
+        from_date,
+        to_date,
+        page,
+        limit,
+        constituents=constituents,
+    )
     return spec.key, candidates

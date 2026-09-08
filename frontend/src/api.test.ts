@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "./api";
 
@@ -160,26 +161,47 @@ describe("FastAPI client", () => {
     fetchMock.mockRestore();
   });
 
-  it("requests only the selected output formats", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 202 }));
-    await api.render("r1", ["pdf", "docx"]);
-    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/renders", expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify({ formats: ["pdf", "docx"] }),
-    }));
-    fetchMock.mockRestore();
+  it("generates the requested format and downloads a blob through the remote path", async () => {
+    const signed = "/api/v1/reports/r1/exports/pdf/content?version=1&expires=123&signature=a%2Bb";
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ download_url: signed })))
+      .mockResolvedValueOnce(new Response("%PDF-test", { headers: { "Content-Type": "application/pdf", "Content-Disposition": 'attachment; filename="report.pdf"' } }));
+    const create = vi.fn(() => "blob:test-export");
+    const revoke = vi.fn();
+    const OriginalURL = globalThis.URL;
+    class DownloadURL extends OriginalURL { static createObjectURL = create; static revokeObjectURL = revoke; }
+    vi.stubGlobal("URL", DownloadURL);
+    vi.useFakeTimers();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      expect(this.download).toBe("report.pdf");
+      expect(this.href).toBe("blob:test-export");
+    });
+    try {
+      await api.downloadReport("r1", "pdf");
+      expect(fetchMock).toHaveBeenNthCalledWith(1, "/remote/fund-cmt-auto/api/v1/reports/r1/exports/pdf/download", expect.any(Object));
+      expect(fetchMock).toHaveBeenNthCalledWith(2, `/remote/fund-cmt-auto${signed}`, expect.any(Object));
+      expect(click).toHaveBeenCalledOnce();
+      expect(document.querySelector('a[download]')).toBeNull();
+      vi.runAllTimers();
+      expect(revoke).toHaveBeenCalledWith("blob:test-export");
+    } finally {
+      vi.useRealTimers();
+      click.mockRestore();
+      fetchMock.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 
-  it("reads render job progress for asynchronous output generation", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-      id: "job-1", format: "pdf", status: "RUNNING", progress: 40, stage: "rendering", error: null, artifact_id: null,
-    }), { status: 200 }));
-
-    await api.getJob("job-1");
-
-    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/jobs/job-1", expect.any(Object));
-    fetchMock.mockRestore();
+  it("surfaces generation failure instead of navigating to an error response", async () => {
+    const signed = "/api/v1/reports/r1/exports/pdf/content?version=1&expires=123&signature=x";
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ download_url: signed })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error_code: "EXPORT_FAILED", message: "Export failed", fix_hint: "Retry." }), { status: 503 }));
+    try {
+      await expect(api.downloadReport("r1", "pdf")).rejects.toMatchObject({ errorCode: "EXPORT_FAILED", message: "Export failed Retry." });
+    } finally { fetchMock.mockRestore(); }
   });
+
 });
 
 describe("failed requests", () => {

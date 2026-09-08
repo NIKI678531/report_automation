@@ -15,24 +15,9 @@ def database_check() -> None:
         engine.dispose()
 
 
-def storage_check() -> None:
-    import boto3
-    from botocore.config import Config
-
-    client = boto3.client("s3", endpoint_url=settings.s3_endpoint_url, region_name=settings.s3_region,
-                          aws_access_key_id=settings.s3_access_key_id,
-                          aws_secret_access_key=settings.s3_secret_access_key,
-                          config=Config(connect_timeout=3, read_timeout=3, retries={"max_attempts": 0},
-                                        s3={"addressing_style": settings.s3_addressing_style}))
-    try:
-        client.head_bucket(Bucket=settings.s3_bucket)
-    finally:
-        client.close()
-
-
 def deep_health() -> dict:
     checks = {}
-    for name, check in (("database", database_check), ("storage", storage_check)):
+    for name, check in (("database", database_check),):
         try:
             check()
             checks[name] = "ok"

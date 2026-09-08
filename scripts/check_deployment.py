@@ -15,7 +15,7 @@ long before any production process reads them, and every guard below is a pure f
 settings. A workstation can therefore prove the deployment configuration is clean without being
 the deployment.
 
-Exit code 0 means the checks that ran all passed. Nothing here writes, and the token is never
+Exit code 0 means the checks that ran all passed. Only a temporary scratch probe is written and removed; the token is never
 logged.
 """
 
@@ -109,7 +109,7 @@ def check_configuration() -> None:
     if settings.is_local_auth and settings.download_secret == DEFAULT_DOWNLOAD_SECRET:
         # Outside LOCAL this is already a startup refusal above; saying it twice would inflate the count.
         report(WARN, "DOWNLOAD_SECRET is the public repository default. Harmless locally, fatal anywhere else.")
-    report(OK, f"Artifact download links expire after {settings.download_ttl_seconds}s, bound to the requesting subject.")
+    report(OK, f"Export download links expire after {settings.download_ttl_seconds}s, bound to the requesting subject.")
     report(
         OK,
         f"Upload ceilings: {settings.upload_max_bytes // 1024 // 1024} MiB per file, "
@@ -247,60 +247,21 @@ def check_identity(token: str | None, skip_network: bool) -> None:
 
 
 # ---------------------------------------------------------------------------------------------
-# Artifact storage
+# Temporary export workspace
 # ---------------------------------------------------------------------------------------------
 
 
-def check_storage(skip_network: bool = False) -> None:
-    section(f"Artifact storage (STORAGE_BACKEND={settings.storage_backend})")
+def check_export_workspace() -> None:
+    import tempfile
+    section("On-demand exports")
     try:
-        # Imported here rather than at module scope so an unimplemented backend is reported as one
-        # finding among the others instead of a traceback before anything has been printed.
-        from app.core.storage import LocalObjectStorage, storage
-    except ConfigurationError as error:
-        report(FAIL, str(error))
-        return
-
-    if isinstance(storage, LocalObjectStorage):
-        root = storage.root
-        if not root.exists():
-            report(WARN, f"{root} does not exist yet; it is created on the first render.")
-        else:
-            probe = root / ".preflight-write-check"
-            try:
-                probe.write_bytes(b"")
-                probe.unlink()
-                report(OK, f"{root} is writable.")
-            except OSError as error:
-                report(FAIL, f"{root} is not writable: {error}")
-        report(
-            OK if settings.is_local_auth else FAIL,
-            "Artifacts are kept on local disk through the filesystem implementation of the "
-            "object-storage port. Correct on a workstation; in a deployment with no persistent "
-            "volume every artifact is lost on restart and a second replica cannot serve one the "
-            "first produced.",
-        )
-        return
-
-    where = settings.s3_endpoint_url or f"the {settings.s3_region} region"
-    prefix = f"{settings.s3_prefix}/" if settings.s3_prefix else "(bucket root)"
-    report(OK, f"Artifacts go to bucket {settings.s3_bucket} at {where}, under {prefix}.")
-    if not (settings.s3_access_key_id and settings.s3_secret_access_key):
-        report(
-            WARN,
-            "No S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY set. That is correct if the pod assumes a "
-            "role; otherwise the first render fails on credentials.",
-        )
-    if skip_network:
-        report(WARN, "Bucket reachability skipped by --skip-network; nothing has actually been stored or read.")
-        return
-    try:
-        storage.client.head_bucket(Bucket=settings.s3_bucket)
-        report(OK, "Bucket reachable and the credentials can address it.")
-    except ConfigurationError as error:
-        report(FAIL, str(error))
-    except Exception as error:  # botocore raises vendor-specific subclasses
-        report(FAIL, f"Cannot reach the bucket: {type(error).__name__}: {error}")
+        with tempfile.TemporaryDirectory(prefix="commentary-preflight-") as directory:
+            path = Path(directory) / "probe"
+            path.write_bytes(b"ok")
+            assert path.read_bytes() == b"ok"
+        report(OK, "Temporary export directory is writable; files are removed after delivery. No object storage required.")
+    except OSError:
+        report(FAIL, "Temporary export directory could not be written or cleaned.")
 
 
 def main() -> int:
@@ -309,7 +270,7 @@ def main() -> int:
     check_configuration()
     check_database()
     check_identity(arguments.token, arguments.skip_network)
-    check_storage(arguments.skip_network)
+    check_export_workspace()
 
     print()
     if _failures:

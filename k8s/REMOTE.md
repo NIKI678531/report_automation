@@ -70,6 +70,11 @@ npm run build:host-contract --workspace @commentary/web
 ```
 
 契约测试通过浏览器拦截读取本地构建产物，模拟后端数据，不开 HTTP 监听或连接数据库。
+
+报告下载使用 `/remote/fund-cmt-auto/api/v1/reports/{id}/exports/{format}/download` 签发地址，
+随后访问同一前缀下的 `content` 接口并等待生成。平台需要保留完整查询参数、允许长请求，
+并遵守 `Cache-Control: no-store`。成品不保存在存储桶中；旧 artifact/job 接口已退役，
+见 [ADR-0029](../docs/adr/0029-on-demand-report-downloads.md)。
 验证宿主 React 18.3.1、Router 6.30.0 的真实共享作用域和 classic script `init/get`，
 覆盖跨端口资源、Shadow DOM 编辑/样式、保存失败、预览、卸载/重挂载和独立入口。
 

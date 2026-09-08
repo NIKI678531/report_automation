@@ -7,17 +7,21 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import threading
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Engine, create_engine, event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
@@ -68,6 +72,8 @@ class DaReportProviderError(NewsProviderError):
 
 
 def is_configured() -> bool:
+    if settings.da_report_database_url:
+        return not settings.da_report_mysql_problems()
     path = settings.da_report_sqlite_path
     return bool(
         (path and path.expanduser().is_file())
@@ -310,10 +316,123 @@ def _engine(path: str) -> Engine:
     return engine
 
 
+@lru_cache(maxsize=4)
+def _mysql_engine(database_url: str, timeout: int, ssl_ca: str | None, verify_identity: bool) -> Engine:
+    tls = ssl.create_default_context(cafile=ssl_ca)
+    tls.check_hostname = verify_identity
+    if not verify_identity:  # LOCAL test databases may use MySQL's generated CA.
+        tls.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    engine = create_engine(
+        make_url(database_url),
+        connect_args={"charset": "utf8mb4", "connect_timeout": timeout, "read_timeout": timeout,
+                      "write_timeout": timeout, "ssl": tls},
+        pool_pre_ping=True, pool_recycle=300, pool_size=3, max_overflow=2, pool_timeout=timeout,
+        isolation_level="REPEATABLE READ", hide_parameters=True,
+    )
+
+    @event.listens_for(engine, "connect")
+    def configure_read_only(dbapi_connection, connection_record):
+        del connection_record
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute("SET SESSION TRANSACTION READ ONLY")
+            cursor.execute(f"SET SESSION MAX_EXECUTION_TIME = {timeout * 1000}")
+            cursor.execute("SET SESSION time_zone = '+00:00'")
+            # PyMySQL can fall back to plaintext if the server does not offer TLS.
+            cursor.execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+            if not cursor.fetchone()[1]:
+                raise DaReportProviderError("DA_REPORT_TLS_REQUIRED", "DA-Report MySQL requires TLS.", 503)
+
+    return engine
+
+
+@dataclass(frozen=True)
+class _DataSource:
+    engine: Engine
+    name: str
+    file_checksum: str | None = None
+
+    @property
+    def source_type(self) -> str:
+        return "DA_REPORT_SQLITE" if self.file_checksum else "DA_REPORT_MYSQL"
+
+
+def _data_source() -> _DataSource:
+    # An explicit MySQL source never falls back to a stale local file or object URL on failure.
+    if settings.da_report_database_url:
+        if settings.da_report_mysql_problems():
+            raise DaReportProviderError("DA_REPORT_CONFIGURATION_INVALID", "Check the DA-Report MySQL configuration.", 503)
+        try:
+            engine = _mysql_engine(
+                settings.da_report_database_url, max(1, int(settings.da_report_timeout_seconds)),
+                str(settings.da_report_mysql_ssl_ca) if settings.da_report_mysql_ssl_ca else None,
+                settings.da_report_mysql_ssl_verify_identity,
+            )
+        except (SQLAlchemyError, OSError, ValueError):
+            raise DaReportProviderError("DA_REPORT_CONFIGURATION_INVALID", "Check the DA-Report MySQL configuration and CA bundle.", 503) from None
+        return _DataSource(engine, "DA_REPORT")
+    path = _materialize_snapshot()
+    stat = path.stat()
+    return _DataSource(_engine(str(path.resolve())), path.name,
+                       _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns))
+
+
+def _table_columns(connection, table_name: str) -> set[str]:
+    schema = inspect(connection)
+    if not schema.has_table(table_name):
+        return set()
+    return {str(column["name"]) for column in schema.get_columns(table_name)}
+
+
+@contextmanager
+def _connect_source(source: _DataSource):
+    try:
+        with source.engine.connect() as connection:
+            yield connection
+    except (SQLAlchemyError, OSError, ValueError):
+        # Do not expose SQL, credentials or connection details through provider errors or traces.
+        raise DaReportProviderError("DA_REPORT_UNAVAILABLE", "The DA-Report data source could not be queried.", 503, retryable=True) from None
+
+
+def _joined_text(source: _DataSource, columns: tuple[str, ...]) -> str:
+    parts = [f"COALESCE({column}, '')" for column in columns]
+    if source.engine.dialect.name == "mysql":
+        return "CONCAT_WS(' ', " + ", ".join(parts) + ")"
+    return " || ' ' || ".join(parts)
+
+
+def _company_predicate(source: _DataSource, title: str, key: str, alias: str, parameters: dict) -> str:
+    if source.engine.dialect.name != "mysql":
+        parameters[key] = alias
+        return f"contains_company_alias({title}, :{key}) = 1"
+    # ICU regular expressions replace the SQLite UDF. Parameters keep aliases out of SQL.
+    # Include full-width ASCII forms (NFKC in the SQLite implementation), punctuation separators,
+    # and Latin token boundaries so NIO does not match 'senior'. Chinese names match substrings.
+    normalized = _normalize_text(alias)
+    parts = []
+    for char in normalized:
+        if char == " ":
+            parts.append("[^0-9A-Z㐀-鿿０-９Ａ-Ｚａ-ｚ]+")
+        elif char.isascii() and char.isalnum():
+            parts.append(f"[{char}{chr(ord(char) + 0xFEE0)}]")
+        else:
+            parts.append(re.escape(char))
+    pattern = "".join(parts)
+    if not any("\u3400" <= char <= "\u9fff" for char in normalized):
+        pattern = "(^|[^0-9A-Z０-９Ａ-Ｚａ-ｚ])" + pattern + "([^0-9A-Z０-９Ａ-Ｚａ-ｚ]|$)"
+    parameters[key] = pattern
+    return f"REGEXP_LIKE({title}, :{key}, 'i')"
+
+
+def _source_checksum(source: _DataSource, datasets: dict) -> str:
+    if source.file_checksum:
+        return source.file_checksum
+    encoded = json.dumps({name: metadata["checksum"] for name, metadata in datasets.items()}, sort_keys=True)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 def _validate_columns(connection, required_columns: dict[str, set[str]], error_code: str) -> None:
     for table_name, required in required_columns.items():
-        rows = connection.execute(text(f"PRAGMA table_info({table_name})")).mappings()
-        actual = {str(row["name"]) for row in rows}
+        actual = _table_columns(connection, table_name)
         missing = sorted(required - actual)
         if missing:
             raise DaReportProviderError(
@@ -332,27 +451,27 @@ def _validate_monthly_schema(connection) -> None:
 
 
 def _missing_table_columns(connection, table_name: str) -> list[str]:
-    rows = connection.execute(text(f"PRAGMA table_info({table_name})")).mappings()
-    actual = {str(row["name"]) for row in rows}
+    actual = _table_columns(connection, table_name)
     return sorted(MONTHLY_REQUIRED_COLUMNS[table_name] - actual)
 
 
 def _monthly_dataset_metadata(
-    path: Path,
-    file_checksum: str,
+    source: _DataSource,
     table_name: str,
     rows: list[dict[str, Any]],
     query_window: dict[str, str | None],
 ) -> dict[str, Any]:
     payload = json.dumps(rows, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     return {
-        "source_type": "DA_REPORT_SQLITE",
-        "source_object": f"{path.name}#{table_name}",
+        "source_type": source.source_type,
+        "source_object": f"{source.name}#{table_name}",
         "checksum": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
         "row_count": len(rows),
         "lineage": {
-            "source_system": "DA_REPORT_SQLITE",
-            "sqlite_checksum": file_checksum,
+            "source_system": source.source_type,
+            # Retrieval time belongs to the enclosing snapshot/audit. Keep content metadata stable
+            # so refreshing unchanged MySQL rows does not create a new snapshot just for the clock.
+            **({"sqlite_checksum": source.file_checksum} if source.file_checksum else {"read_consistency": "REPEATABLE_READ"}),
             "source_table": table_name,
             "source_record_ids": [row["_source_id"] for row in rows],
             "query_window": query_window,
@@ -369,13 +488,11 @@ def load_monthly_data(
     constituent_index_code: str,
     report_date: date,
 ) -> dict[str, Any]:
-    path = _materialize_snapshot()
-    stat = path.stat()
-    file_checksum = _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    source = _data_source()
     history_start = date(report_date.year - 1, 1, 1)
     month_start = report_date.replace(day=1)
     provider_findings: list[dict[str, Any]] = []
-    with _engine(str(path.resolve())).connect() as connection:
+    with _connect_source(source) as connection:
         # Historical performance is independently releasable. Missing KPI/calendar/event tables
         # keep the report pending, but must not hide a complete official FUND/BENCHMARK series.
         _validate_columns(
@@ -396,7 +513,7 @@ def load_monthly_data(
                     "message": f"DA-Report is missing required fields in {table_name}: {', '.join(missing_columns)}.",
                     "actual": {"missing_columns": missing_columns},
                     "threshold": {"required_columns": sorted(MONTHLY_REQUIRED_COLUMNS[table_name])},
-                    "fix_hint": f"Publish {table_name} in the next DA-Report SQLite export; Historical Performance remains available.",
+                    "fix_hint": f"Publish {table_name} in the configured DA-Report source; Historical Performance remains available.",
                 })
         total_return_rows = list(connection.execute(text("""
             SELECT id, instrument_code, trade_date, total_return_value, series_type, currency, source, updated_at
@@ -504,7 +621,7 @@ def load_monthly_data(
             "severity": "BLOCKING", "status": "FAILED",
             "message": "The DA-Report snapshot requires one report-date AUM row and report-month daily turnover rows.",
             "actual": {"rows": len(fund_kpis)}, "threshold": "One report-date AUM and report-month turnover rows",
-            "fix_hint": "Backfill the official fund KPI rows in DA-Report and republish SQLite.",
+            "fix_hint": "Backfill the official fund KPI rows in DA-Report and publish the updated source.",
         })
 
     calendar = [{
@@ -521,7 +638,7 @@ def load_monthly_data(
             "severity": "BLOCKING", "status": "FAILED",
             "message": "The DA-Report snapshot contains no report-month trading days for this product.",
             "actual": {"rows": len(calendar)}, "threshold": "At least one report-month trading day",
-            "fix_hint": "Backfill the official market calendar in DA-Report and republish SQLite.",
+            "fix_hint": "Backfill the official market calendar in DA-Report and publish the updated source.",
         })
 
     index_events = [{
@@ -534,23 +651,23 @@ def load_monthly_data(
     } for row in event_rows]
     datasets = {
         "total_return_series": _monthly_dataset_metadata(
-            path, file_checksum, "total_return_series", series,
+            source, "total_return_series", series,
             {"from": history_start.isoformat(), "to": report_date.isoformat()},
         ),
     }
     if optional_ready["fund_kpi_daily"] and not kpi_invalid:
         datasets["fund_kpi_daily"] = _monthly_dataset_metadata(
-            path, file_checksum, "fund_kpi_daily", fund_kpis,
+            source, "fund_kpi_daily", fund_kpis,
             {"from": month_start.isoformat(), "to": report_date.isoformat()},
         )
     if optional_ready["trading_calendar"] and calendar_valid:
         datasets["trading_calendar"] = _monthly_dataset_metadata(
-            path, file_checksum, "trading_calendar", calendar,
+            source, "trading_calendar", calendar,
             {"from": month_start.isoformat(), "to": report_date.isoformat()},
         )
     if optional_ready["index_events"]:
         datasets["index_events"] = _monthly_dataset_metadata(
-            path, file_checksum, "index_events", index_events,
+            source, "index_events", index_events,
             {"from": report_date.isoformat(), "to": None},
         )
     for rows in (series, fund_kpis, calendar, index_events):
@@ -562,7 +679,7 @@ def load_monthly_data(
         "trading_calendar": calendar,
         "index_events": index_events,
         "datasets": datasets,
-        "source_checksum": file_checksum,
+        "source_checksum": _source_checksum(source, datasets),
         "_findings": provider_findings,
     }
 
@@ -581,16 +698,11 @@ def load_monthly_turnover(*, product_ticker: str, report_date: date) -> dict[str
     the trading-day count. The returned average is recomputed with ``Decimal``; the stored DOUBLE
     is retained only as source evidence and checked to six decimal places.
     """
-    path = _materialize_snapshot()
-    stat = path.stat()
-    file_checksum = _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    source = _data_source()
     month_start = report_date.replace(day=1)
     bloomberg_ticker = _bloomberg_equity_ticker(product_ticker)
-    with _engine(str(path.resolve())).connect() as connection:
-        actual = {
-            str(row["name"])
-            for row in connection.execute(text("PRAGMA table_info(market_monthly_turnovers)")).mappings()
-        }
+    with _connect_source(source) as connection:
+        actual = _table_columns(connection, "market_monthly_turnovers")
         missing = sorted(MONTHLY_TURNOVER_REQUIRED_COLUMNS - actual)
         if missing:
             raise DaReportProviderError(
@@ -686,8 +798,7 @@ def load_monthly_turnover(*, product_ticker: str, report_date: date) -> dict[str
         "source_updated_at": str(record["fetched_at"]),
     }
     metadata = _monthly_dataset_metadata(
-        path,
-        file_checksum,
+        source,
         "market_monthly_turnovers",
         [row],
         {"from": expected_start, "to": expected_end},
@@ -710,12 +821,12 @@ def load_monthly_turnover(*, product_ticker: str, report_date: date) -> dict[str
     return {
         "fund_turnover_monthly": [row],
         "datasets": {"fund_turnover_monthly": metadata},
-        "source_checksum": file_checksum,
+        "source_checksum": _source_checksum(source, {"fund_turnover_monthly": metadata}),
     }
 
 
-def _published_at(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _published_at(value: str | datetime) -> datetime:
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
@@ -790,7 +901,7 @@ def _catalog_item(row: Any) -> dict[str, Any]:
         "source_name_zh_hans_source": "OPENCC_T2S" if source_name_zh_hans else "MISSING",
         "published_at": _published_at(str(row["effective_at"])),
         "published_at_source": "published_at" if row["published_at"] else "fetched_at",
-        "fetched_at": row["fetched_at"],
+        "fetched_at": str(row["fetched_at"]),
         "title": row["title_en"] or row["title_zh"] or row["title_raw"] or "",
         "title_en": row["title_en"],
         "title_zh": row["title_zh"],
@@ -810,7 +921,7 @@ def _catalog_item(row: Any) -> dict[str, Any]:
 
 
 def _list_company_news_catalog_sync(
-    path: Path,
+    data_source: _DataSource,
     query: str | None,
     source: str | None,
     sentiment: str | None,
@@ -824,7 +935,6 @@ def _list_company_news_catalog_sync(
     company: str | None,
     company_scope: str | None,
 ) -> dict[str, Any]:
-    _verify_file(path)
     if sort not in {"newest", "oldest"}:
         raise DaReportProviderError("DA_REPORT_SORT_INVALID", "News sort must be newest or oldest.", 422)
     if not 1 <= limit <= 100:
@@ -848,12 +958,9 @@ def _list_company_news_catalog_sync(
     terms = (query or "").strip().split()
     for index, term in enumerate(terms):
         key = f"query_{index}"
-        predicates.append(
-            "LOWER(COALESCE(e.title_en, '') || ' ' || COALESCE(e.title_zh, '') || ' ' || "
-            "COALESCE(e.summary_en, '') || ' ' || COALESCE(e.summary_zh, '') || ' ' || "
-            "COALESCE(i.title_raw, '') || ' ' || COALESCE(i.summary_raw, '') || ' ' || "
-            "COALESCE(s.name_en, '') || ' ' || COALESCE(s.name_zh, '')) LIKE :" + key
-        )
+        search_text = _joined_text(data_source, ("e.title_en", "e.title_zh", "e.summary_en", "e.summary_zh",
+                                                  "i.title_raw", "i.summary_raw", "s.name_en", "s.name_zh"))
+        predicates.append(f"LOWER({search_text}) LIKE :{key}")
         parameters[key] = f"%{term.casefold()}%"
     normalized_company = (company or "").strip()
     normalized_company_scope = (company_scope or "").strip().upper()
@@ -875,10 +982,7 @@ def _list_company_news_catalog_sync(
             "The report-month constituent company list is unavailable.",
             422,
         )
-    title_expression = (
-        "COALESCE(e.title_en, '') || ' ' || COALESCE(e.title_zh, '') || ' ' || "
-        "COALESCE(i.title_raw, '')"
-    )
+    title_expression = _joined_text(data_source, ("e.title_en", "e.title_zh", "i.title_raw"))
     if normalized_company:
         selected_company = next(
             (
@@ -898,8 +1002,7 @@ def _list_company_news_catalog_sync(
             company_predicates: list[str] = []
             for index, alias in enumerate(aliases):
                 key = f"company_alias_{index}"
-                company_predicates.append(f"contains_company_alias({title_expression}, :{key}) = 1")
-                parameters[key] = alias
+                company_predicates.append(_company_predicate(data_source, title_expression, key, alias, parameters))
             predicates.append("(" + " OR ".join(company_predicates) + ")")
         else:
             predicates.append("0 = 1")
@@ -913,8 +1016,7 @@ def _list_company_news_catalog_sync(
             company_predicates = []
             for index, alias in enumerate(aliases):
                 key = f"constituent_alias_{index}"
-                company_predicates.append(f"contains_company_alias({title_expression}, :{key}) = 1")
-                parameters[key] = alias
+                company_predicates.append(_company_predicate(data_source, title_expression, key, alias, parameters))
             predicates.append("(" + " OR ".join(company_predicates) + ")")
         else:
             predicates.append("0 = 1")
@@ -989,7 +1091,7 @@ def _list_company_news_catalog_sync(
         LIMIT :limit
     """)
     try:
-        with _engine(str(path.resolve())).connect() as connection:
+        with _connect_source(data_source) as connection:
             _validate_schema(connection)
             rows = list(connection.execute(catalog_query, {**parameters, "limit": limit + 1}).mappings())
             total = int(connection.execute(
@@ -1073,6 +1175,10 @@ def _list_company_news_catalog_sync(
     }
 
 
+def _list_configured_catalog_sync(*args):
+    return _list_company_news_catalog_sync(_data_source(), *args)
+
+
 async def list_company_news_catalog(
     query: str | None = None,
     source: str | None = None,
@@ -1088,8 +1194,7 @@ async def list_company_news_catalog(
     company_scope: Literal["CONSTITUENTS"] | None = None,
 ) -> dict[str, Any]:
     return await asyncio.to_thread(
-        _list_company_news_catalog_sync,
-        _materialize_snapshot(),
+        _list_configured_catalog_sync,
         query,
         source,
         sentiment,
@@ -1105,8 +1210,7 @@ async def list_company_news_catalog(
     )
 
 
-def _get_company_news_catalog_item_sync(path: Path, external_id: str) -> dict[str, Any]:
-    _verify_file(path)
+def _get_company_news_catalog_item_sync(source: _DataSource, external_id: str) -> dict[str, Any]:
     try:
         item_id = int(external_id)
     except (TypeError, ValueError) as error:
@@ -1147,7 +1251,7 @@ def _get_company_news_catalog_item_sync(path: Path, external_id: str) -> dict[st
           AND COALESCE(i.published_at, i.fetched_at) IS NOT NULL
     """)
     try:
-        with _engine(str(path.resolve())).connect() as connection:
+        with _connect_source(source) as connection:
             _validate_schema(connection)
             row = connection.execute(query, {"external_id": item_id}).mappings().one_or_none()
     except DaReportProviderError:
@@ -1170,21 +1274,18 @@ def _get_company_news_catalog_item_sync(path: Path, external_id: str) -> dict[st
 
 async def get_company_news_catalog_item(external_id: str) -> dict[str, Any]:
     return await asyncio.to_thread(
-        _get_company_news_catalog_item_sync,
-        _materialize_snapshot(),
-        external_id,
+        lambda: _get_company_news_catalog_item_sync(_data_source(), external_id),
     )
 
 
 def _fetch_sync(
-    path: Path,
+    source: _DataSource,
     constituents: list[dict[str, Any]],
     from_date: date,
     to_date: date,
     page: int,
     limit: int,
 ) -> list[dict[str, Any]]:
-    _verify_file(path)
     aliases = _constituent_aliases(constituents)
     if not aliases:
         return []
@@ -1219,7 +1320,7 @@ def _fetch_sync(
         ORDER BY e.importance_score DESC, i.published_at DESC, i.id DESC
     """)
     try:
-        with _engine(str(path.resolve())).connect() as connection:
+        with _connect_source(source) as connection:
             _validate_schema(connection)
             rows = connection.execute(query, {
                 "report_type": "regional",
@@ -1255,7 +1356,7 @@ def _fetch_sync(
                         "summary_en": row["summary_en"],
                         "summary_zh": row["summary_zh"],
                         "source_code": row["source_code"],
-                        "fetched_at": row["fetched_at"],
+                        "fetched_at": str(row["fetched_at"]),
                         "region": row["region"],
                         "sentiment": row["sentiment"],
                         "importance_score": row["importance_score"],
@@ -1285,7 +1386,7 @@ def _fetch_configured_sync(
     page: int,
     limit: int,
 ) -> list[dict[str, Any]]:
-    return _fetch_sync(_materialize_snapshot(), constituents, from_date, to_date, page, limit)
+    return _fetch_sync(_data_source(), constituents, from_date, to_date, page, limit)
 
 
 async def fetch_news(

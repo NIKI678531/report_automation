@@ -6,13 +6,17 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-KEYS = (
-    "DATABASE_URL", "DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY",
-    "DA_REPORT_OBJECT_URL", "DA_REPORT_SQLITE_SHA256", "DATAWAREHOUSE_MYSQL_HOST",
+COMMON_KEYS = (
+    "DATABASE_URL", "DOWNLOAD_SECRET",
+    "DA_REPORT_DATABASE_URL", "DATAWAREHOUSE_MYSQL_HOST",
     "DATAWAREHOUSE_MYSQL_DATABASE", "DATAWAREHOUSE_MYSQL_USERNAME", "DATAWAREHOUSE_MYSQL_PASSWORD",
-    "FMP_API_KEY", "MARKETAUX_API_KEY", "TRANSLATION_API_KEY",
+    "FMP_API_KEY", "TRANSLATION_API_KEY",
 )
-REQUIRED = {"DATABASE_URL", "DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"}
+KEYS_BY_ENVIRONMENT = {
+    "prd": COMMON_KEYS,
+    "uat": (*COMMON_KEYS[:3], "DA_REPORT_OBJECT_URL", "DA_REPORT_SQLITE_SHA256", *COMMON_KEYS[3:]),
+}
+REQUIRED = {"DATABASE_URL", "DOWNLOAD_SECRET"}
 
 
 def build_secret(environment: str, namespace: str, env_file: Path) -> dict:
@@ -20,21 +24,24 @@ def build_secret(environment: str, namespace: str, env_file: Path) -> dict:
         raise ValueError("Environment must be uat or prd.")
     if namespace != "ih":
         raise ValueError("This deployment uses the platform namespace ih.")
+    keys = KEYS_BY_ENVIRONMENT[environment]
     values = {}
     for line in env_file.read_text(encoding="utf-8-sig").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         key, separator, value = line.partition("=")
-        if not separator or key not in KEYS or key in values:
+        if not separator or key not in keys or key in values:
             raise ValueError("Invalid, duplicate or unexpected secret key; values suppressed.")
         # Match Compose raw env_file: no interpolation, shell evaluation or quote removal.
         if value.startswith(("'", '\"')):
             raise ValueError("Use literal KEY=value without surrounding quotes.")
         values[key] = value
-    if set(values) != set(KEYS):
+    if set(values) != set(keys):
         raise ValueError("Supply every key from .env.<env>.example, including empty optional keys.")
     if any(not values[key].strip() or "replace-me" in values[key].lower() for key in REQUIRED):
         raise ValueError("Fill every required secret from the environment's secret store.")
+    if environment == "prd" and (not values["DA_REPORT_DATABASE_URL"].strip() or "replace-me" in values["DA_REPORT_DATABASE_URL"].lower()):
+        raise ValueError("Production requires its own DA_REPORT_DATABASE_URL (ADR-0030).")
     if len(values["DOWNLOAD_SECRET"]) < 32:
         raise ValueError("DOWNLOAD_SECRET must contain at least 32 generated characters.")
     base = f"ih-{environment}-remote-fund-cmt-auto"
@@ -42,7 +49,7 @@ def build_secret(environment: str, namespace: str, env_file: Path) -> dict:
         "name": f"{base}-srvapp-secret", "namespace": namespace,
         "labels": {"app": base, "component": "srvapp", "env": environment},
     }, "type": "Opaque", "data": {
-        key: base64.b64encode(values[key].encode()).decode("ascii") for key in KEYS
+        key: base64.b64encode(values[key].encode()).decode("ascii") for key in keys
     }}
 
 

@@ -28,7 +28,7 @@ def report_fixture():
         "benchmark_code": "HSTECH", "report_date": "2026-08-31", "language_mode": "EN",
         "status": "EDITING", "lane": "PRODUCTION", "revision": 1, "version": 1,
         "active_snapshot_id": None, "created_at": "2026-08-31T00:00:00Z",
-        "translation_enabled": False, "quality_results": [], "artifacts": [],
+        "translation_enabled": False, "quality_results": [],
         "latest_document": {"version": 1, "checksum": "contract", "content": {
             "month_name": "August", "product_ticker": "3033.HK", "language_mode": "EN",
             "sections": {
@@ -43,7 +43,7 @@ def report_fixture():
 
 def check_browser(browser, remote_origin="", host_origin=HOST):
     context = browser.new_context(viewport={"width": 1440, "height": 1000})
-    state = {"report": report_fixture(), "fail_save": False, "saves": []}
+    state = {"report": report_fixture(), "fail_save": False, "saves": [], "exports": 0}
     requests, errors, unexpected = [], [], []
 
     def serve(route):
@@ -72,6 +72,14 @@ def check_browser(browser, remote_origin="", host_origin=HOST):
                 data = {"version": state["report"]["latest_document"]["version"]}
             elif resource == "/reports/contract-report/preview":
                 route.fulfill(content_type="text/html", body="<h1>Contract report preview</h1>")
+                return
+            elif resource == "/reports/contract-report/exports/html/download":
+                data = {"download_url": "/api/v1/reports/contract-report/exports/html/content?version=1&expires=9999999999&signature=contract%2Bsignature"}
+            elif resource == "/reports/contract-report/exports/html/content":
+                assert url.query == "version=1&expires=9999999999&signature=contract%2Bsignature"
+                state["exports"] += 1
+                route.fulfill(content_type="text/html", body="<!doctype html><h1>Contract download</h1>",
+                              headers={"Content-Disposition": 'attachment; filename="contract.html"', "Cache-Control": "no-store"})
                 return
             else:
                 unexpected.append(f"{route.request.method} {path}")
@@ -157,6 +165,8 @@ button { color: rgb(90, 12, 34); border-radius: 0; }
     expect(preview.get_by_role("heading", name="Contract report preview")).to_be_visible()
     assert urlparse(preview.url).path == API + "/reports/contract-report/preview"
     preview.close()
+    state["report"]["status"] = "FINALIZED"
+    state["report"]["finalized_document_version"] = state["report"]["latest_document"]["version"]
     page.get_by_role("link", name="Host home", exact=True).click()
     expect(page.get_by_role("heading", name="Host home", exact=True)).to_be_visible()
     assert page.locator("[data-fund-cmt-fonts]").count() == 0
@@ -165,6 +175,16 @@ button { color: rgb(90, 12, 34); border-radius: 0; }
     page.get_by_role("link", name="Fund commentary", exact=True).click()
     expect(surface.get_by_role("heading", name="Report center", exact=True)).to_be_visible()
     assert page.locator("[data-fund-cmt-fonts]").count() == 1
+    surface.locator("button.report-record").click()
+    for _ in range(2):
+        surface.get_by_role("button", name="Downloads", exact=True).click()
+        with page.expect_download() as download_info:
+            surface.get_by_role("menuitem", name=re.compile("HTML")).click()
+        download = download_info.value
+        assert download.suggested_filename == "contract.html"
+        assert b"Contract download" in Path(download.path()).read_bytes()
+    assert state["exports"] == 2
+    assert not surface.get_by_role("alert").count()
     page.go_back()
     expect(page.get_by_role("heading", name="Host home", exact=True)).to_be_visible()
     assert not errors, errors
@@ -174,7 +194,7 @@ button { color: rgb(90, 12, 34); border-radius: 0; }
         chunks = [url for url in requests if "/remote/fund-cmt-auto/assets/" in url]
         assert chunks and all(url.startswith(remote_origin) for url in chunks), chunks
     context.close()
-    return {"remote_origin": remote_origin or "same origin", "requests": len(requests), "saves": len(state["saves"])}
+    return {"remote_origin": remote_origin or "same origin", "requests": len(requests), "saves": len(state["saves"]), "downloads": state["exports"]}
 
 
 def check_standalone(browser):

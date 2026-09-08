@@ -13,8 +13,8 @@
 默认 `TRANSLATION_PROVIDER=DISABLED`，不影响阅读、导航和既有简繁转换。真实翻译尚未在本次开发中调用或验收。
 
 1. 在目标环境按既有发布流程执行 Alembic `upgrade head`，应用 `e91c2d3f4a50` 翻译作业迁移。不要将破坏性迁移测试指向业务库。
-2. 通过公司安全配置渠道，在 API 与 worker 同时设置以下变量。模板在 [backend/.env.example](../backend/.env.example)，不得把真实密钥写进仓库或聊天。
-3. 生产环境使用 `TASK_MODE=CELERY` 和已配置的 Redis；本地 `EAGER` 模式在请求中执行同一作业逻辑。
+2. 通过公司安全配置渠道，在 API 设置以下变量。模板在 [backend/.env.example](../backend/.env.example)，不得把真实密钥写进仓库或聊天。
+3. 所有环境使用 `TASK_MODE=EAGER`，在请求内执行翻译，最多三次可重试调用，无 Redis/worker。见 [ADR-0028](adr/0028-synchronous-jobs-without-redis.md)。
 4. 用获批的非敏感样例验证网关响应、术语质量、超时与限额，再开放正式使用。
 
 | 变量 | 要求 |
@@ -29,7 +29,7 @@
 
 网关必须支持 Chat Completions、`response_format: {"type":"json_object"}` 和 `max_tokens`。
 只发送字段 ID 到文本的映射，不发送整份报告；禁止重定向，不配置公共服务回退。
-HTTP 429、服务器或连接故障最多尝试三次；队列中断后超时作业会显示失败，用户可显式重试。
+HTTP 429、服务器或连接故障最多尝试三次；请求中断后超时作业会显示失败，用户可显式重试。
 
 ## 接口与冲突
 
@@ -38,7 +38,7 @@ HTTP 429、服务器或连接故障最多尝试三次；队列中断后超时作
 客户端不允许指定网关地址、模型、提示词或任意待翻译文本。幂等键按调用者和报告对隔离，同键不同请求返回 409。
 
 `GET /api/v1/reports/{target}/translation-jobs/latest` 恢复最近任务；状态地址查询指定任务。
-作业读取检查双方产品权限，范围外返回 404。排队后源/目标版本变化、目标终稿化或归档均会阻止旧任务落地。
+作业读取检查双方产品权限，范围外返回 404。执行前源/目标版本变化、目标终稿化或归档均会阻止旧任务落地。
 文档和成功状态在同一事务提交；重复执行不会追加第二份译文。
 
 | 错误码 | 处理 |
@@ -49,7 +49,7 @@ HTTP 429、服务器或连接故障最多尝试三次；队列中断后超时作
 | `TRANSLATION_UNBOUND_NUMBER` | 原文数字没有匹配已绑定指标/所选新闻引用，先核对数据 |
 | `TRANSLATION_FACT_CHANGED` / `TRANSLATION_LANGUAGE_MISMATCH` | 模型返回不满足保真或语种检查，没有写入译文 |
 | `TRANSLATION_PROVIDER_UNAVAILABLE` / `TRANSLATION_INCOMPLETE` | 检查服务可用性、模型限制或缩短内容后重试 |
-| `TRANSLATION_EXPIRED` / `TRANSLATION_DISPATCH_FAILED` | 检查 worker/Redis，再显式重试 |
+| `TRANSLATION_EXPIRED` / `TRANSLATION_DISPATCH_FAILED` | 检查 API 重启、请求超时和翻译服务，再显式重试 |
 
 ## 开发验证
 

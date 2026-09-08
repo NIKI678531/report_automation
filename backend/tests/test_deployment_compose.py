@@ -46,7 +46,7 @@ def test_local_compose_preserves_literal_secrets_and_migration_order(tmp_path):
         assert service["environment"]["TASK_MODE"] == "EAGER"
         assert "REDIS_URL" not in service["environment"]
         assert service["environment"]["AUTH_MODE"] == "REMOTE"
-        assert service["environment"]["STORAGE_BACKEND"] == "S3"
+        assert "STORAGE_BACKEND" not in service["environment"]
         assert service["read_only"] is True
         assert not service.get("volumes")
         assert all("mode=1777" in mount for mount in service["tmpfs"])

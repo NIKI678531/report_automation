@@ -1,8 +1,10 @@
 # ADR-0026：采用公司部署规范的远程应用部署
 
+- 后续变更：成品存储、渲染任务及下载流程已由 [ADR-0029](0029-on-demand-report-downloads.md) 覆盖；当前按需生成下载，不依赖对象存储，Secret 为 11 个 key。本记录其余内容保留当时决策背景。
 - 日期：2026-09-08
 - 状态：已接受（用户明确指定）
 - 依据：用户提供的 `deploy-conventions.zip`（2026-09 版 README、RUNBOOK、CHECKLIST 及模板）。
+- 后续变更：本记录中的 Celery/Redis/worker 拓扑由 [ADR-0028](0028-synchronous-jobs-without-redis.md) 覆盖；当前采用 EAGER 同步执行。
 
 ## 决策
 

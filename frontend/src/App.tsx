@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createBrowserRouter, createMemoryRouter, RouterProvider, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, Archive, ArrowLeft, CalendarDays, ChevronDown, Download, Eye, FileCheck2, FileText, Home, LoaderCircle, Plus, Trash2 } from "lucide-react";
-import { api, type OutputFormat, type Product, type RenderJob, type Report, type ReportLanguage } from "./api";
+import { api, type OutputFormat, type Product, type Report, type ReportLanguage } from "./api";
 import { type ModuleId, ModuleNav } from "./components/ModuleNav";
 import { ReportModule } from "./components/ReportModulesV2";
 import { TranslationStatus } from "./features/review/TranslationStatus";
@@ -38,9 +38,7 @@ export function currentHongKongMonthEnd(): string {
   return reportMonthEnd(`${year ?? "1970"}-${month ?? "01"}`);
 }
 
-function isTerminal(job: RenderJob): boolean {
-  return ["SUCCEEDED", "FAILED", "CANCELED"].includes(job.status);
-}
+
 
 function languageLabel(language: ReportLanguage, t: ReturnType<typeof useLocale>["t"]): string {
   if (language === "ZH_HANS") return t("simplifiedChinese");
@@ -421,15 +419,7 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
     [reports, reportDate, languageMode, selected?.status],
   );
   const product = products.find((item) => item.product_code === PRODUCT_CODE);
-  const artifacts = selected?.artifacts ?? [];
-  const artifactsByFormat = useMemo(() => {
-    const byFormat = new Map<OutputFormat, (typeof artifacts)[number]>();
-    for (const artifact of artifacts) {
-      const downloadable = selected?.status === "ARCHIVED" || artifact.is_current !== false;
-      if (downloadable && !byFormat.has(artifact.format)) byFormat.set(artifact.format, artifact);
-    }
-    return byFormat;
-  }, [artifacts, selected?.status]);
+
 
   async function changeMonth(value: string) {
     if (!value) return;
@@ -631,24 +621,7 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
     setBusy(true);
     setError("");
     try {
-      const existing = artifactsByFormat.get(format);
-      if (existing) {
-        await api.downloadArtifact(existing.id);
-        return;
-      }
-      if (selected.status === "ARCHIVED") return;
-      const jobs = await api.render(reportId, [format]);
-      let job = jobs.find((item) => item.format === format);
-      if (!job) throw new Error(`The ${format.toUpperCase()} render job was not created.`);
-      while (!isTerminal(job)) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        job = await api.getJob(job.id);
-      }
-      if (job.status !== "SUCCEEDED" || !job.artifact_id) {
-        throw new Error(job.error?.message ?? `The ${format.toUpperCase()} download could not be generated.`);
-      }
-      await api.downloadArtifact(job.artifact_id);
-      await refreshReport(reportId);
+      await api.downloadReport(reportId, format);
     } catch (caught) {
       setError(String(caught));
     } finally {
@@ -667,8 +640,7 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
 
   const archived = selected.status === "ARCHIVED";
   const finalized = selected.status === "FINALIZED";
-  const canDownload = Boolean(selected.finalized_document_version) && (!archived || artifactsByFormat.size > 0);
-  const visibleOutputFormats = archived ? OUTPUT_FORMATS.filter(({ value }) => artifactsByFormat.has(value)) : OUTPUT_FORMATS;
+  const canDownload = Boolean(selected.finalized_document_version) && (finalized || archived);
 
   return <div className="shell">
     <AppHeader busy={busy} onLanguageChange={(next) => void changeLanguage(next)} />
@@ -701,9 +673,9 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
                 onClick={() => setDownloadsOpen((open) => !open)}
               ><Download size={17} /> {t("downloads")} <ChevronDown size={15} /></button>
               {downloadsOpen && canDownload && <div className="download-menu popover" role="menu" aria-label={t("downloadReport")}>
-                {visibleOutputFormats.map(({ value, label }) => <button key={value} role="menuitem" onClick={() => void downloadOutput(value)}>
+                {OUTPUT_FORMATS.map(({ value, label }) => <button key={value} role="menuitem" onClick={() => void downloadOutput(value)}>
                   <Download size={16} />
-                  <span><strong>{label}</strong><small>{artifactsByFormat.has(value) ? t("readyDownload") : t("generateDownload")}</small></span>
+                  <span><strong>{label}</strong><small>{t("generateDownload")}</small></span>
                 </button>)}
               </div>}
             </div>
@@ -719,7 +691,7 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
           </div>
           <div><span>{t("snapshot")}</span><strong>{selected.active_snapshot_id ? t("bound") : t("missing")}</strong></div>
           <div><span>{t("quality")}</span><strong>{selected.quality_results?.filter((item) => item.status === "PASSED").length ?? 0}/{selected.quality_results?.length ?? 0}</strong></div>
-          <div><span>{t("artifacts")}</span><strong>{artifactsByFormat.size}</strong></div>
+          <div><span>{t("exportFormats")}</span><strong>{canDownload ? OUTPUT_FORMATS.length : 0}</strong></div>
         </section>
 
         {downloadingFormat && <div className="download-progress" role="status">{t("preparing", { format: OUTPUT_FORMATS.find((item) => item.value === downloadingFormat)?.label ?? downloadingFormat })}</div>}

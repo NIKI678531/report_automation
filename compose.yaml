@@ -33,7 +33,6 @@ services:
       format: raw
     environment:
       AUTH_MODE: REMOTE
-      STORAGE_BACKEND: S3
       TASK_MODE: EAGER
       ALLOW_TESTING_LANE: 'false'
       DB_ECHO: 'false'
@@ -50,7 +49,6 @@ services:
     - no-new-privileges:true
     tmpfs:
     - /tmp:size=1073741824,mode=1777
-    - /app/var/output:size=1073741824,mode=1777
     mem_limit: 2g
     cpus: 1
     logging:
@@ -81,7 +79,6 @@ services:
       format: raw
     environment:
       AUTH_MODE: REMOTE
-      STORAGE_BACKEND: S3
       TASK_MODE: EAGER
       ALLOW_TESTING_LANE: 'false'
       DB_ECHO: 'false'
@@ -98,7 +95,6 @@ services:
     - no-new-privileges:true
     tmpfs:
     - /tmp:size=1073741824,mode=1777
-    - /app/var/output:size=1073741824,mode=1777
     mem_limit: 2g
     cpus: 1
     logging:
@@ -130,7 +126,6 @@ services:
     - 127.0.0.1:3030:3030
     depends_on:
       srvapp:
-    stop_grace_period: 240s
         condition: service_healthy
     mem_limit: 256m
     cpus: 0.3

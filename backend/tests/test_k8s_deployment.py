@@ -38,7 +38,7 @@ def test_environment_resources_have_consistent_references(environment):
         assert doc["kind"] not in {"PersistentVolumeClaim", "PersistentVolume", "Namespace"}
         if doc["kind"] == "ConfigMap":
             assert all(isinstance(value, str) for value in doc["data"].values())
-            assert not {"DATABASE_URL", "REDIS_URL", "DOWNLOAD_SECRET", "S3_SECRET_ACCESS_KEY", "FMP_API_KEY", "DA_REPORT_OBJECT_URL"} & doc["data"].keys()
+            assert not {"DATABASE_URL", "DA_REPORT_DATABASE_URL", "REDIS_URL", "DOWNLOAD_SECRET", "S3_SECRET_ACCESS_KEY", "FMP_API_KEY", "DA_REPORT_OBJECT_URL"} & doc["data"].keys()
     for deployment in deployments:
         selector = deployment["spec"]["selector"]["matchLabels"]
         assert selector.items() <= deployment["spec"]["template"]["metadata"]["labels"].items()
@@ -56,9 +56,9 @@ def test_environment_resources_have_consistent_references(environment):
                     assert source["secretRef"]["name"] == f"{base}-srvapp-secret"
     backend = names[f"{base}-srvapp-config"]["data"]
     web = names[f"{base}-webapp-config"]["data"]
-    assert (backend["AUTH_MODE"], backend["STORAGE_BACKEND"], backend["ALLOW_TESTING_LANE"]) == ("REMOTE", "S3", "false")
+    assert (backend["AUTH_MODE"], backend["ALLOW_TESTING_LANE"]) == ("REMOTE", "false")
     assert backend["TASK_MODE"] == "EAGER"
-    assert backend["S3_PREFIX"].endswith(f"/{environment}")
+    assert not any(key.startswith("S3_") or key == "STORAGE_BACKEND" for key in backend)
     assert web["API_UPSTREAM"] == f"{base}-srvapp:8000"
     assert not any(key.startswith("ENTRA_") for key in backend)
 
@@ -124,7 +124,17 @@ def test_uat_and_prd_are_structurally_identical_without_corrupting_view_names():
         source = path.read_text(encoding="utf-8").replace(ACCOUNTS["uat"], ACCOUNTS["prd"]).replace("UAT", "PRD")
         normalized = re.sub(r"(?<![a-z])uat(?![a-z])", "prd", source)
         target = ROOT / "k8s" / "prd" / path.relative_to(ROOT / "k8s" / "uat")
-        assert list(yaml.safe_load_all(normalized)) == list(yaml.safe_load_all(target.read_text(encoding="utf-8")))
+        expected = list(yaml.safe_load_all(normalized))
+        actual = list(yaml.safe_load_all(target.read_text(encoding="utf-8")))
+        if path.name == "configmap.yaml":
+            assert expected[0]["data"].pop("DA_REPORT_CACHE_DIR") == "/tmp/commentary-da"
+            assert "DA_REPORT_CACHE_DIR" not in actual[0]["data"]
+            # Only Production has been authorized to read the DA-Report RDS (ADR-0030).
+            for key, value in {"DA_REPORT_MYSQL_SSL_CA": "/app/backend/app/integrations/certs/aws-rds-ap-east-1.pem",
+                               "DA_REPORT_MYSQL_SSL_VERIFY_IDENTITY": "true", "DA_REPORT_TIMEOUT_SECONDS": "10"}.items():
+                assert key not in expected[0]["data"]
+                assert actual[0]["data"].pop(key) == value
+        assert expected == actual
 
 
 @pytest.mark.parametrize("environment", ACCOUNTS)

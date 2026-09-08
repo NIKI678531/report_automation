@@ -1,3 +1,4 @@
+from conftest import download_report, export_records
 """The TESTING lane.
 
 ``source_policy`` says where a snapshot's data came from; ``lane`` says whether it may be
@@ -126,43 +127,30 @@ def finalized_testing_report(client):
 def test_every_rendered_format_carries_the_testing_mark(client, finalized_testing_report):
     report = finalized_testing_report
 
-    rendered = client.post(
-        f"/api/v1/reports/{report['id']}/renders",
-        json={"formats": ["html", "pdf", "docx"]},
-        headers={"Idempotency-Key": "lane-render"},
-    )
+    downloads = {format_name: download_report(client, report['id'], format_name) for format_name in ["html", "pdf", "docx"]}
 
-    assert rendered.status_code == 202, rendered.text
-    jobs = rendered.json()
-    assert [job["status"] for job in jobs] == ["SUCCEEDED"] * 3
-    for job in jobs:
-        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
-        download = client.get(signed["download_url"])
+    for format_name, download in downloads.items():
         assert download.status_code == 200
         # The name is what survives the file leaving the tool, so the lane has to be in it.
-        assert f'filename="TESTING-3033_2026-06-30_EN_v3.{job["format"]}"' in download.headers["content-disposition"]
-        if job["format"] == "html":
+        assert f'filename="TESTING-3033_2026-06-30_EN_v3.{format_name}"' in download.headers["content-disposition"]
+        if format_name == "html":
             html = download.text
             assert html.count('class="testing-mark"') == 4
             assert html.count("TESTING DATA - NOT FOR DISTRIBUTION") == 4
-        if job["format"] == "pdf":
+        if format_name == "pdf":
             pdf = pdfium.PdfDocument(download.content)
             assert len(pdf) == 4
             for index in range(4):
                 assert "TESTING" in pdf[index].get_textpage().get_text_bounded()
 
 
-def test_the_manifest_records_the_lane(client, finalized_testing_report):
+def test_the_export_audit_records_the_lane(client, finalized_testing_report):
     report = finalized_testing_report
-    client.post(
-        f"/api/v1/reports/{report['id']}/renders",
-        json={"formats": ["pdf"]},
-        headers={"Idempotency-Key": "lane-manifest"},
-    )
+    download_report(client, report["id"], "pdf")
 
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
 
-    assert detail["artifacts"]
+    assert export_records(client, report["id"])[0]["lane"] == "TESTING"
     assert detail["latest_document"]["content"]["lane"] == "TESTING"
 
 

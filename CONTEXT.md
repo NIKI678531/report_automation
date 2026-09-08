@@ -15,7 +15,7 @@ _Avoid_: ETF, instrument, security
 
 **Report**:
 One month's commentary for one product in one language and revision. Every snapshot, document,
-metric and artifact hangs off exactly one report.
+metric and export audit hangs off exactly one report.
 _Avoid_: Commentary, monthly note, deliverable
 
 **Language variant**:
@@ -177,8 +177,8 @@ declares which snapshot it is quoting.
 _Avoid_: Sync, refresh, merge
 
 **Content manifest**:
-The per-section checksums plus lane and module order stored on every artifact, so what was
-rendered can be proved after the fact.
+Per-section checksums and module order stored in each export audit; lane is separate audit metadata.
+They identify the rendered content without retaining file bytes.
 _Avoid_: Metadata, fingerprint
 
 **Finalize**:
@@ -191,10 +191,11 @@ The Jinja-rendered HTML that is the single source PDF and DOCX are derived from.
 second layout path.
 _Avoid_: Template output, preview HTML
 
-**Render artifact**:
-A delivered file (html, pdf or docx) with its checksum, `template_version`, `renderer_version` and
-content manifest.
-_Avoid_: Output, export, file, download
+**On-demand export**:
+An HTML/PDF/DOCX file generated from a fixed finalized document for each download. Bytes exist only
+in request scratch space and the response; audit metadata retains version, checksum and renderer
+identity. Historical RenderArtifact rows are retained but no new ones are created (ADR-0029).
+_Avoid_: Saved artifact, cached file
 
 **Design token version**:
 The report output's visual contract, `backend/app/rendering/tokens/3033-v*.json`. Separate from
@@ -238,7 +239,7 @@ navigation, CSS and locale scoped. Registration and integration limits are in `k
 
 **Principal**:
 The caller of one request, reduced to what authorization needs: `subject`, `role`, `product_scope`.
-`SYSTEM_PRINCIPAL` stands in for work no request initiated — a Celery task, a CLI import.
+`SYSTEM_PRINCIPAL` stands in for work no request initiated — a CLI import or a migration.
 _Avoid_: User, account, identity, session
 
 **Auth mode**:
@@ -259,23 +260,15 @@ confirm it exists.
 _Avoid_: Tenant, permission, fund access
 
 **Signed download**:
-An artifact URL carrying an HMAC-SHA256 signature over the artifact, the requesting subject and an
-expiry. It authorizes one person to fetch one file until a deadline; it is not a link to forward.
-_Avoid_: Presigned URL, share link, token
+An HMAC-SHA256 grant bound to report, finalized version, format, requesting subject and expiry.
+Each valid content request checks access and generates a fresh file; no file is stored for the link.
+_Avoid_: Share link, stored object URL
 
-**Object storage**:
-Where a render artifact's bytes actually live, reached through one port with two backends:
-`LOCAL` writes under `var/output` for workstations, `S3` addresses any S3-compatible bucket
-(Volcengine TOS, MinIO, AWS S3). The deployment has no persistent volume, so container-local disk
-is not storage — an artifact written there is gone at the next restart and was never visible to
-the other replicas. Distinct from a signed download, which protects the link rather than the store.
-_Avoid_: Filesystem, disk, volume, bucket
-
-**Storage key**:
-The path recorded on an artifact and used to address its object. It is untrusted input on the way
-back in, and S3 has no filesystem to resolve `..` against — a traversal key simply names a
-different object — so a key is validated segment by segment rather than normalized into a valid one.
-_Avoid_: Path, filename, location
+**Export scratch space**:
+A separate temporary directory per request, cleared after generation failure or response completion,
+including failed sends. Abrupt process termination relies on ephemeral container/Pod cleanup.
+There is no persistent output directory or object-storage dependency for exports (ADR-0029).
+_Avoid_: Artifact archive, persistent volume
 
 **Error envelope**:
 The single shape every failed request returns — `error_code`, `message`, `severity`, `fix_hint`,
@@ -285,7 +278,6 @@ _Avoid_: Error response, detail, exception payload
 
 **Deployment guard**:
 The startup check (`Settings.deployment_problems()`) that lists every reason a configuration must
-not serve traffic — a default signing secret, an unpinned token issuer, the fixture lane, SQLite,
-artifacts still configured to land on container-local disk. A non-empty list refuses the boot;
+not serve traffic — a default signing secret, an unpinned token issuer, the fixture lane or SQLite. A non-empty list refuses the boot;
 discovering these at first use means they were already used.
 _Avoid_: Validation, health check, preflight

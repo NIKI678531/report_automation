@@ -25,12 +25,9 @@ jobs:
         with: { python-version: "3.12" }
       - uses: actions/setup-node@v4
         with: { node-version: "24", cache: "npm" }
-      # `entra` is installed as well as `dev` so the extra a deployment depends on is resolved here
-      # rather than discovered to be unresolvable at deploy time.
-      # Every extra the production image carries, so a broken pin is caught here rather than in a
-      # deployment that sets AUTH_MODE=ENTRA or STORAGE_BACKEND=S3 for the first time.
+      # Resolve every production extra, including optional Entra support, during CI.
       - run: pip install -r backend/requirements.lock
-      - run: pip install -c backend/requirements.lock -e './backend[dev,render,entra,storage]'
+      - run: pip install -c backend/requirements.lock -e './backend[dev,render,entra]'
       - run: python -m playwright install --with-deps chromium
       # The same three font packages backend/Dockerfile installs. The visual check renders a real
       # PDF and compares it with the approved report, so a runner without them is not measuring
@@ -38,11 +35,15 @@ jobs:
       # in for Calibri (metric-compatible); the Noto CJK pair is what the Chinese variants embed.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-noto-cjk fonts-noto-cjk-extra
       - run: fc-list | grep -Ei 'carlito|notosanscjk' | sort
+      # Public CA of this disposable service; the DA contract suite only accepts localhost/da_contract.
+      - run: docker exec ${{ job.services.mysql.id }} cat /var/lib/mysql/ca.pem > /tmp/da-test-ca.pem
       - run: python -m pytest backend/tests -q
         env:
           # Points at the service container above, which holds nothing but these migrations - the
           # test downgrades to base before it starts.
           TEST_MYSQL_URL: mysql+pymysql://root:ci-only-not-a-secret@127.0.0.1:3306/commentary_migrations?charset=utf8mb4
+          TEST_DA_REPORT_MYSQL_URL: mysql+pymysql://root:ci-only-not-a-secret@127.0.0.1:3306/da_contract
+          TEST_DA_REPORT_MYSQL_CA: /tmp/da-test-ca.pem
       - run: npm ci
       - run: npm test
       - run: npm run build
