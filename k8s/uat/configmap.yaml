@@ -38,7 +38,6 @@ data:
   DATAWAREHOUSE_INDEX_RETURNS_VIEW: view_ads_busi_performance_index_returns_f_p
   DATAWAREHOUSE_CONSTITUENTS_VIEW: view_ads_busi_market_index_constituent_price_daily_f_p
   DATAWAREHOUSE_FUND_AUM_VIEW: view_ads_busi_valuation_nav_fund_level_exposure_1_f_p
-  DATAWAREHOUSE_FUND_KPI_VIEW: ''
   DATAWAREHOUSE_CACHE_DIR: /tmp/commentary-datawarehouse
   FMP_CONSTITUENT_RETURNS_ENABLED: 'true'
   FMP_BASE_URL: https://financialmodelingprep.com/stable

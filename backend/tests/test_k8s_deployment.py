@@ -129,6 +129,12 @@ def test_uat_and_prd_are_structurally_identical_without_corrupting_view_names():
         if path.name == "configmap.yaml":
             assert expected[0]["data"].pop("DA_REPORT_CACHE_DIR") == "/tmp/commentary-da"
             assert "DA_REPORT_CACHE_DIR" not in actual[0]["data"]
+            assert expected[0]["data"].pop("DATAWAREHOUSE_MYSQL_SSL_CA") == "/etc/ssl/certs/ca-certificates.crt"
+            assert actual[0]["data"].pop("DATAWAREHOUSE_MYSQL_SSL_CA") == "/app/backend/app/integrations/certs/aws-rds-ap-east-1.pem"
+            # Translation endpoints and model names are environment-specific configuration.
+            for key in ("TRANSLATION_BASE_URL", "TRANSLATION_MODEL"):
+                assert isinstance(expected[0]["data"].pop(key), str)
+                assert isinstance(actual[0]["data"].pop(key), str)
             # Only Production has been authorized to read the DA-Report RDS (ADR-0030).
             for key, value in {"DA_REPORT_MYSQL_SSL_CA": "/app/backend/app/integrations/certs/aws-rds-ap-east-1.pem",
                                "DA_REPORT_MYSQL_SSL_VERIFY_IDENTITY": "true", "DA_REPORT_TIMEOUT_SECONDS": "10"}.items():

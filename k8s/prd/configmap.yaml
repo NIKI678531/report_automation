@@ -34,14 +34,13 @@ data:
   DATAWAREHOUSE_PERFORMANCE_ENABLED: 'true'
   DATAWAREHOUSE_CONSTITUENTS_ENABLED: 'true'
   DATAWAREHOUSE_MYSQL_PORT: '3306'
-  DATAWAREHOUSE_MYSQL_SSL_CA: /etc/ssl/certs/ca-certificates.crt
+  DATAWAREHOUSE_MYSQL_SSL_CA: /app/backend/app/integrations/certs/aws-rds-ap-east-1.pem
   DATAWAREHOUSE_MYSQL_SSL_VERIFY_IDENTITY: 'true'
   DATAWAREHOUSE_CLASS_MASTER_VIEW: view_ads_busi_product_fundinfo_class_f_p
   DATAWAREHOUSE_FUND_RETURNS_VIEW: view_ads_busi_performance_class_returns_f_p
   DATAWAREHOUSE_INDEX_RETURNS_VIEW: view_ads_busi_performance_index_returns_f_p
   DATAWAREHOUSE_CONSTITUENTS_VIEW: view_ads_busi_market_index_constituent_price_daily_f_p
   DATAWAREHOUSE_FUND_AUM_VIEW: view_ads_busi_valuation_nav_fund_level_exposure_1_f_p
-  DATAWAREHOUSE_FUND_KPI_VIEW: ''
   DATAWAREHOUSE_CACHE_DIR: /tmp/commentary-datawarehouse
   FMP_CONSTITUENT_RETURNS_ENABLED: 'true'
   FMP_BASE_URL: https://financialmodelingprep.com/stable
@@ -49,8 +48,8 @@ data:
   FMP_BOUNDARY_LOOKBACK_DAYS: '14'
   LOG_LEVEL: INFO
   TRANSLATION_PROVIDER: DISABLED
-  TRANSLATION_BASE_URL: ''
-  TRANSLATION_MODEL: ''
+  TRANSLATION_BASE_URL: 'https://sgp-csop-openai-prd-01.openai.azure.com/'
+  TRANSLATION_MODEL: 'gpt-5.6-terra'
   TRANSLATION_TIMEOUT_SECONDS: '45'
   TRANSLATION_MAX_CHARACTERS: '30000'
   TRANSLATION_MAX_TOKENS: '16000'

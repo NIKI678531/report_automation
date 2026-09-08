@@ -48,6 +48,8 @@ webapp 为单副本 RollingUpdate，不配置会阻止节点排空的 PDB。
 ## 1. 配置与预检
 
 按业务需要检查 `k8s/<env>/configmap.yaml` 的数据来源与翻译配置；无需配置成品存储桶。
+UAT / Production 模板已移除未启用的统一基金 KPI 视图字段；当前 AUM 使用 CDB 基金估值视图，日均成交额使用 DA-Report 的月度成交额和交易日数（ADR-0019）。
+数仓 TLS 配置保留；Production 使用镜像内 `/app/backend/app/integrations/certs/aws-rds-ap-east-1.pem` 验证 RDS 证书，并保持主机名校验开启。
 MySQL、签名密钥和供应商凭据放 `.env.<env>`；不复用 UAT 和 PRD 的机密。
 
 ```bash
