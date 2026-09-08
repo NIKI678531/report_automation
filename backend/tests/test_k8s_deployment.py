@@ -24,9 +24,9 @@ def resources(environment):
 
 @pytest.mark.parametrize("environment", ACCOUNTS)
 def test_environment_resources_have_consistent_references(environment):
-    documents = resources(environment)
+    documents = [doc for doc in resources(environment) if doc["kind"] != "Namespace"]
     identities = {(doc["kind"], doc["metadata"]["name"]) for doc in documents}
-    assert len(identities) == len(documents) == 7
+    assert len(identities) == len(documents) == 6
     names = {doc["metadata"]["name"]: doc for doc in documents if doc["kind"] == "ConfigMap"}
     deployments = [doc for doc in documents if doc["kind"] == "Deployment"]
     assert len(deployments) == 2
@@ -56,10 +56,11 @@ def test_environment_resources_have_consistent_references(environment):
                     assert source["secretRef"]["name"] == f"{base}-srvapp-secret"
     backend = names[f"{base}-srvapp-config"]["data"]
     web = names[f"{base}-webapp-config"]["data"]
-    assert (backend["AUTH_MODE"], backend["STORAGE_BACKEND"], backend["ALLOW_TESTING_LANE"]) == ("ENTRA", "S3", "false")
+    assert (backend["AUTH_MODE"], backend["STORAGE_BACKEND"], backend["ALLOW_TESTING_LANE"]) == ("REMOTE", "S3", "false")
+    assert backend["TASK_MODE"] == "EAGER"
     assert backend["S3_PREFIX"].endswith(f"/{environment}")
     assert web["API_UPSTREAM"] == f"{base}-srvapp:8000"
-    assert web["NGINX_ENVSUBST_FILTER"] == "^(API_UPSTREAM|SERVER_NAME)$"
+    assert not any(key.startswith("ENTRA_") for key in backend)
 
 
 @pytest.mark.parametrize("environment", ACCOUNTS)
@@ -85,7 +86,7 @@ def test_two_deployments_have_hardened_pods_with_only_ephemeral_storage(environm
             assert container["imagePullPolicy"] == "Always"
             image_prefix = f"{ACCOUNTS[environment]}.dkr.ecr.ap-east-1.amazonaws.com/ih-{environment}-remote-fund-cmt-auto-"
             assert container["image"].startswith(image_prefix)
-            assert not container["image"].endswith(":latest")
+            assert container["image"].endswith(":latest")
             assert not container.get("command"), "Kubernetes must preserve the image's tini and startup guard."
             assert all(mount["name"] in volume_names for mount in container["volumeMounts"])
             assert {"cpu", "memory"} <= container["resources"]["requests"].keys()
@@ -94,31 +95,27 @@ def test_two_deployments_have_hardened_pods_with_only_ephemeral_storage(environm
             assert {"startupProbe", "readinessProbe", "livenessProbe"} <= container.keys()
         if is_backend:
             assert spec["strategy"]["type"] == "Recreate"
-            assert [container["name"] for container in pod["containers"]] == ["srvapp", "worker"]
+            assert [container["name"] for container in pod["containers"]] == ["srvapp"]
             migrate, = pod["initContainers"]
-            api, worker = pod["containers"]
+            api, = pod["containers"]
             assert migrate["args"] == ["python", "-m", "alembic", "upgrade", "head"]
-            assert migrate["image"] == api["image"] == worker["image"]
-            assert migrate["envFrom"] == api["envFrom"] == worker["envFrom"]
+            assert migrate["image"] == api["image"]
+            assert migrate["envFrom"] == api["envFrom"]
             assert api["readinessProbe"]["httpGet"]["path"] == "/api/v1/health"
-            assert "--pidfile=/tmp/celery.pid" in worker["args"]
-            assert "kill -0" in worker["readinessProbe"]["exec"]["command"][-1]
+            assert pod["terminationGracePeriodSeconds"] >= 240
         else:
             assert pod["containers"][0]["readinessProbe"]["httpGet"]["path"] == "/healthz"
+            assert pod["containers"][0]["ports"] == [{"name": "http", "containerPort": 3030}]
+            service = next(item for item in resources(environment) if item["kind"] == "Service" and item["metadata"]["name"] == doc["metadata"]["name"])
+            assert service["spec"]["ports"] == [{"name": "http", "port": 3030, "targetPort": "http"}]
 
 
 @pytest.mark.parametrize("environment", ACCOUNTS)
-def test_ingress_and_secret_template_are_not_in_ordinary_apply_directory(environment):
-    root = ROOT / "k8s" / environment
-    ordinary = [doc for path in root.glob("*.yaml") for doc in yaml.safe_load_all(path.read_text(encoding="utf-8"))]
-    assert all(doc["kind"] not in {"Ingress", "Secret"} for doc in ordinary)
-    ingress = yaml.safe_load((root / "ingress" / "ingress.yaml").read_text(encoding="utf-8"))
-    assert ingress["metadata"]["annotations"]["alb.ingress.kubernetes.io/scheme"] == "internal"
-    assert f":{ACCOUNTS[environment]}:" in ingress["metadata"]["annotations"]["alb.ingress.kubernetes.io/certificate-arn"]
-    rule, = ingress["spec"]["rules"]
-    assert rule["host"]
-    assert rule["http"]["paths"][0]["backend"]["service"]["name"] == f"ih-{environment}-remote-fund-cmt-auto-webapp"
-    template = yaml.safe_load((root / "secret.example.yaml.txt").read_text(encoding="utf-8"))
+def test_remote_application_has_no_ingress_or_live_secret_in_apply_directory(environment):
+    documents = resources(environment)
+    assert all(doc["kind"] not in {"Ingress", "Secret", "PersistentVolumeClaim"} for doc in documents)
+    assert next(doc for doc in documents if doc["kind"] == "Namespace")["metadata"]["name"] == "ih"
+    template = yaml.safe_load((ROOT / "k8s" / environment / "secret.example.yaml.txt").read_text(encoding="utf-8"))
     assert all(value == "" for value in template["stringData"].values())
 
 
@@ -132,7 +129,7 @@ def test_uat_and_prd_are_structurally_identical_without_corrupting_view_names():
 
 @pytest.mark.parametrize("environment", ACCOUNTS)
 def test_build_contexts_resolve_to_existing_shared_images(environment):
-    path = ROOT / "deploy" / environment / "compose.build.yaml"
+    path = ROOT / f"docker-compose.{environment}.yml"
     services = yaml.safe_load(path.read_text(encoding="utf-8"))["services"]
     assert set(services) == {"srvapp", "webapp"}
     for name, service in services.items():

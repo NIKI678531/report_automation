@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createBrowserRouter, RouterProvider, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { createBrowserRouter, createMemoryRouter, RouterProvider, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, Archive, ArrowLeft, CalendarDays, ChevronDown, Download, Eye, FileCheck2, FileText, Home, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { api, type OutputFormat, type Product, type RenderJob, type Report, type ReportLanguage } from "./api";
 import { type ModuleId, ModuleNav } from "./components/ModuleNav";
@@ -8,7 +8,7 @@ import { TranslationStatus } from "./features/review/TranslationStatus";
 import type { PendingSave, RegisterPendingSave } from "./pendingSave";
 import { FOOTNOTE_SECTIONS, isReportReadOnly, reportsForContext, reviewHasContent, selectReportForMonth } from "./reportModules";
 import { LocaleProvider, reportLocale, useLocale, type Locale } from "./i18n";
-import "./styles.css";
+import { apiUrl } from "./remoteConfig";
 
 const PRODUCT_CODE = "3033";
 const OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string }> = [
@@ -597,7 +597,7 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
     try {
       const current = await flushPendingEdits(selected);
       if (!current) throw new Error(t("unavailable"));
-      preview.location.replace(`/api/v1/reports/${current.id}/preview`);
+      preview.location.replace(apiUrl(`/reports/${current.id}/preview`));
     } catch (caught) {
       preview.close();
       setError(String(caught));
@@ -726,7 +726,7 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
 
         <TranslationStatus report={selected} automaticSource={automaticSource.current} onConsumed={consumeTranslation} onBusyChange={setTranslationBusy} prepare={flushPendingEdits} apply={applyTranslation} />
 
-        <div className="workbench" inert={translationBusy}><ModuleNav active={activeModule} onSelect={(moduleId) => void changeModule(moduleId)} states={moduleStates} /><section className="module-stage"><ReportModule report={selected} active={activeModule} busy={busy} run={run} registerPendingSave={registerPendingSave} /></section></div>
+        <div className="workbench" ref={(element) => { if (element) element.inert = translationBusy; }}><ModuleNav active={activeModule} onSelect={(moduleId) => void changeModule(moduleId)} states={moduleStates} /><section className="module-stage"><ReportModule report={selected} active={activeModule} busy={busy} run={run} registerPendingSave={registerPendingSave} /></section></div>
       </>
     </main>
   </div>;
@@ -749,14 +749,22 @@ function getModuleStates(report: Report): Partial<Record<ModuleId, "ready" | "at
   };
 }
 
-function App() {
-  const router = useMemo(() => createBrowserRouter([
-    { path: "/", element: <ReportsHome /> },
-    { path: "/reports/new", element: <NewReportPage /> },
-    { path: "/reports/:reportId", element: <ReportWorkspace /> },
-    { path: "*", element: <ReportsHome /> },
-  ]), []);
-  return <RouterProvider router={router} />;
+function App({ embedded = false, basename = "/" }: { embedded?: boolean; basename?: string }) {
+  const [router, setRouter] = useState<ReturnType<typeof createMemoryRouter> | null>(null);
+  useEffect(() => {
+    const routes = [
+      { path: "/", element: <ReportsHome /> },
+      { path: "/reports/new", element: <NewReportPage /> },
+      { path: "/reports/:reportId", element: <ReportWorkspace /> },
+      { path: "*", element: <ReportsHome /> },
+    ];
+    // Host owns browser history. Keep the v7 data router private: useBlocker still
+    // flushes pending edits before internal navigation, without touching host v6.
+    const next = embedded ? createMemoryRouter(routes) : createBrowserRouter(routes, { basename });
+    setRouter(next);
+    return () => next.dispose();
+  }, [embedded, basename]);
+  return router ? <RouterProvider router={router} /> : null;
 }
 
 export default App;

@@ -13,7 +13,9 @@ if config.config_file_name is not None:
 # even when the app was pointed at MySQL. Fall back to the runtime setting so both always agree, but
 # leave a URL a caller injected programmatically (test_migrations.py does) untouched.
 if not config.get_main_option("sqlalchemy.url", ""):
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    # URL-encoded passwords contain percent signs; Alembic's ConfigParser interprets those
+    # unless escaped here, before SQLAlchemy gets the original URL back.
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 

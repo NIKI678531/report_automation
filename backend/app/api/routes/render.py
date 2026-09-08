@@ -92,9 +92,7 @@ def render_outputs(
         except Exception as error:
             job.status, job.stage = JobStatus.FAILED, "failed"
             job.error = {"error_code": "RENDER_FAILED", "message": str(error), "retryable": True}
-        # A CELERY dispatch returns with the job still QUEUED: the worker has it and has not
-        # finished. Recording that as "render.failed" put a false failure in the regulated audit
-        # trail on every asynchronous render.
+        # Audit the persisted state; a queued job must never be recorded as a failure.
         service.audit(db, _dispatch_action(job.status), "render_job", job.id, x_request_id, {"format": format_name})
         db.commit(); db.refresh(job)
         jobs.append(job)

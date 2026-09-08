@@ -777,12 +777,15 @@ const fallback: LocaleContextValue = {
 };
 
 const LocaleContext = createContext<LocaleContextValue>(fallback);
+const DocumentLanguageContext = createContext(true);
 
 export function reportLocale(language: ReportLanguage | "BILINGUAL"): Locale {
   return language === "ZH_HANS" ? "zh-Hans" : language === "ZH_HANT" ? "zh-Hant" : "en";
 }
 
-export function LocaleProvider({ children, locale: controlledLocale }: { children: ReactNode; locale?: Locale }) {
+export function LocaleProvider({ children, locale: controlledLocale, manageDocumentLanguage }: { children: ReactNode; locale?: Locale; manageDocumentLanguage?: boolean }) {
+  const inheritedDocumentLanguage = useContext(DocumentLanguageContext);
+  const updateDocumentLanguage = manageDocumentLanguage ?? inheritedDocumentLanguage;
   const [preferredLocale, setLocaleState] = useState<Locale>(() => (
     (["en", "zh-Hans", "zh-Hant"] as const).includes(
       window.localStorage.getItem("commentary.locale") as Locale,
@@ -795,7 +798,6 @@ export function LocaleProvider({ children, locale: controlledLocale }: { childre
     setLocale: (next) => {
       if (controlledLocale !== undefined) return;
       window.localStorage.setItem("commentary.locale", next);
-      document.documentElement.lang = next === "zh-Hans" ? "zh-CN" : next === "zh-Hant" ? "zh-HK" : "en";
       setLocaleState(next);
     },
     t: (key, params) => interpolate(messages[locale][key], params),
@@ -818,11 +820,12 @@ export function LocaleProvider({ children, locale: controlledLocale }: { childre
     })[status] ?? status),
   }), [locale, controlledLocale]);
   useEffect(() => {
+    if (!updateDocumentLanguage) return;
     const previous = document.documentElement.lang;
     document.documentElement.lang = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en";
     return () => { document.documentElement.lang = previous; };
-  }, [locale]);
-  return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
+  }, [locale, updateDocumentLanguage]);
+  return <DocumentLanguageContext.Provider value={updateDocumentLanguage}><LocaleContext.Provider value={value}><div lang={locale} style={{ display: "contents" }}>{children}</div></LocaleContext.Provider></DocumentLanguageContext.Provider>;
 }
 
 export function useLocale() {

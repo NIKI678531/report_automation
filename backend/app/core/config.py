@@ -19,7 +19,7 @@ DEFAULT_DOWNLOAD_SECRET = "local-development-secret-change-me"
 SUPPORTED_STORAGE_BACKENDS = ("LOCAL", "S3")
 # The one auth mode that trusts request headers. Everything that is only safe on a developer
 # workstation - home-directory probing, header-supplied identity, the public default signing key -
-# is gated on this single value so there is exactly one switch to get wrong.
+# is gated on this single value. REMOTE is a deployment, not a LOCAL exemption.
 _LOCAL_AUTH_MODE = "LOCAL"
 
 
@@ -114,6 +114,7 @@ class Settings(BaseModel):
     db_echo: bool = _env_bool("DB_ECHO", False)
     template_version: str = "3033-v2"
     renderer_version: str = "chromium-v1"
+    # REMOTE is a shared application identity behind the existing remote application platform.
     auth_mode: str = _env_str("AUTH_MODE", _LOCAL_AUTH_MODE).upper()
     task_mode: str = _env_str("TASK_MODE", "EAGER").upper()
     translation_provider: str = _env_str("TRANSLATION_PROVIDER", "DISABLED").upper()
@@ -123,7 +124,6 @@ class Settings(BaseModel):
     translation_timeout_seconds: float = _env_float("TRANSLATION_TIMEOUT_SECONDS", 45)
     translation_max_characters: int = _env_int("TRANSLATION_MAX_CHARACTERS", 30000)
     translation_max_tokens: int = _env_int("TRANSLATION_MAX_TOKENS", 16000)
-    redis_url: str = _env_str("REDIS_URL", "redis://localhost:6379/0")
     storage_backend: str = _env_str("STORAGE_BACKEND", "LOCAL").upper()
     # S3-compatible object storage: Volcengine TOS, MinIO and AWS S3 all speak this API. A bucket
     # is the only hard requirement; credentials may instead come from the pod's assumed role, and
@@ -272,9 +272,11 @@ class Settings(BaseModel):
         turns a non-empty list into a startup failure. LOCAL is exempt by design: it is the
         developer mode where headers are the identity and the signing key is public.
         """
-        if self.is_local_auth:
-            return []
         problems: list[str] = []
+        if self.task_mode != "EAGER":
+            problems.append("TASK_MODE must be EAGER; queue execution is no longer installed (ADR-0028).")
+        if self.is_local_auth:
+            return problems
         if self.download_secret == DEFAULT_DOWNLOAD_SECRET:
             problems.append(
                 "DOWNLOAD_SECRET is still the public repository default; anyone can mint a valid "
@@ -282,9 +284,9 @@ class Settings(BaseModel):
             )
         if len(self.download_secret) < 32:
             problems.append("DOWNLOAD_SECRET must be at least 32 characters of high-entropy secret.")
-        if self.auth_mode != "ENTRA":
-            problems.append(f"AUTH_MODE must be LOCAL or ENTRA, got {self.auth_mode!r}.")
-        else:
+        if self.auth_mode not in {"ENTRA", "REMOTE"}:
+            problems.append(f"AUTH_MODE must be LOCAL, REMOTE or ENTRA, got {self.auth_mode!r}.")
+        elif self.auth_mode == "ENTRA":
             if not self.entra_audience:
                 problems.append("ENTRA_AUDIENCE is required so tokens minted for another API are rejected.")
             if not self.resolved_entra_issuer:

@@ -3,8 +3,6 @@ import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, GripVertical, Italic, Link2, List, Plus, Trash2 } from "lucide-react";
-import "react-grid-layout/css/styles.css";
-import "react-resizable/css/styles.css";
 import { useLocale } from "../../i18n";
 
 const TwelveColumnGrid = WidthProvider(GridLayout);

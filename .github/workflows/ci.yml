@@ -9,7 +9,7 @@ jobs:
     # on every push, instead of only when a developer remembers to set TEST_MYSQL_URL.
     services:
       mysql:
-        image: mysql:8.4
+        image: mysql:8.4.8
         env:
           MYSQL_ROOT_PASSWORD: ci-only-not-a-secret
           MYSQL_DATABASE: commentary_migrations
@@ -29,7 +29,8 @@ jobs:
       # rather than discovered to be unresolvable at deploy time.
       # Every extra the production image carries, so a broken pin is caught here rather than in a
       # deployment that sets AUTH_MODE=ENTRA or STORAGE_BACKEND=S3 for the first time.
-      - run: pip install -e './backend[dev,render,entra,storage]'
+      - run: pip install -r backend/requirements.lock
+      - run: pip install -c backend/requirements.lock -e './backend[dev,render,entra,storage]'
       - run: python -m playwright install --with-deps chromium
       # The same three font packages backend/Dockerfile installs. The visual check renders a real
       # PDF and compares it with the approved report, so a runner without them is not measuring
@@ -45,3 +46,5 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - run: npm run build:host-contract --workspace @commentary/web
+      - run: python scripts/check_remote_app.py

@@ -3,9 +3,16 @@ kind: Service
 metadata:
   name: ih-prd-remote-fund-cmt-auto-srvapp
   namespace: ih
-  labels: {app: ih-prd-remote-fund-cmt-auto, component: srvapp, env: prd}
+  labels:
+    app: ih-prd-remote-fund-cmt-auto
+    component: srvapp
+    env: prd
 spec:
   type: ClusterIP
-  selector: {app: ih-prd-remote-fund-cmt-auto, component: srvapp}
+  selector:
+    app: ih-prd-remote-fund-cmt-auto
+    component: srvapp
   ports:
-    - {name: http, port: 8000, targetPort: http, protocol: TCP}
+  - name: http
+    port: 8000
+    targetPort: http

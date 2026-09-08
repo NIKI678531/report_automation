@@ -6,14 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Backend: Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy 2, Alembic, PyMySQL. Installed as an editable
   package from `backend/pyproject.toml` (`pip install -e "./backend[dev,render]"`); no `uv` in this repo.
-- Frontend: React + TypeScript + Vite (managed with **`npm` workspaces**; root `package.json` declares
+- Frontend: React 18 + TypeScript + Webpack Module Federation (managed with **`npm` workspaces**; root `package.json` declares
   `"workspaces": ["frontend"]`, the workspace package is `@commentary/web`).
 - Tasks: Celery + Redis. `TASK_MODE=EAGER` (default) runs renders inline; `TASK_MODE=CELERY` dispatches to a worker.
 - DB: MySQL 8 in compose, and MySQL is the only supported deployment target — `deployment_problems()`
   refuses to start a non-LOCAL process on SQLite. Default local fallback (no env):
   `sqlite:///var/commentary.db`, anchored to the repo root rather than the CWD so alembic (runs in
   `backend/`) and uvicorn (runs at root) share one file.
-- Auth: `AUTH_MODE=LOCAL` (default) trusts request headers and is for workstations only;
+- Auth: `AUTH_MODE=REMOTE` uses the shared remote-app actor behind platform access control;
+  `AUTH_MODE=LOCAL` (default) trusts request headers and is for workstations only;
   `AUTH_MODE=ENTRA` validates a Microsoft Entra access token and needs the `entra` extra
   (`pip install -e "./backend[entra]"`, i.e. `pyjwt[crypto]`).
 - Artifact storage: `STORAGE_BACKEND=LOCAL` (default) writes to `var/output`; `STORAGE_BACKEND=S3`
@@ -27,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Run from the repo root unless noted. Windows/PowerShell paths shown, since that is the development environment.
 
-- Frontend dev server: `npm run dev` (Vite at `http://localhost:5173`, proxies `/api` → `http://localhost:8000`).
+- Frontend dev server: `npm run dev` (Webpack at `http://localhost:3030/remote/fund-cmt-auto/`, proxies `/remote/fund-cmt-auto/api` → `http://localhost:8000/api`).
 - Backend dev server: `.\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --reload --port 8000`.
 - Backend tests: `.\.venv\Scripts\python -m pytest backend/tests` (`testpaths = ["tests"]`, `pythonpath = ["."]`).
   - Single test: `.\.venv\Scripts\python -m pytest backend/tests/test_reports_api.py::test_name`.
@@ -55,8 +56,8 @@ Run from the repo root unless noted. Windows/PowerShell paths shown, since that 
   workstation before any process reads them; `--skip-network` reports configuration without calling
   the tenant or the bucket. Exit 1 means the environment must not serve traffic.
 - Full stack via Docker: `docker compose up --build`.
-  - Frontend (nginx): `http://localhost:8080/`; API is reached same-origin through nginx at `/api/v1`.
-  - Services: `db` (MySQL 8.4), `redis`, `api`, `worker` (Celery), `web` (nginx).
+  - Frontend (nginx): `http://localhost:3030/remote/fund-cmt-auto/`; API is reached at `/remote/fund-cmt-auto/api/v1`. See `k8s/REMOTE.md` for the host registration contract.
+  - Services: disposable `mysql`, `redis`, `migrate`, `srvapp`, `worker` (Celery), `webapp` (nginx).
 
 **Never introduce `pnpm` or `yarn` commands, lockfiles, or `packageManager` fields.** The project was
 migrated to npm workspaces; `pnpm-lock.yaml` and `pnpm-workspace.yaml` were deliberately removed.
@@ -180,7 +181,7 @@ traceable back to a snapshot, a `formula_version` and a document version. HTML, 
 
 ### Deployment and the security boundary
 
-Two auth modes, one enforcement path. Configuration lives in `.env.example` (compose/deployment
+Three auth modes, one enforcement path. REMOTE uses the shared remote-app actor behind the hosting platform and retains deployment guards. Configuration lives in `.env.example` (compose/deployment
 secrets, at the repo root) and `backend/.env.example` (service settings); neither has a working
 default, and `compose.yaml` references the secrets as `${VAR:?message}` so a missing one stops
 `docker compose up` by name rather than standing up a database with a published password.
@@ -282,3 +283,14 @@ product-UI design system to report output, and do not apply report tokens to the
   3033 regression evidence (see `docs/adr/0001-mandatory-stack-and-rendering.md`).
 - `docs/implementation-status.md` is the live ledger of what is done versus environment-blocked. Update it
   when you complete or unblock a specification item; it is a ledger, not a waiver.
+
+## Remote application deployment (ADR-0026, 2026-09-08)
+
+The authoritative deployment runbook is `k8s/README.md`. VM-specific files have been removed.
+Use root `docker-compose.uat.yml` / `docker-compose.prd.yml` to build/push the two ECR images.
+The standard Dockerfiles use pinned base images, Linux requirements.lock and non-root read-only
+runtime directories. The user controls service startup; do not start the frontend/backend.
+The user explicitly selected remote-app hosting without separate Ingress, domain, certificate
+or Entra login. `AUTH_MODE=REMOTE` supplies a shared `remote-app` actor and retains deployment
+guards. Existing optional Entra code remains supported for other installations.
+`compose.yaml` is a disposable local validation stack: mysql/redis/migrate/srvapp/worker/webapp.

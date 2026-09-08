@@ -23,6 +23,15 @@ def health() -> dict:
     return {"status": "ok", "service": "commentary-api", "architecture": {"frontend": "React", "backend": "FastAPI"}}
 
 
+@router.get("/health/deep", dependencies=[require_role("ADMIN", error_code="HEALTH_ACCESS_FORBIDDEN")])
+def dependency_health():
+    from fastapi.responses import JSONResponse
+    from app.core.health import deep_health
+
+    result = deep_health()
+    return JSONResponse(result, status_code=200 if result["status"] == "ok" else 503)
+
+
 @router.get("/audit", dependencies=[require_role("REVIEWER", "ADMIN", error_code="AUDIT_ACCESS_FORBIDDEN")])
 def list_audit(
     db: Db,

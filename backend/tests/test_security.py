@@ -948,20 +948,20 @@ def test_the_application_refuses_to_start_on_an_unsafe_configuration(monkeypatch
     assert "DOWNLOAD_SECRET" in str(raised.value)
 
 
-def _run_vm_entrypoint_guard(monkeypatch, **overrides):
+def _run_container_entrypoint_guard(monkeypatch, **overrides):
     from pathlib import Path
 
     from app.core import config
 
-    configured = {"redis_url": "redis://broker.example.invalid:6379/0", **overrides}
-    monkeypatch.setattr(config, "settings", _deployed(**configured))
-    path = Path(__file__).resolve().parents[1] / "vm-entrypoint.sh"
-    source = path.read_text(encoding="utf-8").split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-    exec(compile(source, str(path), "exec"), {})
+    from app.core import deployment
+
+    configured = {"task_mode": "EAGER", **overrides}
+    monkeypatch.setattr(deployment, "settings", _deployed(**configured))
+    deployment.verify_container_configuration()
 
 
-def test_vm_entrypoint_guard_accepts_production_configuration_without_network(monkeypatch):
-    _run_vm_entrypoint_guard(monkeypatch)
+def test_container_entrypoint_guard_accepts_production_configuration_without_network(monkeypatch):
+    _run_container_entrypoint_guard(monkeypatch)
 
 
 @pytest.mark.parametrize("overrides", [
@@ -972,19 +972,19 @@ def test_vm_entrypoint_guard_accepts_production_configuration_without_network(mo
     {"database_url": "not-a-url"},
     {"storage_backend": "LOCAL"},
     {"s3_endpoint_url": "http://storage.example.invalid"},
-    {"redis_url": "https://broker.example.invalid"},
+    {"task_mode": "CELERY"},
     {"allow_testing_lane": True},
     {"download_secret": "short"},
 ])
-def test_vm_entrypoint_guard_refuses_unsafe_configuration_before_migration(monkeypatch, overrides):
+def test_container_entrypoint_guard_refuses_unsafe_configuration_before_migration(monkeypatch, overrides):
     with pytest.raises(ConfigurationError):
-        _run_vm_entrypoint_guard(monkeypatch, **overrides)
+        _run_container_entrypoint_guard(monkeypatch, **overrides)
 
 
-def test_vm_entrypoint_guard_redacts_malformed_database_url(monkeypatch):
+def test_container_entrypoint_guard_redacts_malformed_database_url(monkeypatch):
     sensitive = "do-not-print-this-credential"
     with pytest.raises(ConfigurationError) as raised:
-        _run_vm_entrypoint_guard(monkeypatch, database_url=f"mysql+pymysql://user:{sensitive}@db:{sensitive}/app")
+        _run_container_entrypoint_guard(monkeypatch, database_url=f"mysql+pymysql://user:{sensitive}@db:{sensitive}/app")
     assert sensitive not in str(raised.value)
     assert "DATABASE_URL" in str(raised.value)
 
@@ -1000,7 +1000,6 @@ def _k8s_secret_builder():
 def _k8s_secret_values():
     return {
         "DATABASE_URL": "mysql+pymysql://test:test@db.invalid/app?charset=utf8mb4",
-        "REDIS_URL": "rediss://test@redis.invalid/1?ssl_cert_reqs=required",
         "DOWNLOAD_SECRET": "test-generated-placeholder-" * 3,
         "S3_ACCESS_KEY_ID": "test-key",
         "S3_SECRET_ACCESS_KEY": "literal$KEY with spaces=and-equals",
@@ -1012,6 +1011,7 @@ def _k8s_secret_values():
         "DATAWAREHOUSE_MYSQL_PASSWORD": "",
         "FMP_API_KEY": "",
         "MARKETAUX_API_KEY": "",
+        "TRANSLATION_API_KEY": "",
     }
 
 
@@ -1020,8 +1020,8 @@ def test_k8s_secret_builder_preserves_literal_values_and_all_optional_keys(tmp_p
 
     values = _k8s_secret_values()
     env_file = tmp_path / ".env.secrets"
-    env_file.write_text("\n".join(f"{key}='{value}'" for key, value in values.items()), encoding="utf-8")
-    secret = _k8s_secret_builder()("uat", "approved-namespace", env_file)
+    env_file.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
+    secret = _k8s_secret_builder()("uat", "ih", env_file)
     assert secret["metadata"]["name"] == "ih-uat-remote-fund-cmt-auto-srvapp-secret"
     assert {key: base64.b64decode(value).decode("utf-8") for key, value in secret["data"].items()} == values
     assert "stringData" not in secret
@@ -1030,7 +1030,7 @@ def test_k8s_secret_builder_preserves_literal_values_and_all_optional_keys(tmp_p
 @pytest.mark.parametrize("change", ["missing", "empty", "unexpected", "short", "namespace"])
 def test_k8s_secret_builder_refuses_incomplete_or_unsafe_input_without_leaking_values(tmp_path, change):
     values = _k8s_secret_values()
-    namespace = "approved-namespace"
+    namespace = "ih"
     if change == "missing":
         values.pop("MARKETAUX_API_KEY")
     elif change == "empty":
@@ -1042,74 +1042,76 @@ def test_k8s_secret_builder_refuses_incomplete_or_unsafe_input_without_leaking_v
     else:
         namespace = "replace-me-namespace"
     env_file = tmp_path / ".env.secrets"
-    env_file.write_text("\n".join(f"{key}='{value}'" for key, value in values.items()), encoding="utf-8")
+    env_file.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
     with pytest.raises(ValueError) as raised:
         _k8s_secret_builder()("prd", namespace, env_file)
     assert "literal$KEY" not in str(raised.value)
 
 
-def _secret_draft_builder(tmp_path):
-    from pathlib import Path
-    import runpy
-    import shutil
 
-    root = Path(__file__).resolve().parents[2]
-    for environment in ("uat", "prd"):
-        destination = tmp_path / "k8s" / environment
-        destination.mkdir(parents=True)
-        shutil.copyfile(root / "k8s" / environment / "secret.example.yaml.txt", destination / "secret.example.yaml.txt")
-    return runpy.run_path(str(root / "k8s" / "prepare-secret-drafts.py"))
-
-
-def test_secret_drafts_isolate_production_and_preserve_literal_local_values(tmp_path):
-    module = _secret_draft_builder(tmp_path)
-    (tmp_path / ".env").write_text("FMP_API_KEY='uat$literal value'\nDATABASE_URL=sqlite:///local.db\nDOWNLOAD_SECRET=do-not-reuse\n", encoding="utf-8")
-    documents, statuses = module["build_drafts"](tmp_path, "ih")
-    assert documents["uat"]["stringData"]["FMP_API_KEY"] == "uat$literal value"
-    assert documents["prd"]["stringData"]["FMP_API_KEY"] == ""
-    assert documents["uat"]["stringData"]["DATABASE_URL"] == ""
-    first = documents["uat"]["stringData"]["DOWNLOAD_SECRET"]
-    second = documents["prd"]["stringData"]["DOWNLOAD_SECRET"]
-    assert len(first) >= 32 and len(second) >= 32 and first != second
-    assert "uat$literal" not in str(statuses)
+def test_remote_mode_needs_no_entra_but_still_enforces_deployment_guards():
+    configured = _deployed(auth_mode="REMOTE", entra_audience=None, entra_issuer=None, entra_jwks_url=None, entra_tenant_id=None)
+    assert configured.deployment_problems() == []
+    for changes, expected in [
+        ({"database_url": "sqlite:///local.db"}, "DATABASE_URL"),
+        ({"storage_backend": "LOCAL"}, "STORAGE_BACKEND"),
+        ({"download_secret": "short"}, "DOWNLOAD_SECRET"),
+        ({"allow_testing_lane": True}, "ALLOW_TESTING_LANE"),
+    ]:
+        assert expected in " ".join(configured.model_copy(update=changes).deployment_problems())
 
 
-def test_secret_drafts_read_only_explicit_prd_values_for_production(tmp_path):
-    module = _secret_draft_builder(tmp_path)
-    (tmp_path / ".env").write_text("FMP_API_KEY=uat-only\n", encoding="utf-8")
-    (tmp_path / ".env.prd").write_text("FMP_API_KEY=prd-only\n", encoding="utf-8")
-    documents, _ = module["build_drafts"](tmp_path, "ih")
-    assert documents["uat"]["stringData"]["FMP_API_KEY"] == "uat-only"
-    assert documents["prd"]["stringData"]["FMP_API_KEY"] == "prd-only"
+def test_remote_mode_ignores_forged_actor_headers_and_does_not_require_token(client, monkeypatch):
+    from starlette.datastructures import Headers
+    from app.core.security import resolve_principal
+
+    monkeypatch.setattr(settings, "auth_mode", "REMOTE")
+    principal = resolve_principal(Headers({"X-User-ID": "forged-user", "X-User-Role": "VIEWER", "X-Product-Scope": "other"}))
+    assert (principal.subject, principal.role, principal.product_scope) == ("remote-app", "ADMIN", frozenset({"*"}))
+    response = client.get("/api/v1/reports", headers={"Authorization": "Bearer not-a-token"})
+    assert response.status_code == 200
 
 
-@pytest.mark.parametrize("key,value", [
-    ("DATABASE_URL", "sqlite:///local.db"),
-    ("DATABASE_URL", "mysql+pymysql://user:password@localhost/app?charset=utf8mb4"),
-    ("DATABASE_URL", "mysql+pymysql://user:password@db/app?charset=utf8mb4"),
-    ("DATABASE_URL", "mysql+pymysql://user:password@mysql.internal/app?charset=utf8"),
-    ("REDIS_URL", "redis://redis:6379/0"),
-    ("DA_REPORT_OBJECT_URL", "C:/local/snapshot.sqlite"),
-    ("DA_REPORT_SQLITE_SHA256", "replace-with-sha"),
-    ("FMP_API_KEY", "${SHARED_KEY}"),
-])
-def test_secret_drafts_refuse_workstation_and_placeholder_configuration(tmp_path, key, value):
-    module = _secret_draft_builder(tmp_path)
-    assert module["acceptable"](key, value) is False
+def test_remote_image_guard_accepts_no_entra_configuration(monkeypatch):
+    _run_container_entrypoint_guard(monkeypatch, auth_mode="REMOTE", entra_audience=None,
+                                    entra_tenant_id=None, entra_issuer=None, entra_jwks_url=None)
 
 
-def test_secret_drafts_write_valid_yaml_without_overwriting_or_reporting_secrets(tmp_path):
-    import yaml
+@pytest.mark.parametrize("key", ["DATABASE_URL", "DOWNLOAD_SECRET", "TRANSLATION_API_KEY"])
+def test_secret_builder_rejects_duplicate_keys_without_leaking_values(tmp_path, key):
+    values = _k8s_secret_values()
+    path = tmp_path / ".env.uat"
+    path.write_text("\n".join(f"{k}={v}" for k, v in values.items()) + f"\n{key}=do-not-print", encoding="utf-8")
+    with pytest.raises(ValueError) as raised:
+        _k8s_secret_builder()("uat", "ih", path)
+    assert "do-not-print" not in str(raised.value)
 
-    module = _secret_draft_builder(tmp_path)
-    (tmp_path / ".env").write_text("FMP_API_KEY='private$fake with spaces'\n", encoding="utf-8")
-    module["write_drafts"](tmp_path, "ih")
-    path = tmp_path / "k8s" / "uat" / "secrets" / "secret.local.yaml"
-    original = path.read_bytes()
-    document = yaml.safe_load(original)
-    assert document["stringData"]["FMP_API_KEY"] == "private$fake with spaces"
-    assert document["metadata"]["namespace"] == "ih"
-    assert "private$fake" not in (tmp_path / "k8s" / "secret-readiness.local.md").read_text()
-    with pytest.raises(ValueError):
-        module["write_drafts"](tmp_path, "ih")
-    assert path.read_bytes() == original
+
+def test_access_log_redacts_signed_queries_and_keeps_failed_probes():
+    import logging
+    from app.core.logging_setup import AccessLogFilter
+
+    def record(path, status):
+        return logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %d',
+                                 ("client", "GET", path, "1.1", status), None)
+    filter_ = AccessLogFilter()
+    assert filter_.filter(record("/api/v1/health", 200)) is False
+    assert filter_.filter(record("/api/v1/health", 503)) is True
+    signed = record("/api/v1/artifacts/file?signature=private-signature&subject=private-user", 200)
+    assert filter_.filter(signed)
+    assert "private" not in signed.getMessage()
+
+
+def test_deep_health_redacts_failures_and_never_changes_shallow_probe(client, monkeypatch):
+    from app.core import health
+
+    def unavailable():
+        raise RuntimeError("mysql://private:password@secret-host")
+    monkeypatch.setattr(health, "database_check", unavailable)
+    monkeypatch.setattr(health, "storage_check", lambda: None)
+    response = client.get("/api/v1/health/deep")
+    assert response.status_code == 503
+    assert response.json() == {"status": "degraded", "dependencies": {"database": "unavailable", "storage": "ok"}}
+    assert "private" not in response.text
+    assert client.get("/api/v1/health").status_code == 200
+    assert client.get("/api/v1/health/deep", headers={"X-User-Role": "VIEWER"}).status_code == 403

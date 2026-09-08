@@ -1,139 +1,142 @@
-# Credentials come from the environment (a `.env` beside this file locally, the platform's secret
-# store in a deployment). Nothing here has a working default: a committed password is a published
-# password, and `${VAR:?message}` fails the `compose up` with that message rather than silently
-# standing up a database everyone can read.
-#
-# The API and worker connect with `charset=utf8mb4`. That is not cosmetic - report content is
-# Traditional and Simplified Chinese, and MySQL's legacy three-byte `utf8` truncates it.
+name: fund-commentary
 services:
-  db:
-    image: mysql:8.4
-    # utf8mb4 + the default collation for MySQL 8, set at the server so a table created outside
-    # alembic cannot inherit latin1 and corrupt Chinese product names.
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci"]
+  mysql:
+    image: mysql:8.4.8@sha256:2952e3be7807f06fc18de50b3ea1a632d5c70d63482ff7d7376fe3aa8999babf
+    command:
+    - --character-set-server=utf8mb4
+    - --collation-server=utf8mb4_0900_ai_ci
+    - --default-time-zone=+08:00
     environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: commentary
       MYSQL_USER: commentary
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env or the secret store}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env or the secret store}
-    volumes: ["mysql-data:/var/lib/mysql"]
-    healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "localhost"], interval: 5s, timeout: 3s, retries: 20 }
-  redis:
-    image: redis:7.4-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes: ["redis-data:/data"]
-  api:
-    build: { context: ./backend, dockerfile: Dockerfile }
-    environment:
-      DATABASE_URL: mysql+pymysql://commentary:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@db/commentary?charset=utf8mb4
-      AUTH_MODE: ${AUTH_MODE:-LOCAL}
-      TASK_MODE: CELERY
-      REDIS_URL: redis://redis:6379/0
-      DOWNLOAD_SECRET: ${DOWNLOAD_SECRET:?set DOWNLOAD_SECRET to 32+ random characters}
-      ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
-      ENTRA_AUDIENCE: ${ENTRA_AUDIENCE:-}
-      ENTRA_ISSUER: ${ENTRA_ISSUER:-}
-      ENTRA_ROLE_CLAIM: ${ENTRA_ROLE_CLAIM:-roles}
-      ENTRA_PRODUCT_SCOPE_CLAIM: ${ENTRA_PRODUCT_SCOPE_CLAIM:-product_scope}
-      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:8080}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
-      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
-      # Artifact storage. LOCAL is the compose default and uses the bind mount below; a deployment
-      # with no persistent volume must set STORAGE_BACKEND=S3, and the API and worker must name the
-      # same bucket - the worker writes the artifact the API later serves.
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-LOCAL}
-      S3_BUCKET: ${S3_BUCKET:-}
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
-      S3_REGION: ${S3_REGION:-}
-      S3_PREFIX: ${S3_PREFIX:-}
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
-      S3_ADDRESSING_STYLE: ${S3_ADDRESSING_STYLE:-virtual}
-      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-20971520}
-      NEWS_PROVIDER: ${NEWS_PROVIDER:-DA_REPORT}
-      MARKETAUX_API_KEY: ${MARKETAUX_API_KEY:-}
-      MARKETAUX_BASE_URL: ${MARKETAUX_BASE_URL:-https://api.marketaux.com/v1}
-      DA_REPORT_SQLITE_PATH: ${DA_REPORT_SQLITE_PATH:-}
-      DA_REPORT_SQLITE_SHA256: ${DA_REPORT_SQLITE_SHA256:-}
-      DA_REPORT_OBJECT_URL: ${DA_REPORT_OBJECT_URL:-}
-      DA_REPORT_CACHE_DIR: /tmp/commentary-da
-      DATAWAREHOUSE_PERFORMANCE_ENABLED: ${DATAWAREHOUSE_PERFORMANCE_ENABLED:-true}
-      DATAWAREHOUSE_MYSQL_HOST: ${DATAWAREHOUSE_MYSQL_HOST:-}
-      DATAWAREHOUSE_MYSQL_PORT: ${DATAWAREHOUSE_MYSQL_PORT:-3306}
-      DATAWAREHOUSE_MYSQL_DATABASE: ${DATAWAREHOUSE_MYSQL_DATABASE:-}
-      DATAWAREHOUSE_MYSQL_USERNAME: ${DATAWAREHOUSE_MYSQL_USERNAME:-}
-      DATAWAREHOUSE_MYSQL_PASSWORD: ${DATAWAREHOUSE_MYSQL_PASSWORD:-}
-      DATAWAREHOUSE_MYSQL_SSL_CA: ${DATAWAREHOUSE_MYSQL_SSL_CA:-}
-      DATAWAREHOUSE_MYSQL_SSL_VERIFY_IDENTITY: ${DATAWAREHOUSE_MYSQL_SSL_VERIFY_IDENTITY:-true}
-      DATAWAREHOUSE_CLASS_MASTER_VIEW: ${DATAWAREHOUSE_CLASS_MASTER_VIEW:-view_ads_busi_product_fundinfo_class_f_p}
-      DATAWAREHOUSE_FUND_RETURNS_VIEW: ${DATAWAREHOUSE_FUND_RETURNS_VIEW:-view_ads_busi_performance_class_returns_f_p}
-      DATAWAREHOUSE_INDEX_RETURNS_VIEW: ${DATAWAREHOUSE_INDEX_RETURNS_VIEW:-view_ads_busi_performance_index_returns_f_p}
-      DATAWAREHOUSE_FUND_AUM_VIEW: ${DATAWAREHOUSE_FUND_AUM_VIEW:-view_ads_busi_valuation_nav_fund_level_exposure_1_f_p}
-      DATAWAREHOUSE_FUND_KPI_VIEW: ${DATAWAREHOUSE_FUND_KPI_VIEW:-}
-      DATAWAREHOUSE_SQLITE_PATH: ${DATAWAREHOUSE_SQLITE_PATH:-}
-      DATAWAREHOUSE_SQLITE_SHA256: ${DATAWAREHOUSE_SQLITE_SHA256:-}
-      DATAWAREHOUSE_OBJECT_URL: ${DATAWAREHOUSE_OBJECT_URL:-}
-      DATAWAREHOUSE_CACHE_DIR: /tmp/commentary-datawarehouse
-      FMP_CONSTITUENT_RETURNS_ENABLED: ${FMP_CONSTITUENT_RETURNS_ENABLED:-true}
-      FMP_API_KEY: ${FMP_API_KEY:-}
-      FMP_BASE_URL: ${FMP_BASE_URL:-https://financialmodelingprep.com/stable}
-      FMP_TIMEOUT_SECONDS: ${FMP_TIMEOUT_SECONDS:-20}
-      FMP_BOUNDARY_LOOKBACK_DAYS: ${FMP_BOUNDARY_LOOKBACK_DAYS:-14}
-      FMP_ALLOWED_HOSTS: ${FMP_ALLOWED_HOSTS:-financialmodelingprep.com}
-    volumes: ["./var/output:/app/var/output"]
-    # `web` waits for this, so a rolling deploy cannot route traffic at an API whose migrations
-    # are still running. start_period covers `alembic upgrade head` on a cold database.
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+    tmpfs:
+    - /var/lib/mysql:size=2147483648,mode=1777
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/health',timeout=3)"]
-      interval: 10s
+      test:
+      - CMD
+      - mysqladmin
+      - ping
+      - -h
+      - 127.0.0.1
+      interval: 5s
       timeout: 5s
-      retries: 12
-      start_period: 40s
-    depends_on: { db: { condition: service_healthy }, redis: { condition: service_started } }
-  worker:
-    build: { context: ./backend, dockerfile: Dockerfile }
-    command: ["celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+      retries: 30
+  migrate:
+    image: fund-commentary-srvapp:local
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+    - path: .env
+      format: raw
     environment:
-      DATABASE_URL: mysql+pymysql://commentary:${MYSQL_PASSWORD:?set MYSQL_PASSWORD}@db/commentary?charset=utf8mb4
-      AUTH_MODE: ${AUTH_MODE:-LOCAL}
-      TASK_MODE: CELERY
-      REDIS_URL: redis://redis:6379/0
-      # Must match the API's: the worker writes artifacts whose download links the API signs.
-      DOWNLOAD_SECRET: ${DOWNLOAD_SECRET:?set DOWNLOAD_SECRET to 32+ random characters}
-      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
-      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
-      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
-      # Artifact storage. LOCAL is the compose default and uses the bind mount below; a deployment
-      # with no persistent volume must set STORAGE_BACKEND=S3, and the API and worker must name the
-      # same bucket - the worker writes the artifact the API later serves.
-      STORAGE_BACKEND: ${STORAGE_BACKEND:-LOCAL}
-      S3_BUCKET: ${S3_BUCKET:-}
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
-      S3_REGION: ${S3_REGION:-}
-      S3_PREFIX: ${S3_PREFIX:-}
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
-      S3_ADDRESSING_STYLE: ${S3_ADDRESSING_STYLE:-virtual}
-      DATAWAREHOUSE_PERFORMANCE_ENABLED: ${DATAWAREHOUSE_PERFORMANCE_ENABLED:-true}
-      DATAWAREHOUSE_MYSQL_HOST: ${DATAWAREHOUSE_MYSQL_HOST:-}
-      DATAWAREHOUSE_MYSQL_PORT: ${DATAWAREHOUSE_MYSQL_PORT:-3306}
-      DATAWAREHOUSE_MYSQL_DATABASE: ${DATAWAREHOUSE_MYSQL_DATABASE:-}
-      DATAWAREHOUSE_MYSQL_USERNAME: ${DATAWAREHOUSE_MYSQL_USERNAME:-}
-      DATAWAREHOUSE_MYSQL_PASSWORD: ${DATAWAREHOUSE_MYSQL_PASSWORD:-}
-      DATAWAREHOUSE_MYSQL_SSL_CA: ${DATAWAREHOUSE_MYSQL_SSL_CA:-}
-      DATAWAREHOUSE_MYSQL_SSL_VERIFY_IDENTITY: ${DATAWAREHOUSE_MYSQL_SSL_VERIFY_IDENTITY:-true}
-      DATAWAREHOUSE_CLASS_MASTER_VIEW: ${DATAWAREHOUSE_CLASS_MASTER_VIEW:-view_ads_busi_product_fundinfo_class_f_p}
-      DATAWAREHOUSE_FUND_RETURNS_VIEW: ${DATAWAREHOUSE_FUND_RETURNS_VIEW:-view_ads_busi_performance_class_returns_f_p}
-      DATAWAREHOUSE_INDEX_RETURNS_VIEW: ${DATAWAREHOUSE_INDEX_RETURNS_VIEW:-view_ads_busi_performance_index_returns_f_p}
-      DATAWAREHOUSE_FUND_AUM_VIEW: ${DATAWAREHOUSE_FUND_AUM_VIEW:-view_ads_busi_valuation_nav_fund_level_exposure_1_f_p}
-      DATAWAREHOUSE_FUND_KPI_VIEW: ${DATAWAREHOUSE_FUND_KPI_VIEW:-}
-    volumes: ["./var/output:/app/var/output"]
-    depends_on: { db: { condition: service_healthy }, redis: { condition: service_started } }
-  web:
-    build: { context: ., dockerfile: frontend/Dockerfile }
-    ports: ["8080:80"]
-    depends_on: { api: { condition: service_healthy } }
-volumes:
-  mysql-data:
-  redis-data:
+      AUTH_MODE: REMOTE
+      STORAGE_BACKEND: S3
+      TASK_MODE: EAGER
+      ALLOW_TESTING_LANE: 'false'
+      DB_ECHO: 'false'
+      HOME: /tmp
+      TZ: Asia/Hong_Kong
+      LOG_LEVEL: INFO
+      DA_REPORT_CACHE_DIR: /tmp/commentary-da
+      DATAWAREHOUSE_CACHE_DIR: /tmp/commentary-datawarehouse
+    read_only: true
+    user: 10001:10001
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=1073741824,mode=1777
+    - /app/var/output:size=1073741824,mode=1777
+    mem_limit: 2g
+    cpus: 1
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    restart: 'no'
+    command:
+    - python
+    - -m
+    - alembic
+    - upgrade
+    - head
+    healthcheck:
+      disable: true
+    depends_on:
+      mysql:
+        condition: service_healthy
+  srvapp:
+    stop_grace_period: 240s
+    image: fund-commentary-srvapp:local
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+    - path: .env
+      format: raw
+    environment:
+      AUTH_MODE: REMOTE
+      STORAGE_BACKEND: S3
+      TASK_MODE: EAGER
+      ALLOW_TESTING_LANE: 'false'
+      DB_ECHO: 'false'
+      HOME: /tmp
+      TZ: Asia/Hong_Kong
+      LOG_LEVEL: INFO
+      DA_REPORT_CACHE_DIR: /tmp/commentary-da
+      DATAWAREHOUSE_CACHE_DIR: /tmp/commentary-datawarehouse
+    read_only: true
+    user: 10001:10001
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=1073741824,mode=1777
+    - /app/var/output:size=1073741824,mode=1777
+    mem_limit: 2g
+    cpus: 1
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    restart: 'no'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  webapp:
+    image: fund-commentary-webapp:local
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      API_UPSTREAM: srvapp:8000
+    read_only: true
+    user: 101:101
+    cap_drop:
+    - ALL
+    security_opt:
+    - no-new-privileges:true
+    tmpfs:
+    - /tmp:size=268435456,mode=1777
+    - /etc/nginx/conf.d:size=1048576,mode=1777
+    ports:
+    - 127.0.0.1:3030:3030
+    depends_on:
+      srvapp:
+    stop_grace_period: 240s
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: 0.3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    restart: 'no'

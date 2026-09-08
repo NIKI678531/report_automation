@@ -5,14 +5,14 @@ describe("FastAPI client", () => {
   it("creates reports through the versioned API", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "r1" }), { status: 201 }));
     await api.createReport("2026-06-30", "3033");
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports", expect.objectContaining({ method: "POST", body: JSON.stringify({ product_code: "3033", report_date: "2026-06-30" }) }));
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports", expect.objectContaining({ method: "POST", body: JSON.stringify({ product_code: "3033", report_date: "2026-06-30" }) }));
     fetchMock.mockRestore();
   });
 
   it("creates a language variant from a locked source document version", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "zh1" }), { status: 201 }));
     await api.createLanguageVariant("en1", "ZH_HANS", 4);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/en1/language-variants", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/en1/language-variants", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ language_mode: "ZH_HANS", source_document_version: 4 }),
     }));
@@ -22,7 +22,7 @@ describe("FastAPI client", () => {
   it("creates a Traditional Chinese language variant", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "zh-hant-1" }), { status: 201 }));
     await api.createLanguageVariant("en1", "ZH_HANT", 4);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/en1/language-variants", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/en1/language-variants", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ language_mode: "ZH_HANT", source_document_version: 4 }),
     }));
@@ -33,7 +33,7 @@ describe("FastAPI client", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200 }));
     await api.listCompanyNewsCatalog("r1", { company_scope: "CONSTITUENTS" });
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/reports/r1/news/catalog?company_scope=CONSTITUENTS",
+      "/remote/fund-cmt-auto/api/v1/reports/r1/news/catalog?company_scope=CONSTITUENTS",
       expect.any(Object),
     );
     fetchMock.mockRestore();
@@ -42,7 +42,7 @@ describe("FastAPI client", () => {
   it("synchronizes module choices between language variants with optimistic locking", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ id: "zh1" }), { status: 200 }));
     await api.syncLanguageVariant("en1", "zh1", 4, 6);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/en1/language-variants/zh1/sync", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/en1/language-variants/zh1/sync", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ source_document_version: 4, target_document_version: 6 }),
     }));
@@ -52,14 +52,14 @@ describe("FastAPI client", () => {
   it("soft-deletes the selected report with optimistic locking", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
     await api.deleteReport("r1", 7);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1?version=7", expect.objectContaining({ method: "DELETE" }));
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1?version=7", expect.objectContaining({ method: "DELETE" }));
     fetchMock.mockRestore();
   });
 
   it("loads the effective product catalog", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 200 }));
     await api.listProducts("2026-06-30");
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/products?as_of_date=2026-06-30", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/products?as_of_date=2026-06-30", expect.any(Object));
     fetchMock.mockRestore();
   });
 
@@ -67,7 +67,7 @@ describe("FastAPI client", () => {
     const payload = { provider: "DA_REPORT", fetched: 0, created: 0, items: [] };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
     await api.fetchNewsCandidates("r1", "CONSTITUENTS", "2026-08-01", "2026-08-10", "DA_REPORT");
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/news/candidates/fetch", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/news/candidates/fetch", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({
         scope: "CONSTITUENTS",
@@ -94,7 +94,7 @@ describe("FastAPI client", () => {
       limit: 25,
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/reports/r1/news/catalog?query=Tencent+results&company=700&sentiment=bull&sort=oldest&cursor=next-page&limit=25",
+      "/remote/fund-cmt-auto/api/v1/reports/r1/news/catalog?query=Tencent+results&company=700&sentiment=bull&sort=oldest&cursor=next-page&limit=25",
       expect.any(Object),
     );
     fetchMock.mockRestore();
@@ -103,7 +103,7 @@ describe("FastAPI client", () => {
   it("saves DA catalog selections by trusted external id", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ version: 2, items: [] }), { status: 200 }));
     await api.selectNews("r1", 1, [{ provider: "DA_REPORT", external_id: "42", position: 0 }]);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/news", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/news", expect.objectContaining({
       method: "PUT",
       body: JSON.stringify({ version: 1, items: [{ provider: "DA_REPORT", external_id: "42", position: 0 }] }),
     }));
@@ -113,7 +113,7 @@ describe("FastAPI client", () => {
   it("applies first-time data without an override reason", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     await api.applyImport("r1", "i1");
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/imports/i1/apply", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/imports/i1/apply", expect.objectContaining({
       method: "POST",
       body: "{}",
     }));
@@ -123,7 +123,7 @@ describe("FastAPI client", () => {
   it("discards an unapplied import", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     await api.discardImport("r1", "i1");
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/imports/i1/discard", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/imports/i1/discard", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({}),
     }));
@@ -133,7 +133,7 @@ describe("FastAPI client", () => {
   it("clears an applied constituent dataset with optimistic locking", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     await api.clearDataset("r1", "constituent_returns", 7);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/datasets/constituent_returns/clear", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/datasets/constituent_returns/clear", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ version: 7 }),
     }));
@@ -143,7 +143,7 @@ describe("FastAPI client", () => {
   it("refreshes automatic data for the selected report version", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ changed: true, snapshot: {} }), { status: 200 }));
     await api.refreshAutomaticData("r1", 7);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/automatic-data/refresh", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/automatic-data/refresh", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ version: 7 }),
     }));
@@ -153,7 +153,7 @@ describe("FastAPI client", () => {
   it("sends a reason when replacing current data", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     await api.applyImport("r1", "i2", "Corrected source file");
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/imports/i2/apply", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/imports/i2/apply", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ reason: "Corrected source file" }),
     }));
@@ -163,7 +163,7 @@ describe("FastAPI client", () => {
   it("requests only the selected output formats", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 202 }));
     await api.render("r1", ["pdf", "docx"]);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/reports/r1/renders", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/reports/r1/renders", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({ formats: ["pdf", "docx"] }),
     }));
@@ -177,7 +177,7 @@ describe("FastAPI client", () => {
 
     await api.getJob("job-1");
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/jobs/job-1", expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith("/remote/fund-cmt-auto/api/v1/jobs/job-1", expect.any(Object));
     fetchMock.mockRestore();
   });
 });

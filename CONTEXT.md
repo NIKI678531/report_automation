@@ -230,13 +230,19 @@ _Avoid_: Query, pull, sync
 
 ### Access and deployment
 
+The frontend is the `fundCmtAuto` / `./App` Webpack Federation remote (ADR-0027), exposed at
+`/remote/fund-cmt-auto/remoteEntry.js`. Dev/nginx/ClusterIP use port 3030. The platform preserves
+`/remote/fund-cmt-auto/` when forwarding to webapp; webapp strips it for the backend API only.
+React 18 is shared with the host; the v7 memory data router and Shadow DOM keep application
+navigation, CSS and locale scoped. Registration and integration limits are in `k8s/REMOTE.md`.
+
 **Principal**:
 The caller of one request, reduced to what authorization needs: `subject`, `role`, `product_scope`.
 `SYSTEM_PRINCIPAL` stands in for work no request initiated — a Celery task, a CLI import.
 _Avoid_: User, account, identity, session
 
 **Auth mode**:
-Where a principal comes from. `LOCAL` reads it from request headers, which is a developer
+Where a principal comes from. For the remote application deployment (ADR-0026), `REMOTE` uses a shared `remote-app` actor; access is controlled by the hosting platform, with no independent login. `LOCAL` reads it from request headers, which is a developer
 convenience and not security. `ENTRA` derives it from a validated Microsoft Entra access token and
 ignores those headers entirely. The same value gates every other workstation-only behaviour.
 _Avoid_: Auth backend, login mode, environment

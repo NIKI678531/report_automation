@@ -9,7 +9,6 @@ metadata:
     env: uat
 spec:
   replicas: 1
-  revisionHistoryLimit: 3
   strategy:
     type: Recreate
   selector:
@@ -24,7 +23,7 @@ spec:
         env: uat
     spec:
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 180
+      terminationGracePeriodSeconds: 240
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -32,107 +31,94 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
-      initContainers:
-        - name: migrate
-          image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-srvapp:replace-me-release
-          imagePullPolicy: Always
-          args: ["python", "-m", "alembic", "upgrade", "head"]
-          envFrom:
-            - configMapRef:
-                name: ih-uat-remote-fund-cmt-auto-srvapp-config
-            - secretRef:
-                name: ih-uat-remote-fund-cmt-auto-srvapp-secret
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          resources:
-            requests: {cpu: "100m", memory: "256Mi"}
-            limits: {cpu: "1", memory: "1Gi"}
-          volumeMounts:
-            - {name: api-tmp, mountPath: /tmp}
-            - {name: api-output, mountPath: /app/var/output}
       containers:
-        - name: srvapp
-          image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-srvapp:replace-me-release
-          imagePullPolicy: Always
-          args: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--timeout-graceful-shutdown", "150"]
-          ports:
-            - {name: http, containerPort: 8000}
-          envFrom:
-            - configMapRef:
-                name: ih-uat-remote-fund-cmt-auto-srvapp-config
-            - secretRef:
-                name: ih-uat-remote-fund-cmt-auto-srvapp-secret
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          startupProbe:
-            httpGet: {path: /api/v1/health, port: http}
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 36
-          readinessProbe:
-            httpGet: {path: /api/v1/health, port: http}
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 3
-          livenessProbe:
-            httpGet: {path: /api/v1/health, port: http}
-            periodSeconds: 30
-            timeoutSeconds: 5
-            failureThreshold: 3
-          resources:
-            requests: {cpu: "250m", memory: "512Mi"}
-            limits: {cpu: "2", memory: "2Gi"}
-          volumeMounts:
-            - {name: api-tmp, mountPath: /tmp}
-            - {name: api-output, mountPath: /app/var/output}
-        - name: worker
-          image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-srvapp:replace-me-release
-          imagePullPolicy: Always
-          args: ["celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=2", "--pidfile=/tmp/celery.pid"]
-          envFrom:
-            - configMapRef:
-                name: ih-uat-remote-fund-cmt-auto-srvapp-config
-            - secretRef:
-                name: ih-uat-remote-fund-cmt-auto-srvapp-secret
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          startupProbe:
-            exec:
-              command: ["sh", "-c", "test -s /tmp/celery.pid && kill -0 \"$(cat /tmp/celery.pid)\""]
-            periodSeconds: 5
-            failureThreshold: 24
-          readinessProbe:
-            exec:
-              command: ["sh", "-c", "test -s /tmp/celery.pid && kill -0 \"$(cat /tmp/celery.pid)\""]
-            periodSeconds: 10
-            timeoutSeconds: 3
-          livenessProbe:
-            exec:
-              command: ["sh", "-c", "test -s /tmp/celery.pid && kill -0 \"$(cat /tmp/celery.pid)\""]
-            periodSeconds: 30
-            timeoutSeconds: 3
-            failureThreshold: 3
-          resources:
-            requests: {cpu: "500m", memory: "1Gi"}
-            limits: {cpu: "2", memory: "3Gi"}
-          volumeMounts:
-            - {name: worker-tmp, mountPath: /tmp}
-            - {name: worker-output, mountPath: /app/var/output}
+      - name: srvapp
+        image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-srvapp:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: ih-uat-remote-fund-cmt-auto-srvapp-config
+        - secretRef:
+            name: ih-uat-remote-fund-cmt-auto-srvapp-secret
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: output
+          mountPath: /app/var/output
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        startupProbe:
+          httpGet:
+            path: /api/v1/health
+            port: http
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        readinessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
       volumes:
-        - name: api-tmp
-          emptyDir: {sizeLimit: 768Mi}
-        - name: api-output
-          emptyDir: {sizeLimit: 512Mi}
-        - name: worker-tmp
-          emptyDir: {sizeLimit: 768Mi}
-        - name: worker-output
-          emptyDir: {sizeLimit: 512Mi}
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: output
+        emptyDir:
+          sizeLimit: 1Gi
+      initContainers:
+      - name: migrate
+        image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-srvapp:latest
+        imagePullPolicy: Always
+        envFrom:
+        - configMapRef:
+            name: ih-uat-remote-fund-cmt-auto-srvapp-config
+        - secretRef:
+            name: ih-uat-remote-fund-cmt-auto-srvapp-secret
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: output
+          mountPath: /app/var/output
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        args:
+        - python
+        - -m
+        - alembic
+        - upgrade
+        - head

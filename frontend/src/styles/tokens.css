@@ -8,7 +8,7 @@
  * Naming map: colors.x -> --color-x · rounded.x -> --radius-x · spacing.x -> --space-x
  *             typography.x -> --font-x / --text-x / --weight-x / --leading-x
  */
-:root {
+.fund-cmt-surface {
 	/* ===== Primary & neutrals ===== */
 	--color-primary: #2361ad;
 	--color-primary-hover: #1a4e8a;
@@ -183,7 +183,7 @@
 }
 
 /* Dark mode overrides dark-* tokens only; component structure is untouched. */
-body.dark-mode {
+.fund-cmt-surface.dark-mode {
 	--color-background: #0f172a;
 	--color-background-overlay: rgba(15, 23, 42, .82);
 	--color-surface: rgba(30, 41, 59, .72);

@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.core import entra
 from app.core.config import ConfigurationError, settings
+from app.core.logging_setup import configure_logging
 from app.core.security import AuthorizationMiddleware
 
 
@@ -34,6 +35,7 @@ def _verify_deployment_configuration() -> None:
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     _verify_deployment_configuration()
     # Imported here, not at module scope, so the guard above is genuinely the first thing that
     # runs. `app.api.routes` pulls in the object-storage backend, which raises on a STORAGE_BACKEND

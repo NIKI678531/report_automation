@@ -17,7 +17,7 @@
  * 1. Base
  * ===================================================================== */
 
-:root {
+.fund-cmt-surface {
 	font-family: var(--font-sans);
 	color: var(--color-text);
 	background: var(--color-background);
@@ -27,7 +27,15 @@
 
 * { box-sizing: border-box; }
 
-body {
+/* Contain fixed dialogs/backgrounds within the remote surface. */
+.fund-cmt-surface {
+	position: relative;
+	contain: layout style;
+	isolation: isolate;
+	min-height: 100vh;
+}
+
+.fund-cmt-surface {
 	margin: 0;
 	min-width: 320px;
 	font-size: var(--text-body-md);
@@ -37,7 +45,7 @@ body {
 
 /* Liquid background layer: z-bg, non-interactive, sits under every surface and gives the glass
  * something to refract. A CSS gradient mesh stands in for the WebGL layer used elsewhere. */
-body::before {
+.fund-cmt-surface::before {
 	content: "";
 	position: fixed;
 	inset: 0;
@@ -47,7 +55,7 @@ body::before {
 }
 
 /* Readability guard over the dynamic background. */
-body::after {
+.fund-cmt-surface::after {
 	content: "";
 	position: fixed;
 	inset: 0;

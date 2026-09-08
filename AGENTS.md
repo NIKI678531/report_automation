@@ -7,12 +7,12 @@
 ## 技术与依赖
 
 - 后端：Python 3.12+、FastAPI、Pydantic v2、SQLAlchemy 2、Alembic、PyMySQL
-- 前端：React + TypeScript + Vite
+- 前端：React 18 + TypeScript + Webpack Module Federation（Vitest 使用 Vite 转换）
 - 任务：Celery + Redis
 - 数据：**上线一律 MySQL 8（utf8mb4）**；SQLite 只是本地回退，部署进程会拒绝以 SQLite 启动 + 对象存储
-- 认证：`AUTH_MODE=LOCAL`（请求头断言身份，仅限本机）/ `AUTH_MODE=ENTRA`（校验 Microsoft Entra
+- 认证：`AUTH_MODE=REMOTE`（远程平台准入，共享操作身份）/ `AUTH_MODE=LOCAL`（请求头断言身份，仅限本机）/ `AUTH_MODE=ENTRA`（校验 Microsoft Entra
   访问令牌，需装 `entra` extra，即 `pyjwt[crypto]`）
-- 产物存储：`STORAGE_BACKEND=LOCAL`（写 `var/output`，仅本机/UAT）/ `STORAGE_BACKEND=S3`
+- 产物存储：`STORAGE_BACKEND=LOCAL`（写 `var/output`，仅本机）/ `STORAGE_BACKEND=S3`
   （任何 S3 兼容对象存储：火山 TOS、MinIO、AWS S3，需 `storage` extra 即 `boto3`）
 - 渲染：Jinja2 规范 HTML → Playwright/Chromium PDF；python-docx 生成 DOCX
 - Python 包管理：`pip -e ./backend[dev,render]`（`backend/pyproject.toml`；上线加 `entra,storage`。
@@ -21,7 +21,7 @@
 
 ## 启动与常用命令
 
-- 前端开发：`npm run dev`（Vite，`http://localhost:5173`，`/api` 代理到 8000）
+- 前端开发：`npm run dev`（Webpack，`http://localhost:3030/remote/fund-cmt-auto/`，remote API 代理到 8000）
 - 后端开发：`.\.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --reload --port 8000`
 - 后端测试：`.\.venv\Scripts\python -m pytest backend/tests`
   - `backend/tests/fixtures/` 是批准的基准数据（照已发布报告转录的金标准、供应商 EOD 样本），
@@ -34,7 +34,7 @@
   （该用例会先 downgrade 到 base，切勿指向有数据的库）
 - 前端测试：`npm test`；生产构建：`npm run build`
 - 迁移：`cd backend && python -m alembic upgrade head`
-- 全栈容器：`docker compose up --build`（api / worker / web / mysql / redis）
+- 全栈容器：`docker compose up --build`（仅用户手动验证镜像，参见 `k8s/README.md`）
 - 上线前自检：`.\.venv\Scripts\python scripts/check_deployment.py [--token "$ACCESS_TOKEN"]`
   （跑一遍会拒绝启动的那些检查，外加数据库可连/是否在 head/列是否 utf8mb4、JWKS 是否可达、
   产物桶是否可达；给了 token 还会解析出真实的 subject / 角色 / 产品范围。退出码非 0 表示该环境
@@ -45,19 +45,19 @@
 
 ## 容器与部署现状
 
-- `compose.yaml`：`db(mysql) + redis + api + worker + web(nginx)`
-- 机密一律来自环境：`compose.yaml` 用 `${VAR:?message}` 引用，缺失即报名退出，绝不落默认口令。
-  模板见根目录 `.env.example`（部署机密）与 `backend/.env.example`（服务设置）
-- `db` 以 `--character-set-server=utf8mb4` 启动，api/worker 连接串带 `?charset=utf8mb4`；
-  MySQL 旧版三字节 `utf8` 会截断报告里的繁简中文
-- `api` 有 healthcheck，`web` 依赖其 healthy，滚动发布不会把流量打到迁移未完成的实例
-- 报告字体属于输出契约，不是系统偏好：模板首选 Calibri、3033 基准也是按 Calibri 度量测的，
-  所以凡是要渲染报告的 Linux 镜像/runner 都装 `fonts-crosextra-carlito`（度量兼容、可再分发）
-  加 `fonts-noto-cjk` **和** `fonts-noto-cjk-extra`。`backend/Dockerfile` 与
-  `.github/workflows/ci.yml` 必须同步。缺了它 Chromium 会退到 Arial，整页重排，
-  看起来像渲染回归，其实是少装了一个包。
-- 前端镜像多阶段构建：`node:24-alpine` 执行 `npm ci && npm run build`，产物交给 `nginx:1.29-alpine`
-- CI（`.github/workflows/ci.yml`）：pytest → `npm ci` → `npm test` → `npm run build`
+- 以用户提供的 deploy-conventions（2026-09）为基础，项目适配见 `docs/adr/0026-remote-app-deployment-conventions.md`。
+- 部署手册为 `k8s/README.md`；UAT / PRD 的 EKS 清单位于 `k8s/uat` / `k8s/prd`，namespace 为 `ih`。
+- 根目录 `docker-compose.uat.yml` / `docker-compose.prd.yml` 只用于构建推送；旧 VM 文件已移除。
+- `compose.yaml` 仅作用户手动镜像验证：临时 MySQL/Redis + migrate/srvapp/worker/webapp，不自动启动。
+- 远程应用平台负责入口和访问准入；无独立 Ingress、域名、证书和登录。
+  `AUTH_MODE=REMOTE` 使用共享 `remote-app` 身份，仍执行 MySQL/S3/签名密钥/测试通道校验。
+  `LOCAL` 只用于工作站；现有可选 `ENTRA` 能力不属于本次部署。
+- Secret 来自根目录 `.env.<env>`，模板 `.env.<env>.example`；`k8s/create-secret.sh` 解析而非 source。
+- 镜像非 root、只读根文件系统，仅有界 emptyDir/tmpfs 可写；数据与产物存外部 MySQL/TOS。
+- `backend/requirements.lock` 在 Linux Python 3.12 生成，Dockerfile 做离线依赖漂移检查。
+- 报告字体固定安装 `fonts-crosextra-carlito`、`fonts-noto-cjk`、`fonts-noto-cjk-extra`，与 CI 同步。
+- 前端 npm workspaces / Node 24 构建，nginx-unprivileged 在 3030 运行，`/remote/fund-cmt-auto/api/v1` 反代到 `/api/v1`；接入见 `k8s/REMOTE.md`。
+- `.github/workflows/auto-docker-image-build.yml` 仅手动构建推送 latest + git SHA，不部署集群。
 
 ## 代码位置约定
 
@@ -101,7 +101,8 @@
 
 ### 安全边界
 
-- 两种身份来源，一条执行路径。`LOCAL` 是**断言**身份（请求头），`ENTRA` 是**证明**身份（签名令牌）；
+- REMOTE 使用共享 `remote-app` 身份，由远程应用平台控制访问，不提供独立登录。
+- LOCAL / ENTRA 使用原有身份校验路径。`LOCAL` 是**断言**身份（请求头），`ENTRA` 是**证明**身份（签名令牌）；
   `ENTRA` 下请求头一律忽略，否则拿 VIEWER 令牌的人只要加一个 `X-User-Role: ADMIN` 就成了管理员。
 - 角色序：`VIEWER < EDITOR < REVIEWER < ADMIN`。VIEWER 全站只读；finalize 需 REVIEWER/ADMIN；
   产品目录、行业主数据、映射档案的写入需 ADMIN。

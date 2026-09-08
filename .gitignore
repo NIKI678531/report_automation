@@ -16,6 +16,8 @@ __pycache__/
 # variables a deployer has to supply must be readable from a fresh clone.
 !.env.example
 !**/.env.example
+!.env.uat.example
+!.env.prd.example
 k8s/*/secrets/
 k8s/secret-readiness.local.md
 *.log
@@ -231,3 +233,6 @@ tmp/pdfs/zh-hans-validation/page-2-latest.png
 tmp/pdfs/zh-hans-validation/page-2.png
 tmp/pdfs/zh-hans-validation/page-3.png
 tmp/pdfs/zh-hans-validation/page-4.png
+
+# Local reference clones used for remote integration review
+/var/remote-references/

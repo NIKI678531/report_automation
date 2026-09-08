@@ -1,3 +1,5 @@
+import { apiUrl, artifactUrl } from "./remoteConfig";
+
 export type ReportStatus = "DRAFT" | "DATA_READY" | "EDITING" | "QA_BLOCKED" | "READY_TO_FINALIZE" | "REVIEW" | "FINALIZED" | "ARCHIVED";
 export type OutputFormat = "pdf" | "html" | "docx";
 export type ReportLanguage = "EN" | "ZH_HANS" | "ZH_HANT" | "BILINGUAL";
@@ -343,7 +345,7 @@ async function envelopeOf(response: Response): Promise<ErrorEnvelope> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isForm = init?.body instanceof FormData;
-  const response = await fetch(`/api/v1${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...init,
     headers: { ...(!isForm ? { "Content-Type": "application/json" } : {}), "X-Request-ID": crypto.randomUUID(), ...init?.headers },
   });
@@ -413,5 +415,5 @@ export const api = {
     const items = selections.map((item, position) => typeof item === "string" ? { news_item_id: item, position } : item);
     return request<{ version: number }>(`/reports/${id}/news`, { method: "PUT", body: JSON.stringify({ version, items }) });
   },
-  downloadArtifact: async (id: string) => { const signed = await request<{ download_url: string }>(`/artifacts/${id}/download`); window.location.assign(signed.download_url); },
+  downloadArtifact: async (id: string) => { const signed = await request<{ download_url: string }>(`/artifacts/${id}/download`); window.location.assign(artifactUrl(signed.download_url)); },
 };

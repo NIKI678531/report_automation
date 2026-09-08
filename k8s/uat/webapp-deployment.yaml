@@ -3,21 +3,30 @@ kind: Deployment
 metadata:
   name: ih-uat-remote-fund-cmt-auto-webapp
   namespace: ih
-  labels: {app: ih-uat-remote-fund-cmt-auto, component: webapp, env: uat}
+  labels:
+    app: ih-uat-remote-fund-cmt-auto
+    component: webapp
+    env: uat
 spec:
   replicas: 1
-  revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
-    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
-    matchLabels: {app: ih-uat-remote-fund-cmt-auto, component: webapp}
+    matchLabels:
+      app: ih-uat-remote-fund-cmt-auto
+      component: webapp
   template:
     metadata:
-      labels: {app: ih-uat-remote-fund-cmt-auto, component: webapp, env: uat}
+      labels:
+        app: ih-uat-remote-fund-cmt-auto
+        component: webapp
+        env: uat
     spec:
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 60
+      terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
         runAsUser: 101
@@ -26,40 +35,58 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: webapp
-          image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-webapp:replace-me-release
-          imagePullPolicy: Always
-          ports:
-            - {name: http, containerPort: 8080}
-          envFrom:
-            - configMapRef:
-                name: ih-uat-remote-fund-cmt-auto-webapp-config
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          startupProbe:
-            httpGet: {path: /healthz, port: http}
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 24
-          readinessProbe:
-            httpGet: {path: /healthz, port: http}
-            periodSeconds: 10
-            timeoutSeconds: 3
-          livenessProbe:
-            httpGet: {path: /healthz, port: http}
-            periodSeconds: 30
-            timeoutSeconds: 3
-          resources:
-            requests: {cpu: "50m", memory: "64Mi"}
-            limits: {cpu: "500m", memory: "256Mi"}
-          volumeMounts:
-            - {name: nginx-conf, mountPath: /etc/nginx/conf.d}
-            - {name: tmp, mountPath: /tmp}
-      volumes:
-        - name: nginx-conf
-          emptyDir: {sizeLimit: 1Mi}
+      - name: webapp
+        image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-webapp:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 3030
+        envFrom:
+        - configMapRef:
+            name: ih-uat-remote-fund-cmt-auto-webapp-config
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
         - name: tmp
-          emptyDir: {sizeLimit: 256Mi}
+          mountPath: /tmp
+        - name: nginx-conf
+          mountPath: /etc/nginx/conf.d
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 36
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: nginx-conf
+        emptyDir:
+          sizeLimit: 1Mi

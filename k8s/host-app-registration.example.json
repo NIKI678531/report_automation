@@ -1,0 +1,11 @@
+{
+  "app_name": "fundCmtAuto",
+  "app_title": "月度基金评论",
+  "remote_url": "/remote/fund-cmt-auto/remoteEntry.js",
+  "remote_scope": "fundCmtAuto",
+  "remote_module": "./App",
+  "route": "/fund-cmt-auto",
+  "is_remote": true,
+  "is_enabled": true,
+  "show_on_homepage": true
+}

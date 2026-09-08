@@ -1,0 +1,79 @@
+# Keep the original scheme supplied by the remote application platform.
+map $http_x_forwarded_proto $commentary_forwarded_proto {
+    default $scheme;
+    http http;
+    https https;
+}
+# Query strings may contain signed artifact download credentials.
+log_format remote_app '$remote_addr - $request_method $uri $status $body_bytes_sent';
+server {
+    listen 3030;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+    server_tokens off;
+    absolute_redirect off;
+    access_log /dev/stdout remote_app;
+    client_max_body_size 101m;
+    client_body_timeout 120s;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+    location ^~ /remote/fund-cmt-auto/api/ {
+        # Strip only the platform namespace, retaining FastAPI's /api/v1.
+        proxy_pass http://${API_UPSTREAM}/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $commentary_forwarded_proto;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
+    }
+    location = /remote/fund-cmt-auto/remoteEntry.js {
+        try_files /remoteEntry.js =404;
+        add_header Cache-Control "no-store" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header X-Content-Type-Options nosniff always;
+    }
+    location ~ ^/remote/fund-cmt-auto/(?<remote_asset>(?:assets/[^/]+|[^/]+\.[a-f0-9]+\.js))$ {
+        try_files /$remote_asset =404;
+        expires 1y;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header X-Content-Type-Options nosniff always;
+    }
+    location = /remote/fund-cmt-auto {
+        return 302 /remote/fund-cmt-auto/;
+    }
+    location = /remote/fund-cmt-auto/ {
+        try_files /index.html =404;
+        add_header Cache-Control "no-store" always;
+    }
+    location = /remote/fund-cmt-auto/index.html {
+        try_files /index.html =404;
+        add_header Cache-Control "no-store" always;
+    }
+    location ~ ^/remote/fund-cmt-auto/reports(?:/[^.]*)?$ {
+        try_files /index.html =404;
+        add_header Cache-Control "no-store" always;
+    }
+    location = / {
+        return 302 /remote/fund-cmt-auto/;
+    }
+    location / {
+        # Missing chunks and unknown API paths must not turn into HTML 200s.
+        return 404;
+    }
+}

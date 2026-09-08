@@ -3,9 +3,16 @@ kind: Service
 metadata:
   name: ih-uat-remote-fund-cmt-auto-srvapp
   namespace: ih
-  labels: {app: ih-uat-remote-fund-cmt-auto, component: srvapp, env: uat}
+  labels:
+    app: ih-uat-remote-fund-cmt-auto
+    component: srvapp
+    env: uat
 spec:
   type: ClusterIP
-  selector: {app: ih-uat-remote-fund-cmt-auto, component: srvapp}
+  selector:
+    app: ih-uat-remote-fund-cmt-auto
+    component: srvapp
   ports:
-    - {name: http, port: 8000, targetPort: http, protocol: TCP}
+  - name: http
+    port: 8000
+    targetPort: http

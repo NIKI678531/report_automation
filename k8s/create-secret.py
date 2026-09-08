@@ -1,72 +1,81 @@
+"""Apply one complete environment Secret without sourcing shell or printing its contents."""
 import argparse
 import base64
 import json
 from pathlib import Path
-import re
 import subprocess
 
-from dotenv import dotenv_values
-
-
-ROOT = Path(__file__).resolve().parent
-REQUIRED = {"DATABASE_URL", "REDIS_URL", "DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"}
+ROOT = Path(__file__).resolve().parents[1]
+KEYS = (
+    "DATABASE_URL", "DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY",
+    "DA_REPORT_OBJECT_URL", "DA_REPORT_SQLITE_SHA256", "DATAWAREHOUSE_MYSQL_HOST",
+    "DATAWAREHOUSE_MYSQL_DATABASE", "DATAWAREHOUSE_MYSQL_USERNAME", "DATAWAREHOUSE_MYSQL_PASSWORD",
+    "FMP_API_KEY", "MARKETAUX_API_KEY", "TRANSLATION_API_KEY",
+)
+REQUIRED = {"DATABASE_URL", "DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"}
 
 
 def build_secret(environment: str, namespace: str, env_file: Path) -> dict:
     if environment not in {"uat", "prd"}:
         raise ValueError("Environment must be uat or prd.")
-    if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?", namespace) or "replace-me" in namespace:
-        raise ValueError("Supply the namespace confirmed by the platform team.")
-    if not env_file.is_file():
-        raise ValueError("The environment secret file does not exist.")
-    expected = set(dotenv_values(ROOT / environment / ".env.example", interpolate=False))
-    values = dotenv_values(env_file, interpolate=False)
-    if set(values) != expected:
-        raise ValueError("Secret keys must exactly match the environment template, including optional keys.")
-    if any(not values.get(key) or "replace-me" in values[key].lower() for key in REQUIRED):
-        raise ValueError("Required secret values must be filled from the approved secret store.")
-    if any(value is None for value in values.values()):
-        raise ValueError("Each key must have an equals sign; unused optional values may be empty.")
+    if namespace != "ih":
+        raise ValueError("This deployment uses the platform namespace ih.")
+    values = {}
+    for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key not in KEYS or key in values:
+            raise ValueError("Invalid, duplicate or unexpected secret key; values suppressed.")
+        # Match Compose raw env_file: no interpolation, shell evaluation or quote removal.
+        if value.startswith(("'", '\"')):
+            raise ValueError("Use literal KEY=value without surrounding quotes.")
+        values[key] = value
+    if set(values) != set(KEYS):
+        raise ValueError("Supply every key from .env.<env>.example, including empty optional keys.")
+    if any(not values[key].strip() or "replace-me" in values[key].lower() for key in REQUIRED):
+        raise ValueError("Fill every required secret from the environment's secret store.")
     if len(values["DOWNLOAD_SECRET"]) < 32:
         raise ValueError("DOWNLOAD_SECRET must contain at least 32 generated characters.")
     base = f"ih-{environment}-remote-fund-cmt-auto"
-    return {
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {
-            "name": f"{base}-srvapp-secret",
-            "namespace": namespace,
-            "labels": {"app": base, "component": "srvapp", "env": environment},
-        },
-        "type": "Opaque",
-        "data": {key: base64.b64encode(value.encode("utf-8")).decode("ascii") for key, value in values.items()},
-    }
+    return {"apiVersion": "v1", "kind": "Secret", "metadata": {
+        "name": f"{base}-srvapp-secret", "namespace": namespace,
+        "labels": {"app": base, "component": "srvapp", "env": environment},
+    }, "type": "Opaque", "data": {
+        key: base64.b64encode(values[key].encode()).decode("ascii") for key in KEYS
+    }}
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate and apply one complete environment Secret without printing values.")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("environment", choices=("uat", "prd"))
-    parser.add_argument("--namespace", required=True)
-    parser.add_argument("--context", required=True)
-    parser.add_argument("--env-file", type=Path, required=True)
-    parser.add_argument("--check", action="store_true", help="Validate locally; do not contact Kubernetes.")
-    arguments = parser.parse_args()
+    parser.add_argument("--context", help="Explicit target kubectl context; required unless --check.")
+    parser.add_argument("--env-file", type=Path)
+    parser.add_argument("--check", action="store_true", help="Validate locally without contacting Kubernetes.")
+    args = parser.parse_args()
+    if not args.check and not args.context:
+        parser.error("--context is required when applying a Secret.")
     try:
-        secret = build_secret(arguments.environment, arguments.namespace, arguments.env_file)
-    except ValueError as error:
-        parser.exit(1, f"{error}\n")
-    if arguments.check:
-        print(f"Validated {len(secret['data'])} secret keys; no cluster operation performed.")
-        return 0
-    result = subprocess.run(
-        ["kubectl", "--context", arguments.context, "--namespace", arguments.namespace,
-         "apply", "--server-side", "--field-manager=fund-commentary-secrets", "-f", "-"],
-        input=json.dumps(secret), text=True, capture_output=True, timeout=60,
-    )
-    if result.returncode:
-        print("Secret apply failed. Ask the platform team to verify context, namespace, RBAC and field ownership; values were not printed.")
+        secret = build_secret(args.environment, "ih", args.env_file or ROOT / f".env.{args.environment}")
+    except (ValueError, OSError):
+        print("Secret validation failed: check the file, literal format and complete keys; values suppressed.")
         return 1
-    print(f"Updated {secret['metadata']['name']} in {arguments.namespace}. Restart backend pods after an approved configuration change.")
+    if args.check:
+        print(f"Validated {len(secret['data'])} keys; no cluster operation performed.")
+        return 0
+    try:
+        result = subprocess.run(
+            ["kubectl", "--context", args.context, "--namespace", "ih", "apply", "--server-side",
+             "--field-manager=fund-commentary-secrets", "-f", "-"],
+            input=json.dumps(secret), text=True, capture_output=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        print("Secret apply failed or timed out; values suppressed.")
+        return 1
+    if result.returncode:
+        print("Secret apply failed: check context, RBAC and field ownership; values suppressed.")
+        return 1
+    print(f"Updated {secret['metadata']['name']}; restart the backend Deployment to use changed values.")
     return 0
 
 

@@ -1,0 +1,13 @@
+# Build/push only. Runtime configuration lives in k8s; local image validation uses compose.yaml.
+name: fund-commentary-prd
+services:
+  srvapp:
+    image: 449732370091.dkr.ecr.ap-east-1.amazonaws.com/ih-prd-remote-fund-cmt-auto-srvapp:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+  webapp:
+    image: 449732370091.dkr.ecr.ap-east-1.amazonaws.com/ih-prd-remote-fund-cmt-auto-webapp:latest
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile

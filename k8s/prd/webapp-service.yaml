@@ -3,9 +3,16 @@ kind: Service
 metadata:
   name: ih-prd-remote-fund-cmt-auto-webapp
   namespace: ih
-  labels: {app: ih-prd-remote-fund-cmt-auto, component: webapp, env: prd}
+  labels:
+    app: ih-prd-remote-fund-cmt-auto
+    component: webapp
+    env: prd
 spec:
   type: ClusterIP
-  selector: {app: ih-prd-remote-fund-cmt-auto, component: webapp}
+  selector:
+    app: ih-prd-remote-fund-cmt-auto
+    component: webapp
   ports:
-    - {name: http, port: 80, targetPort: http, protocol: TCP}
+  - name: http
+    port: 3030
+    targetPort: http

@@ -39,7 +39,7 @@ MAX_UTF8MB4_INDEX_CHARS = 3072 // 4
 def _config(url: str) -> Config:
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "migrations"))
-    config.set_main_option("sqlalchemy.url", url)
+    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     return config
 
 
@@ -216,3 +216,21 @@ def test_migrations_apply_to_a_real_mysql_database():
     assert set(charsets) == {"utf8mb4"}, charsets
     command.check(config)
     command.downgrade(config, "base")
+
+
+def test_migration_runtime_url_preserves_percent_encoded_password_without_connecting(monkeypatch):
+    import runpy
+    from unittest.mock import patch
+    from app.core.config import settings
+
+    url = "mysql+pymysql://user:encoded%40password%25@db.invalid/app?charset=utf8mb4"
+    config = Config()
+    config.set_main_option("sqlalchemy.url", "")
+    monkeypatch.setattr(settings, "database_url", url)
+    with patch("alembic.context.config", config, create=True), \
+         patch("alembic.context.is_offline_mode", return_value=True), \
+         patch("alembic.context.configure") as configure, \
+         patch("alembic.context.begin_transaction"), \
+         patch("alembic.context.run_migrations"):
+        runpy.run_path(str(BACKEND_ROOT / "migrations" / "env.py"))
+    assert configure.call_args.kwargs["url"] == url

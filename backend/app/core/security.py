@@ -1,6 +1,7 @@
 """The authorization boundary: who the caller is, and what that lets them do.
 
-Two identity sources, one enforcement path. In ``LOCAL`` mode the caller *asserts* an identity
+Three identity sources, one enforcement path. ``REMOTE`` uses a fixed shared actor behind the
+remote application platform, without an application login. In ``LOCAL`` mode the caller *asserts* an identity
 through ``X-User-Role`` / ``X-User-ID`` / ``X-Product-Scope`` headers, which is fine on a
 workstation and worthless as security. In ``ENTRA`` mode the identity is *proved* by a signed
 access token (see :mod:`app.core.entra`) and headers are ignored entirely - otherwise a caller
@@ -134,6 +135,11 @@ def _entra_principal(headers: Headers) -> Principal | TokenError:
 
 def resolve_principal(headers: Headers) -> Principal | TokenError:
     """Identify the caller using the configured authentication mode."""
+    # The hosting platform admits remote-app users; there is no app-level login.
+    # A shared actor is explicit: request headers must not forge audit identities.
+    # REMOTE still runs deployment/storage guards, unlike workstation-only LOCAL.
+    if settings.auth_mode == "REMOTE":
+        return Principal(subject="remote-app", role="ADMIN", product_scope=frozenset({UNRESTRICTED_SCOPE}))
     return _local_principal(headers) if settings.is_local_auth else _entra_principal(headers)
 
 

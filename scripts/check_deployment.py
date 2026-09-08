@@ -55,7 +55,7 @@ if _arguments.env_file:
     _env_path = Path(_arguments.env_file).expanduser()
     if not _env_path.is_file():
         raise SystemExit(f"--env-file {_env_path} does not exist.")
-    load_dotenv(_env_path, override=True)
+    load_dotenv(_env_path, override=True, interpolate=False)
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -188,6 +188,9 @@ def check_database() -> None:
 
 def check_identity(token: str | None, skip_network: bool) -> None:
     section("Identity")
+    if settings.auth_mode == "REMOTE":
+        report(OK, "REMOTE: hosting platform controls access; shared application actor remote-app; no Entra login.")
+        return
     if settings.is_local_auth:
         report(WARN, "Skipped: LOCAL mode validates nothing. Set AUTH_MODE=ENTRA to check the tenant.")
         if token:

@@ -1,0 +1,35 @@
+# Configuration and credentials never enter either build context.
+.env*
+**/.env*
+.git/
+**/.git/
+.github/
+**/node_modules/
+node_modules/
+**/dist/
+dist/
+**/tests/
+tests/
+k8s/
+deploy/
+docs/
+var/
+**/.venv/
+.venv/
+**/__pycache__/
+**/*.pyc
+**/*.egg-info/
+**/.pytest_cache/
+**/*.tsbuildinfo
+**/*.db
+**/*.sqlite*
+**/*.sql*
+**/*.pem
+**/*.key
+**/*.pfx
+**/*.p12
+**/*secret*.yaml
+**/credentials*
+**/*.log
+**/*.zip
+# Dockerfile uses the root context; root .dockerignore is authoritative.
