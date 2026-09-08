@@ -223,12 +223,27 @@ export interface Report {
   active_snapshot_id: string | null;
   parent_report_id?: string | null;
   translation_source_report_id?: string | null;
+  translation_enabled?: boolean;
+  translation_source_language_mode?: ReportLanguage | null;
   finalized_document_version: number | null;
   latest_document?: { version: number; checksum: string; content: Record<string, unknown> } | null;
   quality_results?: Array<{ check_id: string; status: string; severity: string; fix_hint: string }>;
   artifacts?: Array<{ id: string; format: OutputFormat; size_bytes: number; checksum: string; document_version?: number; renderer_version?: string; language_mode?: ReportLanguage; is_current?: boolean }>;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface TranslationJob {
+  id: string;
+  source_report_id: string;
+  target_report_id: string;
+  source_document_version: number;
+  target_document_version: number;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  result_document_version: number | null;
+  preserved_fields: string[];
+  error: { error_code: string; message?: string; retryable?: boolean } | null;
+  request_id: string;
 }
 
 export interface RenderJob {
@@ -352,6 +367,9 @@ export const api = {
   createReport: (report_date: string, product_code = "3033", language_mode?: Extract<ReportLanguage, "EN" | "ZH_HANS" | "ZH_HANT">) => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date, ...(language_mode ? { language_mode } : {}) }) }),
   createLanguageVariant: (sourceReportId: string, language_mode: Extract<ReportLanguage, "EN" | "ZH_HANS" | "ZH_HANT">, source_document_version: number) => request<Report>(`/reports/${sourceReportId}/language-variants`, { method: "POST", body: JSON.stringify({ language_mode, source_document_version }) }),
   syncLanguageVariant: (sourceReportId: string, targetReportId: string, source_document_version: number, target_document_version: number) => request<Report>(`/reports/${sourceReportId}/language-variants/${targetReportId}/sync`, { method: "POST", body: JSON.stringify({ source_document_version, target_document_version }) }),
+  translateReport: (sourceReportId: string, targetReportId: string, source_document_version: number, target_document_version: number, key: string) => request<TranslationJob>(`/reports/${sourceReportId}/language-variants/${targetReportId}/translations`, { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify({ source_document_version, target_document_version }) }),
+  getTranslationJob: (reportId: string, jobId: string) => request<TranslationJob>(`/reports/${reportId}/translation-jobs/${jobId}`),
+  latestTranslation: (reportId: string) => request<TranslationJob | null>(`/reports/${reportId}/translation-jobs/latest`),
   deleteReport: (id: string, version: number) => request<void>(`/reports/${id}?version=${version}`, { method: "DELETE" }),
   refreshAutomaticData: (id: string, version: number) => request<{ changed: boolean; snapshot?: unknown }>(`/reports/${id}/automatic-data/refresh`, { method: "POST", body: JSON.stringify({ version }) }),
   calculate: (id: string) => request<CalculationResult>(`/reports/${id}/calculations`, { method: "POST", body: JSON.stringify({}) }),

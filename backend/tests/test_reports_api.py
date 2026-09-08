@@ -11,6 +11,15 @@ def create_report(client):
     return response.json()
 
 
+def all_docx_text(document: Document) -> str:
+    """Include text in nested tables, which python-docx's top-level table list omits."""
+    return "\n".join(
+        str(node.text)
+        for node in document.element.body.iter()
+        if node.tag.endswith("}t") and node.text
+    )
+
+
 def test_delete_draft_soft_deletes_it_from_the_report_list_and_keeps_audit(client):
     report = create_report(client)
 
@@ -117,7 +126,9 @@ def test_report_golden_lifecycle_and_preview(client):
     preview = client.post(f"/api/v1/reports/{report['id']}/preview")
     assert preview.status_code == 200
     assert preview.text.count('class="report-page"') == 4
-    assert "The Performance of HSTECH Constituents" in preview.text
+    assert "The Performance of 3033.HK Constituents" in preview.text
+    assert "Top 10 3033.HK Constituents" in preview.text
+    assert "3033.HK Sectors Breakdown" in preview.text
     assert "June Technology Review" not in preview.text
     assert "Market Context" in preview.text
     assert '<svg class="donut"' in preview.text
@@ -143,6 +154,7 @@ def test_report_golden_lifecycle_and_preview(client):
     )
     assert rendered.status_code == 202, rendered.text
     assert [job["status"] for job in rendered.json()] == ["SUCCEEDED", "SUCCEEDED", "SUCCEEDED"]
+    outputs = {}
     for job in rendered.json():
         signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download")
         assert signed.status_code == 200
@@ -150,13 +162,28 @@ def test_report_golden_lifecycle_and_preview(client):
         download = client.get(signed.json()["download_url"])
         assert download.status_code == 200
         assert len(download.content) > 1000
-        if job["format"] == "pdf":
-            pdf = pdfium.PdfDocument(download.content)
-            assert len(pdf) == 4
-            first_page_text = pdf[0].get_textpage().get_text_range()
-            assert "June Technology Review" not in first_page_text
-            assert "Market Context" in first_page_text
-            assert "Forward View" in first_page_text
+        outputs[job["format"]] = download.content
+
+    expected_titles = (
+        "The Performance of 3033.HK Constituents",
+        "Top 10 3033.HK Constituents",
+        "3033.HK Sectors Breakdown",
+    )
+    html = outputs["html"].decode("utf-8")
+    assert all(title in html for title in expected_titles)
+
+    pdf = pdfium.PdfDocument(outputs["pdf"])
+    assert len(pdf) == 4
+    first_page_text = pdf[0].get_textpage().get_text_range()
+    assert "June Technology Review" not in first_page_text
+    assert "Market Context" in first_page_text
+    assert "Forward View" in first_page_text
+    pdf_text = "\n".join(page.get_textpage().get_text_range() for page in pdf)
+    assert all(title in pdf_text for title in expected_titles)
+    pdf.close()
+
+    document = Document(io.BytesIO(outputs["docx"]))
+    assert all(title in all_docx_text(document) for title in expected_titles)
     artifacts = client.get(f"/api/v1/reports/{report['id']}").json()["artifacts"]
     assert len({item["content_manifest_checksum"] for item in artifacts}) == 1
     assert artifacts[0]["content_manifest_checksum"]
@@ -367,6 +394,9 @@ def test_simplified_chinese_variant_rebuilds_snapshot_lineage_and_is_independent
     assert "人工证券名称" in html
     assert "人工行业名称" in html
     assert " million" not in html
+    assert "3033.HK 成分股表现" in html
+    assert "3033.HK 十大成分股" in html
+    assert "3033.HK 行业分布" in html
 
     import pypdfium2 as pdfium
 
@@ -377,6 +407,9 @@ def test_simplified_chinese_variant_rebuilds_snapshot_lineage_and_is_independent
     assert "月度回顾" in searchable_text
     assert "人工证券名称" in searchable_text
     assert "公司新闻" in searchable_text
+    assert "3033.HK 成分股表现" in searchable_text
+    assert "3033.HK 十大成分股" in searchable_text
+    assert "3033.HK 行业分布" in searchable_text
     pdf.close()
 
     document = Document(io.BytesIO(outputs["docx"]))
@@ -387,6 +420,10 @@ def test_simplified_chinese_variant_rebuilds_snapshot_lineage_and_is_independent
     assert "月度回顾" in docx_text
     assert "人工证券名称" in docx_text
     assert "人工行业名称" in docx_text
+    complete_docx_text = all_docx_text(document)
+    assert "3033.HK 成分股表现" in complete_docx_text
+    assert "3033.HK 十大成分股" in complete_docx_text
+    assert "3033.HK 行业分布" in complete_docx_text
 
 
 def test_language_switch_syncs_module_choices_in_both_directions(client):
@@ -674,11 +711,20 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     assert '@font-face{font-family:"Embedded Noto Sans CJK TC"' in html
     assert "人工繁體內容" in html
     assert "公司新聞" in html
+    assert "3033.HK 成分股表現" in html
+    assert "3033.HK 十大成分股" in html
+    assert "3033.HK 行業分佈" in html
 
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(outputs["pdf"])
     assert len(pdf) == 4
+    pdf_text = unicodedata.normalize(
+        "NFKC", "\n".join(page.get_textpage().get_text_range() for page in pdf)
+    )
+    assert "3033.HK 成分股表現" in pdf_text
+    assert "3033.HK 十大成分股" in pdf_text
+    assert "3033.HK 行業分佈" in pdf_text
     pdf.close()
     document = Document(io.BytesIO(outputs["docx"]))
     assert len(document.sections) == 4
@@ -688,6 +734,10 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
         + [cell.text for table in document.tables for row in table.rows for cell in row.cells]
     )
     assert "人工繁體內容" in docx_text
+    complete_docx_text = all_docx_text(document)
+    assert "3033.HK 成分股表現" in complete_docx_text
+    assert "3033.HK 十大成分股" in complete_docx_text
+    assert "3033.HK 行業分佈" in complete_docx_text
 
 
 def test_simplified_variant_converts_traditional_editorial(client):

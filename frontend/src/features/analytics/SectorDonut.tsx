@@ -54,16 +54,14 @@ export function sectorSlices(chart?: SectorChartSnapshot, locale: Locale = "en")
   });
 }
 
-export function SectorDonut({ chart }: { chart?: SectorChartSnapshot }) {
-  const { locale, t } = useLocale();
+export function SectorDonut({ chart, title }: { chart?: SectorChartSnapshot; title: string }) {
+  const { locale } = useLocale();
   const slices = sectorSlices(chart, locale);
-  const description = locale !== "en"
-    ? `${locale === "zh-Hant" ? "指數行業分佈" : "指数行业分布"}：${slices.map((slice) => `${slice.sector} ${slice.displayValue}`).join("，")}`
-    : String(chart?.alt_text ?? "") || slices.map((slice) => `${slice.sector} ${slice.displayValue}`).join(", ");
+  const description = `${title}${locale === "en" ? ": " : "："}${slices.map((slice) => `${slice.sector} ${slice.displayValue}`).join(locale === "en" ? ", " : "，")}`;
 
   return <figure className="sector-donut-figure">
     <svg className="sector-donut" viewBox="0 0 120 120" role="img" aria-labelledby="sector-donut-title sector-donut-desc">
-      <title id="sector-donut-title">{t("sectorBreakdown")}</title>
+      <title id="sector-donut-title">{title}</title>
       <desc id="sector-donut-desc">{description}</desc>
       <circle className="sector-donut-track" cx="60" cy="60" r="44" pathLength="100" />
       {slices.map((slice, index) => <circle

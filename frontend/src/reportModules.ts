@@ -41,10 +41,6 @@ interface InitialReportItem extends ReportContextItem {
 	created_at?: string;
 }
 
-interface ConstituentIndexIdentity {
-	constituent_index_code: string;
-}
-
 interface ReviewBlockContent {
 	block_id?: unknown;
 	type?: unknown;
@@ -108,8 +104,8 @@ export function reportPageEyebrow(moduleId: ModuleId, detail: string): string {
 	return `Page ${pageLabel} · ${detail}`;
 }
 
-export function reportConstituentsTitle(report: ConstituentIndexIdentity): string {
-	return `The Performance of ${report.constituent_index_code} Constituents`;
+export function reportConstituentsTitle(report: ReportIdentity): string {
+	return `The Performance of ${reportProductTicker(report)} Constituents`;
 }
 
 export function reportMonthName(report: ReportIdentity): string {
@@ -123,7 +119,9 @@ export function reportMonthName(report: ReportIdentity): string {
 
 export function reportProductTicker(report: ReportIdentity): string {
 	const stored = report.latest_document?.content.product_ticker;
-	return typeof stored === "string" && stored.trim() ? stored.trim() : report.product_code;
+	if (typeof stored === "string" && stored.trim()) return stored.trim();
+	const productCode = report.product_code.trim();
+	return /^\d{4}$/.test(productCode) ? `${productCode}.HK` : productCode;
 }
 
 export function reportsForContext<T extends ReportContextItem>(reports: T[], productCode: string, reportDate: string): T[] {

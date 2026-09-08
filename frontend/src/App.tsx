@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createBrowserRouter, RouterProvider, useBlocker, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { createBrowserRouter, RouterProvider, useBlocker, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertTriangle, Archive, ArrowLeft, CalendarDays, ChevronDown, Download, Eye, FileCheck2, FileText, Home, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { api, type OutputFormat, type Product, type RenderJob, type Report, type ReportLanguage } from "./api";
 import { type ModuleId, ModuleNav } from "./components/ModuleNav";
 import { ReportModule } from "./components/ReportModulesV2";
+import { TranslationStatus } from "./features/review/TranslationStatus";
 import type { PendingSave, RegisterPendingSave } from "./pendingSave";
 import { FOOTNOTE_SECTIONS, isReportReadOnly, reportsForContext, reviewHasContent, selectReportForMonth } from "./reportModules";
-import { useLocale, type Locale } from "./i18n";
+import { LocaleProvider, reportLocale, useLocale, type Locale } from "./i18n";
 import "./styles.css";
 
 const PRODUCT_CODE = "3033";
@@ -254,22 +255,68 @@ export function needsAutomaticBackfill(report: Report): boolean {
     && (sourceDataMissing || finalAnalyticsMissing);
 }
 
+async function loadSelectedReport(reportId: string): Promise<Report> {
+  let detail = await api.getReport(reportId);
+  if (needsAutomaticBackfill(detail)) {
+    await api.refreshAutomaticData(detail.id, detail.version);
+    detail = await api.getReport(reportId);
+  }
+  return detail;
+}
+
 function ReportWorkspace() {
   const { reportId = "" } = useParams();
-  const navigate = useNavigate();
-  const { locale, languageMode, setLocale, t, statusLabel } = useLocale();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [reports, setReports] = useState<Report[]>([]);
-  const [selected, setSelected] = useState<Report | null>(null);
-  const [reportDate, setReportDate] = useState(currentHongKongMonthEnd);
-  const [reportYearInput, setReportYearInput] = useState(() => currentHongKongMonthEnd().slice(0, 4));
   const [activeModule, setActiveModule] = useState<ModuleId>("review");
-  const [busy, setBusy] = useState(false);
+  return <ReportLoader key={reportId} reportId={reportId} activeModule={activeModule} setActiveModule={setActiveModule} />;
+}
+
+type ModuleSelection = { activeModule: ModuleId; setActiveModule: (module: ModuleId) => void };
+
+function ReportLoader({ reportId, ...moduleSelection }: { reportId: string } & ModuleSelection) {
+  const { t } = useLocale();
+  const navigate = useNavigate();
+  const [loaded, setLoaded] = useState<{ report: Report; reports: Report[]; products: Product[] } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    void Promise.all([api.listReports({ includeArchived: true }), loadSelectedReport(reportId)])
+      .then(async ([reports, report]) => {
+        const products = await api.listProducts(report.report_date);
+        if (active) setLoaded({ report, reports, products });
+      })
+      .catch((caught) => { if (active) setError(String(caught)); });
+    return () => { active = false; };
+  }, [reportId]);
+  if (loaded) return <LocaleProvider locale={reportLocale(loaded.report.language_mode)}><ReportEditor initial={loaded} {...moduleSelection} /></LocaleProvider>;
+  return <div className="shell"><AppHeader busy={!error} /><main className="app-main route-error">{error
+    ? <><FileText size={32} /><h2>{t("reportNotFound")}</h2><p>{error}</p><button className="primary" onClick={() => navigate("/")}><Home size={17} /> {t("backToReports")}</button></>
+    : <div className="report-center-loading" role="status" aria-label={t("loadingReport")}><span /><span /><span /></div>}
+  </main></div>;
+}
+
+function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { report: Report; reports: Report[]; products: Product[] } } & ModuleSelection) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const automaticSource = useRef<string | undefined>(typeof location.state?.translationSourceId === "string" ? location.state.translationSourceId : undefined);
+  const { locale, t, statusLabel } = useLocale();
+  const products = initial.products;
+  const [reports, setReports] = useState<Report[]>(initial.reports);
+  const [selected, setSelected] = useState<Report>(initial.report);
+  const reportDate = selected.report_date;
+  const languageMode = selected.language_mode;
+  const [reportYearInput, setReportYearInput] = useState(() => reportDate.slice(0, 4));
+  const [actionBusy, setBusy] = useState(false);
+  const [translationBusy, setTranslationBusy] = useState(Boolean(automaticSource.current && initial.report.translation_enabled));
+  const busy = actionBusy || translationBusy;
   const [error, setError] = useState("");
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [downloadingFormat, setDownloadingFormat] = useState<OutputFormat | null>(null);
-  const [loading, setLoading] = useState(true);
   const pendingSave = useRef<PendingSave | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const registerPendingSave = useCallback<RegisterPendingSave>((save) => {
     pendingSave.current = save;
@@ -283,37 +330,19 @@ function ReportWorkspace() {
 
   const refreshReport = useCallback(async (reportId: string): Promise<Report> => {
     const [nextReports, detail] = await Promise.all([api.listReports({ includeArchived: true }), api.getReport(reportId)]);
-    setReports(nextReports);
-    setSelected(detail);
-    return detail;
-  }, []);
-
-  const loadSelectedReport = useCallback(async (reportId: string): Promise<Report> => {
-    let detail = await api.getReport(reportId);
-    if (needsAutomaticBackfill(detail)) {
-      await api.refreshAutomaticData(detail.id, detail.version);
-      detail = await api.getReport(reportId);
+    if (mounted.current) {
+      setReports(nextReports);
+      setSelected(detail);
     }
     return detail;
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setError("");
-    void Promise.all([api.listReports({ includeArchived: true }), loadSelectedReport(reportId)])
-      .then(async ([reportItems, detail]) => {
-        const productItems = await api.listProducts(detail.report_date);
-        if (!active) return;
-        setReports(reportItems);
-        setProducts(productItems.filter((item) => item.product_code === PRODUCT_CODE));
-        setReportDate(detail.report_date);
-        setSelected(detail);
-      })
-      .catch((caught) => { if (active) { setSelected(null); setError(String(caught)); } })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [loadSelectedReport, reportId]);
+  const applyTranslation = useCallback(async () => {
+    if (pendingSave.current) return false;
+    await refreshReport(initial.report.id);
+    return true;
+  }, [refreshReport, initial.report.id]);
+  const consumeTranslation = useCallback(() => navigate(`/reports/${initial.report.id}`, { replace: true, state: null }), [navigate, initial.report.id]);
 
   useEffect(() => {
     setReportYearInput(reportDate.slice(0, 4));
@@ -357,7 +386,7 @@ function ReportWorkspace() {
     setError("");
     try {
       await flushPendingEdits();
-      navigate(path);
+      if (mounted.current) navigate(path);
     } catch (caught) {
       setError(String(caught));
       setBusy(false);
@@ -419,7 +448,7 @@ function ReportWorkspace() {
       const reportItems = await api.listReports();
       const next = selectReportForMonth(reportItems, PRODUCT_CODE, nextDate, languageMode);
       resetTransientState();
-      navigate(next ? `/reports/${next.id}` : `/reports/new?month=${nextDate.slice(0, 7)}&language=${languageMode}`);
+      if (mounted.current) navigate(next ? `/reports/${next.id}` : `/reports/new?month=${nextDate.slice(0, 7)}&language=${languageMode}`);
     } catch (caught) {
       setError(String(caught));
     } finally {
@@ -446,8 +475,8 @@ function ReportWorkspace() {
           && report.revision === selected.revision
         ))
         .sort((left, right) => right.version - left.version)[0];
-      setLocale(nextLocale);
       if (next) navigate("/reports/" + next.id, { replace: true });
+      else setError(t("noArchivedLanguage"));
       return;
     }
     setBusy(true);
@@ -490,9 +519,7 @@ function ReportWorkspace() {
       }
       resetTransientState();
       setReports(reportItems);
-      setSelected(detail);
-      setLocale(nextLocale);
-      if (detail) navigate(`/reports/${detail.id}`, { replace: true });
+      if (detail && mounted.current) navigate(`/reports/${detail.id}`, { replace: true, state: { translationSourceId: current && !isReportReadOnly(detail) && (current.language_mode === "EN" || detail.language_mode === "EN") ? current.id : undefined } });
     } catch (caught) {
       setError(String(caught));
     } finally {
@@ -513,7 +540,7 @@ function ReportWorkspace() {
     try {
       await flushPendingEdits();
       resetTransientState();
-      navigate(`/reports/${reportId}`);
+      if (mounted.current) navigate(`/reports/${reportId}`);
     } catch (caught) {
       setError(String(caught));
     } finally {
@@ -549,7 +576,7 @@ function ReportWorkspace() {
       if (!current) throw new Error(t("unavailable"));
       await api.deleteReport(current.id, current.version);
       resetTransientState();
-      navigate("/", { replace: true });
+      if (mounted.current) navigate("/", { replace: true });
     } catch (caught) {
       setError(String(caught));
     } finally {
@@ -638,9 +665,6 @@ function ReportWorkspace() {
       ? (selected?.product_name || product?.name_zh_hant || product?.ticker || "3033")
       : (product?.name_en ?? "CSOP Hang Seng TECH Index ETF");
 
-  if (loading) return <div className="shell"><AppHeader busy /><main className="app-main"><div className="report-center-loading" role="status" aria-label={t("loadingReport")}><span /><span /><span /></div></main></div>;
-  if (!selected) return <div className="shell"><AppHeader /><main className="app-main route-error"><FileText size={32} /><h2>{t("reportNotFound")}</h2><p>{error || t("reportNotFoundHelp")}</p><button className="primary" onClick={() => navigate("/")}><Home size={17} /> {t("backToReports")}</button></main></div>;
-
   const archived = selected.status === "ARCHIVED";
   const finalized = selected.status === "FINALIZED";
   const canDownload = Boolean(selected.finalized_document_version) && (!archived || artifactsByFormat.size > 0);
@@ -700,7 +724,9 @@ function ReportWorkspace() {
 
         {downloadingFormat && <div className="download-progress" role="status">{t("preparing", { format: OUTPUT_FORMATS.find((item) => item.value === downloadingFormat)?.label ?? downloadingFormat })}</div>}
 
-        <div className="workbench"><ModuleNav active={activeModule} onSelect={(moduleId) => void changeModule(moduleId)} states={moduleStates} /><section className="module-stage"><ReportModule report={selected} active={activeModule} busy={busy} run={run} registerPendingSave={registerPendingSave} /></section></div>
+        <TranslationStatus report={selected} automaticSource={automaticSource.current} onConsumed={consumeTranslation} onBusyChange={setTranslationBusy} prepare={flushPendingEdits} apply={applyTranslation} />
+
+        <div className="workbench" inert={translationBusy}><ModuleNav active={activeModule} onSelect={(moduleId) => void changeModule(moduleId)} states={moduleStates} /><section className="module-stage"><ReportModule report={selected} active={activeModule} busy={busy} run={run} registerPendingSave={registerPendingSave} /></section></div>
       </>
     </main>
   </div>;

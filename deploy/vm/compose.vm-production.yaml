@@ -1,0 +1,168 @@
+name: commentary-production
+
+x-runtime: &runtime
+  init: true
+  restart: unless-stopped
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 512
+  stop_grace_period: 180s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  networks:
+    - application
+
+x-backend-environment: &backend-environment
+  TZ: Asia/Hong_Kong
+  HOME: /tmp
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUNBUFFERED: "1"
+  AUTH_MODE: ENTRA
+  STORAGE_BACKEND: S3
+  TASK_MODE: CELERY
+  ALLOW_TESTING_LANE: "false"
+  DB_ECHO: "false"
+  DATABASE_URL: ${DATABASE_URL:?set the external MySQL 8 URL with charset=utf8mb4}
+  REDIS_URL: ${REDIS_URL:?set the external Redis URL}
+  DOWNLOAD_SECRET: ${DOWNLOAD_SECRET:?set a generated secret of at least 32 characters}
+  ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:?set the tenant ID}
+  ENTRA_AUDIENCE: ${ENTRA_AUDIENCE:?set the API audience}
+  ENTRA_ISSUER: ${ENTRA_ISSUER:-}
+  ENTRA_JWKS_URL: ${ENTRA_JWKS_URL:-}
+  ENTRA_ROLE_CLAIM: ${ENTRA_ROLE_CLAIM:-roles}
+  ENTRA_PRODUCT_SCOPE_CLAIM: ${ENTRA_PRODUCT_SCOPE_CLAIM-product_scope}
+  ENTRA_ALLOWED_ALGORITHMS: RS256
+  S3_BUCKET: ${S3_BUCKET:?set the approved artifact bucket}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:?set the HTTPS TOS endpoint}
+  S3_REGION: ${S3_REGION:?set the object storage region}
+  S3_PREFIX: ${S3_PREFIX:-commentary/production}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?inject the object storage access key ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?inject the object storage secret key}
+  S3_ADDRESSING_STYLE: ${S3_ADDRESSING_STYLE:-virtual}
+  CORS_ALLOW_ORIGINS: ${PUBLIC_ORIGIN:?set the HTTPS browser origin}
+  DB_POOL_PRE_PING: "true"
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+  DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
+  DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
+  DB_CONNECT_TIMEOUT_SECONDS: ${DB_CONNECT_TIMEOUT_SECONDS:-10}
+  UPLOAD_MAX_BYTES: "20971520"
+  UPLOAD_BATCH_MAX_BYTES: "104857600"
+  UPLOAD_BATCH_MAX_FILES: ${UPLOAD_BATCH_MAX_FILES:-20}
+  NEWS_PROVIDER: ${NEWS_PROVIDER:-DA_REPORT}
+  MARKETAUX_API_KEY: ${MARKETAUX_API_KEY:-}
+  MARKETAUX_BASE_URL: ${MARKETAUX_BASE_URL:-https://api.marketaux.com/v1}
+  DA_REPORT_OBJECT_URL: ${DA_REPORT_OBJECT_URL:-}
+  DA_REPORT_SQLITE_SHA256: ${DA_REPORT_SQLITE_SHA256:-}
+  DA_REPORT_CACHE_DIR: /tmp/commentary-da
+  DA_REPORT_AUTO_LOAD: ${DA_REPORT_AUTO_LOAD:-true}
+  DATAWAREHOUSE_PERFORMANCE_ENABLED: ${DATAWAREHOUSE_PERFORMANCE_ENABLED:-true}
+  DATAWAREHOUSE_CONSTITUENTS_ENABLED: ${DATAWAREHOUSE_CONSTITUENTS_ENABLED:-true}
+  DATAWAREHOUSE_MYSQL_HOST: ${DATAWAREHOUSE_MYSQL_HOST:-}
+  DATAWAREHOUSE_MYSQL_PORT: ${DATAWAREHOUSE_MYSQL_PORT:-3306}
+  DATAWAREHOUSE_MYSQL_DATABASE: ${DATAWAREHOUSE_MYSQL_DATABASE:-}
+  DATAWAREHOUSE_MYSQL_USERNAME: ${DATAWAREHOUSE_MYSQL_USERNAME:-}
+  DATAWAREHOUSE_MYSQL_PASSWORD: ${DATAWAREHOUSE_MYSQL_PASSWORD:-}
+  DATAWAREHOUSE_MYSQL_SSL_CA: ${DATAWAREHOUSE_MYSQL_SSL_CA:-/etc/ssl/certs/ca-certificates.crt}
+  DATAWAREHOUSE_MYSQL_SSL_VERIFY_IDENTITY: "true"
+  DATAWAREHOUSE_CLASS_MASTER_VIEW: ${DATAWAREHOUSE_CLASS_MASTER_VIEW:-view_ads_busi_product_fundinfo_class_f_p}
+  DATAWAREHOUSE_FUND_RETURNS_VIEW: ${DATAWAREHOUSE_FUND_RETURNS_VIEW:-view_ads_busi_performance_class_returns_f_p}
+  DATAWAREHOUSE_INDEX_RETURNS_VIEW: ${DATAWAREHOUSE_INDEX_RETURNS_VIEW:-view_ads_busi_performance_index_returns_f_p}
+  DATAWAREHOUSE_CONSTITUENTS_VIEW: ${DATAWAREHOUSE_CONSTITUENTS_VIEW:-view_ads_busi_market_index_constituent_price_daily_f_p}
+  DATAWAREHOUSE_FUND_AUM_VIEW: ${DATAWAREHOUSE_FUND_AUM_VIEW:-view_ads_busi_valuation_nav_fund_level_exposure_1_f_p}
+  DATAWAREHOUSE_FUND_KPI_VIEW: ${DATAWAREHOUSE_FUND_KPI_VIEW:-}
+  DATAWAREHOUSE_CACHE_DIR: /tmp/commentary-datawarehouse
+  FMP_CONSTITUENT_RETURNS_ENABLED: ${FMP_CONSTITUENT_RETURNS_ENABLED:-true}
+  FMP_API_KEY: ${FMP_API_KEY:-}
+  FMP_BASE_URL: ${FMP_BASE_URL:-https://financialmodelingprep.com/stable}
+  FMP_TIMEOUT_SECONDS: ${FMP_TIMEOUT_SECONDS:-20}
+  FMP_BOUNDARY_LOOKBACK_DAYS: ${FMP_BOUNDARY_LOOKBACK_DAYS:-14}
+
+x-backend: &backend
+  <<: *runtime
+  image: ${API_IMAGE:?set a versioned backend image built with backend/Dockerfile.vm}
+  user: "10001:10001"
+  working_dir: /app/backend
+  environment: *backend-environment
+  tmpfs:
+    - /tmp:rw,size=768m,mode=1777
+    - /app/var/output:rw,size=512m,mode=1777
+
+services:
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    cpus: "1.0"
+    mem_limit: 1g
+    mem_reservation: 256m
+    healthcheck:
+      disable: true
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-graceful-shutdown", "150"]
+    cpus: ${API_CPUS:-2.0}
+    mem_limit: ${API_MEMORY:-2g}
+    mem_reservation: 512m
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "app.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=${WORKER_CONCURRENCY:-2}"]
+    cpus: ${WORKER_CPUS:-2.0}
+    mem_limit: ${WORKER_MEMORY:-3g}
+    mem_reservation: 1g
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker:celery_app inspect ping --destination \"celery@$$HOSTNAME\" --timeout=5 | grep -q pong"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+  web:
+    <<: *runtime
+    image: ${WEB_IMAGE:?set a versioned frontend image built with frontend/Dockerfile.vm}
+    user: "101:101"
+    environment:
+      TZ: Asia/Hong_Kong
+      API_UPSTREAM: api:8000
+      SERVER_NAME: ${PUBLIC_HOST:?set the browser hostname without a scheme or path}
+      NGINX_ENVSUBST_FILTER: "^(API_UPSTREAM|SERVER_NAME)$$"
+    ports:
+      - "127.0.0.1:${VM_HTTP_PORT:-18081}:8080"
+    tmpfs:
+      - /tmp:rw,size=128m,mode=1777
+      - /etc/nginx/conf.d:rw,size=1m,mode=1777
+    cpus: ${WEB_CPUS:-0.5}
+    mem_limit: ${WEB_MEMORY:-256m}
+    mem_reservation: 64m
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  application:
+    driver: bridge

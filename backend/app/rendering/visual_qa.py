@@ -33,8 +33,8 @@ def _difference(reference: Path, actual: Path, destination: Path) -> dict:
     return {"mean_absolute_error": round(mean / 255, 6), "pixel_difference_ratio": round(different / (expected.width * expected.height), 6)}
 
 PAGE4_REQUIRED_TEXT = (
-    "Top 10 Index Constituents",
-    "Index Sectors Breakdown",
+    "Top 10 3033.HK Constituents",
+    "3033.HK Sectors Breakdown",
     "Top Performers",
     "Bottom Performers",
     "Portfolio Analysis",

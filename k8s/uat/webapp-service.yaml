@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ih-uat-remote-fund-cmt-auto-webapp
+  namespace: ih
+  labels: {app: ih-uat-remote-fund-cmt-auto, component: webapp, env: uat}
+spec:
+  type: ClusterIP
+  selector: {app: ih-uat-remote-fund-cmt-auto, component: webapp}
+  ports:
+    - {name: http, port: 80, targetPort: http, protocol: TCP}

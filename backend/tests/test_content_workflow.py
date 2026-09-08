@@ -1,7 +1,9 @@
 import io
 from datetime import datetime, timezone
 
+import pypdfium2 as pdfium
 from docx import Document
+from playwright.sync_api import sync_playwright
 
 
 def prepared_report(client):
@@ -203,6 +205,117 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
     rejected = client.patch(f"/api/v1/reports/{report_id}/document", json={"version": saved.json()["version"], "content": invalid_content})
     assert rejected.status_code == 422
     assert rejected.json()["error_code"] == "REVIEW_LAYOUT_INVALID"
+
+
+def _review_layout_measurements(markup: str) -> dict:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1000, "height": 1200})
+        page.set_content(markup, wait_until="load")
+        result = page.evaluate("""() => {
+            const element = (selector) => document.querySelector(selector);
+            const rect = (selector) => element(selector).getBoundingClientRect();
+            const contentBottom = (id) => rect(`[data-block-id="${id}"] .review-layout-content`).bottom;
+            const lineHeight = parseFloat(getComputedStyle(
+                element('[data-block-id="summary"] .review-layout-content')
+            ).lineHeight);
+            const driver = rect('[data-block-id="drivers"]');
+            const monitor = rect('[data-block-id="monitor"]');
+            const outlook = rect('[data-block-id="outlook"]');
+            const summary = rect('[data-block-id="summary"]');
+            const history = rect('[data-page="1"] h2.center');
+            const footer = document.querySelector('[data-page="1"] .page-footer');
+            return {
+                lineHeight,
+                gaps: {
+                    summaryToDrivers: driver.top - contentBottom('summary'),
+                    monitorToOutlook: outlook.top - contentBottom('monitor'),
+                    reviewToHistory: history.top - Math.max(contentBottom('drivers'), contentBottom('outlook')),
+                },
+                summary: { left: summary.left, right: summary.right },
+                driver: { left: driver.left, right: driver.right, bottom: contentBottom('drivers') },
+                monitor: { left: monitor.left, right: monitor.right },
+                outlook: { left: outlook.left, right: outlook.right, top: outlook.top },
+                historyBottom: rect('[data-page="1"] table.history').bottom,
+                footerTop: footer ? footer.getBoundingClientRect().top : null,
+            };
+        }""")
+        browser.close()
+    return result
+
+
+def test_review_preview_compacts_sparse_block_heights_without_changing_columns(client, tmp_path):
+    report_id = prepared_report(client)
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    content = detail["latest_document"]["content"]
+    content["sections"]["month_in_review"]["blocks"] = [
+        {"block_id": "summary", "type": "rich_text", "title": "Monthly summary", "content": "<p>Short summary.</p>", "x": 0, "y": 0, "w": 12, "h": 4},
+        {"block_id": "drivers", "type": "key_drivers", "title": "Key Drivers", "content": "<p>Short driver.</p>", "x": 0, "y": 4, "w": 6, "h": 7},
+        {"block_id": "monitor", "type": "areas_to_monitor", "title": "Key Areas to Monitor", "content": "<p>Short monitor.</p>", "x": 6, "y": 4, "w": 6, "h": 5},
+        {"block_id": "outlook", "type": "outlook", "title": "Outlook", "content": "<p>Short outlook.</p>", "x": 6, "y": 9, "w": 6, "h": 4},
+    ]
+    saved = client.patch(
+        f"/api/v1/reports/{report_id}/document",
+        json={"version": detail["latest_document"]["version"], "content": content},
+    )
+    assert saved.status_code == 200, saved.text
+
+    preview = client.post(f"/api/v1/reports/{report_id}/preview")
+    assert preview.status_code == 200, preview.text
+    finalized = client.post(f"/api/v1/reports/{report_id}/finalize", json={"version": saved.json()["version"]})
+    assert finalized.status_code == 200, finalized.text
+    rendered = client.post(
+        f"/api/v1/reports/{report_id}/renders",
+        json={"formats": ["html", "pdf"]},
+        headers={"Idempotency-Key": f"compact-review-{report_id}"},
+    )
+    assert rendered.status_code == 202, rendered.text
+    artifacts = {}
+    for job in rendered.json():
+        assert job["status"] == "SUCCEEDED", job
+        signed = client.get(f"/api/v1/artifacts/{job['artifact_id']}/download").json()
+        artifacts[job["format"]] = client.get(signed["download_url"]).content
+    continuous_html = artifacts["html"].decode("utf-8")
+    pdf_path = tmp_path / "compact-review.pdf"
+    pdf_path.write_bytes(artifacts["pdf"])
+    assert len(pdfium.PdfDocument(str(pdf_path))) == 4
+
+    for markup in (preview.text, continuous_html):
+        measured = _review_layout_measurements(markup)
+        assert all(0 <= gap <= measured["lineHeight"] * 2 for gap in measured["gaps"].values()), measured
+        assert abs(measured["summary"]["left"] - measured["driver"]["left"]) <= 1
+        assert abs(measured["summary"]["right"] - measured["monitor"]["right"]) <= 1
+        assert measured["driver"]["right"] < measured["monitor"]["left"]
+        assert abs(measured["monitor"]["left"] - measured["outlook"]["left"]) <= 1
+        assert abs(measured["monitor"]["right"] - measured["outlook"]["right"]) <= 1
+        if measured["footerTop"] is not None:
+            assert measured["historyBottom"] < measured["footerTop"]
+
+
+def test_review_preview_keeps_staggered_columns_independent(client):
+    report_id = prepared_report(client)
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    content = detail["latest_document"]["content"]
+    long_driver = " ".join(["Long driver content stays in the left column."] * 45)
+    content["sections"]["month_in_review"]["blocks"] = [
+        {"block_id": "summary", "type": "rich_text", "title": "Monthly summary", "content": "<p>Short summary.</p>", "x": 0, "y": 0, "w": 12, "h": 4},
+        {"block_id": "drivers", "type": "key_drivers", "title": "Key Drivers", "content": f"<p>{long_driver}</p>", "x": 0, "y": 4, "w": 6, "h": 10},
+        {"block_id": "monitor", "type": "areas_to_monitor", "title": "Key Areas to Monitor", "content": "<p>Short monitor.</p>", "x": 6, "y": 4, "w": 6, "h": 4},
+        {"block_id": "outlook", "type": "outlook", "title": "Outlook", "content": "<p>Short outlook.</p>", "x": 6, "y": 8, "w": 6, "h": 4},
+    ]
+    saved = client.patch(
+        f"/api/v1/reports/{report_id}/document",
+        json={"version": detail["latest_document"]["version"], "content": content},
+    )
+    assert saved.status_code == 200, saved.text
+
+    preview = client.post(f"/api/v1/reports/{report_id}/preview")
+    assert preview.status_code == 200, preview.text
+    measured = _review_layout_measurements(preview.text)
+
+    assert all(0 <= gap <= measured["lineHeight"] * 2 for gap in measured["gaps"].values()), measured
+    assert measured["outlook"]["top"] < measured["driver"]["bottom"], measured
+    assert measured["historyBottom"] < measured["footerTop"], measured
 
 
 def test_manual_next_rebalancing_date_is_rendered_and_survives_recalculation(client):

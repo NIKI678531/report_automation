@@ -35,11 +35,18 @@ function listHtml(rows: Array<Record<string, unknown>>, languageMode = "EN"): st
   return `<ul>${rows.map((row) => `<li><strong>${String(row.title ?? "")}</strong><p>${String(row.body ?? "")}</p></li>`).join("")}</ul>`;
 }
 
-export function legacyReviewBlocks(review: Record<string, unknown>, reviewTitle = "Monthly summary", languageMode = "EN"): ReviewBlock[] {
+export function legacyReviewBlocks(review: Record<string, unknown>, reviewTitle = "Monthly summary", languageMode = "EN", normalizeTitles = true): ReviewBlock[] {
+  const titles: Record<string, Record<string, string>> = {
+    drivers: { EN: "Key Drivers", ZH_HANS: "主要驱动因素", ZH_HANT: "主要驅動因素" },
+    monitor: { EN: "Key Areas to Monitor", ZH_HANS: "重点关注领域", ZH_HANT: "重點關注領域" },
+    outlook: { EN: "Outlook", ZH_HANS: "展望", ZH_HANT: "展望" },
+  };
   const stored = Array.isArray(review.blocks) ? review.blocks as ReviewBlock[] : [];
   if (stored.length) return stored.map((block) => ({
     ...block,
-    title: block.block_id === "summary" && block.title === "Monthly summary" ? reviewTitle : block.title,
+    title: normalizeTitles && block.block_id === "summary" && ["Monthly summary", "Monthly Review", "月度回顾", "月度回顧", review.title, review.display_title].includes(block.title)
+      ? reviewTitle
+      : normalizeTitles && Object.values(titles[block.block_id] ?? {}).includes(block.title) ? titles[block.block_id][languageMode] ?? block.title : block.title,
     text_align: TEXT_ALIGNMENTS.some(({ value }) => value === block.text_align) ? block.text_align : "left",
   }));
   return [

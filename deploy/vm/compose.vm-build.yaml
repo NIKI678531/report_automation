@@ -1,0 +1,19 @@
+name: commentary-vm-build
+
+services:
+  api:
+    image: ${API_IMAGE:?set the unique backend release tag}
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile.vm
+      args:
+        BACKEND_BASE_IMAGE: ${BACKEND_BASE_IMAGE:?set an approved Playwright Python base image digest}
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:?set the version matching the browser base image}
+  web:
+    image: ${WEB_IMAGE:?set the unique frontend release tag}
+    build:
+      context: ../..
+      dockerfile: frontend/Dockerfile.vm
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:?set an approved Node 24 image digest}
+        NGINX_BASE_IMAGE: ${NGINX_BASE_IMAGE:?set an approved nginx-unprivileged Alpine image digest}

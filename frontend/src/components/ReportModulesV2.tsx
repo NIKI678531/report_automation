@@ -7,7 +7,7 @@ import { legacyReviewBlocks, ReviewCanvas, type ReviewBlock } from "../features/
 import { FOOTNOTE_SECTIONS, isReportReadOnly, reportConstituentsTitle, reportMonthName, reportProductTicker, reviewLegacyText, type FootnoteSectionKey, type ModuleId } from "../reportModules";
 import type { RegisterPendingSave } from "../pendingSave";
 import { CsvDatasetUpload } from "./CsvDatasetUpload";
-import { useLocale } from "../i18n";
+import { reportLocale, useLocale } from "../i18n";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 type JsonRecord = Record<string, unknown>;
@@ -85,12 +85,17 @@ function ModuleHeading({ eyebrow, title, description, actions }: { eyebrow: stri
 }
 
 function reviewTitleOf(report: Report, review: JsonRecord): string {
+  const monthDate = new Date(`${report.report_date.slice(0, 7)}-01T00:00:00Z`);
+  const defaults = {
+    EN: `${new Intl.DateTimeFormat("en", { month: "long", timeZone: "UTC" }).format(monthDate)} in Review`,
+    ZH_HANS: `${Number(report.report_date.slice(5, 7))}月月度回顾`,
+    ZH_HANT: `${Number(report.report_date.slice(5, 7))}月月度回顧`,
+  };
+  const localizedDefault = defaults[report.language_mode === "BILINGUAL" ? "EN" : report.language_mode];
   for (const value of [review.display_title, review.title]) {
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) return !isReportReadOnly(report) && [...Object.values(defaults), "Monthly Review", "Monthly summary", "月度回顾", "月度回顧"].includes(value.trim()) ? localizedDefault : value.trim();
   }
-  return report.language_mode === "ZH_HANS"
-    ? `${reportMonthName(report)}月度回顾`
-    : report.language_mode === "ZH_HANT" ? `${reportMonthName(report)}月度回顧` : `${reportMonthName(report)} in Review`;
+  return localizedDefault;
 }
 
 export function ReportModule({ report, active, busy, run, registerPendingSave = IGNORE_PENDING_SAVE }: ModuleProps) {
@@ -104,17 +109,18 @@ export function ReportModule({ report, active, busy, run, registerPendingSave = 
 }
 
 function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_SAVE }: Omit<ModuleProps, "active">) {
-  const { locale, t } = useLocale();
+  const { t } = useLocale();
+  const locale = reportLocale(report.language_mode);
   const version = report.latest_document?.version ?? 1;
   const content = report.latest_document?.content as JsonRecord | undefined;
   const review = (sectionsOf(report).month_in_review as JsonRecord | undefined) ?? {};
   const defaultReviewTitle = reviewTitleOf(report, review);
-  const [blocks, setBlocks] = useState<ReviewBlock[]>(() => legacyReviewBlocks(review, defaultReviewTitle, report.language_mode ?? "EN"));
+  const [blocks, setBlocks] = useState<ReviewBlock[]>(() => legacyReviewBlocks(review, defaultReviewTitle, report.language_mode ?? "EN", !isReportReadOnly(report)));
   const initialTerminology = useMemo(() => (content?.terminology_overrides as JsonRecord | undefined) ?? {}, [report.id, version]);
   const [terminology, setTerminology] = useState<JsonRecord>(initialTerminology);
-  const initialBlocks = useMemo(() => legacyReviewBlocks(review, defaultReviewTitle, report.language_mode ?? "EN"), [report.id, version]);
+  const initialBlocks = useMemo(() => legacyReviewBlocks(review, defaultReviewTitle, report.language_mode ?? "EN", !isReportReadOnly(report)), [report.id, version]);
   useEffect(() => {
-    setBlocks(legacyReviewBlocks(review, reviewTitleOf(report, review), report.language_mode ?? "EN"));
+    setBlocks(legacyReviewBlocks(review, reviewTitleOf(report, review), report.language_mode ?? "EN", !isReportReadOnly(report)));
     setTerminology((content?.terminology_overrides as JsonRecord | undefined) ?? {});
   }, [report.id, version]);
   const persist = useCallback(async () => {
@@ -201,10 +207,12 @@ function ConstituentsModule({ report, busy, run, registerPendingSave = IGNORE_PE
     return () => registerPendingSave(null);
   }, [dirty, persist, rebalancingDate, registerPendingSave]);
   const data = rows(sectionsOf(report).constituents);
+  const productTicker = reportProductTicker(report);
   const dateLocale = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en-HK";
   const localizedConstituent = (row: JsonRecord) => locale === "zh-Hans" ? row.name_zh_hans : locale === "zh-Hant" ? row.name_zh_hant : row.name_en;
   const localizedIndustry = (row: JsonRecord) => locale === "zh-Hans" ? row.effective_industry_name_zh_hans : locale === "zh-Hant" ? row.effective_industry_name_zh_hant : row.sector;
-  return <><ModuleHeading eyebrow={t("pageDetail", { page: "04", detail: t("cdbFmp") })} title={locale === "zh-Hans" ? `${report.constituent_index_code} 成份股表现` : locale === "zh-Hant" ? `${report.constituent_index_code} 成份股表現` : reportConstituentsTitle(report)} description={data.length ? t("holdingsBound", { count: data.length, month: report.report_date.slice(0, 7) }) : t("holdingsEmpty")} actions={<button className="primary" disabled={busy || frozen || !dirty || !rebalancingDate} onClick={() => run(persist)}><Save size={16} /> {t("saveDate")}</button>} />
+  const constituentTitle = locale === "en" ? reportConstituentsTitle(report) : t("constituentsTitle", { product: productTicker });
+  return <><ModuleHeading eyebrow={t("pageDetail", { page: "04", detail: t("cdbFmp") })} title={constituentTitle} description={data.length ? t("holdingsBound", { count: data.length, month: report.report_date.slice(0, 7) }) : t("holdingsEmpty")} actions={<button className="primary" disabled={busy || frozen || !dirty || !rebalancingDate} onClick={() => run(persist)}><Save size={16} /> {t("saveDate")}</button>} />
     <section className="rebalancing-editor" aria-label={t("rebalancingEditor")}><label><span>{t("nextRebalancingDate")}</span><input aria-label={locale === "en" ? "Next rebalancing date" : t("nextRebalancingDate")} type="date" value={rebalancingDate} disabled={frozen} onChange={(event) => setRebalancingDate(event.target.value)} /></label><p>{locale !== "en" ? `(*${t("nextRebalancingDate")}：${rebalancingDate ? formatDate(rebalancingDate) : t("noData")})` : `(*Next Rebalancing Date: ${rebalancingDate ? formatDate(rebalancingDate) : t("noData")})`}</p></section>
     <ConstituentSources report={report} busy={busy} run={run} /><section className="data-surface constituent-table"><table><thead><tr><th>{t("code")}</th><th>{t("constituent")}</th><th>{t("price")}</th><th>{t("weightShort")}</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.security_code)}><th scope="row"><span className="security-code">{String(row.ticker ?? row.security_code)}</span></th><td><strong>{String(localizedConstituent(row) ?? "")}</strong><small>{String(localizedIndustry(row) ?? "")}</small></td><td>{row.close_price == null ? t("noData") : `${String(row.currency ?? "")} ${price(row.close_price, t("noData"))}`}</td><td>{percent(row.weight, dateLocale, t("noData"))}</td><td>{percent(row.return_1m, dateLocale, t("noData"))}</td><td>{percent(row.return_3m, dateLocale, t("noData"))}</td><td>{percent(row.return_6m, dateLocale, t("noData"))}</td><td>{percent(row.return_ytd, dateLocale, t("noData"))}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section></>;
 }
@@ -235,10 +243,45 @@ function ConstituentSources({ report, busy, run }: Omit<ModuleProps, "active">) 
   </div>;
 }
 
-function AnalyticsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
+function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_SAVE }: Omit<ModuleProps, "active">) {
   const { locale, t } = useLocale();
   const analytics = (sectionsOf(report).analytics as JsonRecord | undefined) ?? {};
   const top10 = rows(analytics.top10); const top = rows(analytics.top); const bottom = rows(analytics.bottom); const portfolio = portfolioRows(analytics.portfolio);
+  const version = report.latest_document?.version ?? 1;
+  const content = report.latest_document?.content;
+  const turnoverValue = portfolioDisplayValue(portfolio.find((row) => row.metric_code === "AVERAGE_DAILY_TURNOVER") ?? {});
+  const initialTurnover = turnoverValue === "N/A" ? "NA" : turnoverValue;
+  const [turnover, setTurnover] = useState(initialTurnover);
+  useEffect(() => setTurnover(initialTurnover), [report.id, version, initialTurnover]);
+  const turnoverEnabled = report.product_code === "3033";
+  const frozen = isReportReadOnly(report) || !content;
+  const normalizedTurnover = turnover.trim() && turnover.trim() !== "N/A" ? turnover.trim() : "NA";
+  const dirty = turnoverEnabled && !frozen && normalizedTurnover !== initialTurnover.trim();
+  const persist = useCallback(async () => {
+    const next = structuredClone(content ?? {}) as JsonRecord;
+    const nextSections = (next.sections as JsonRecord | undefined) ?? {};
+    next.sections = nextSections;
+    const nextAnalytics = (nextSections.analytics as JsonRecord | undefined) ?? {};
+    nextSections.analytics = nextAnalytics;
+    const nextPortfolio = rows(nextAnalytics.portfolio);
+    nextAnalytics.portfolio = nextPortfolio;
+    const turnoverIndex = nextPortfolio.findIndex((row) => {
+      const code = String(row.metric_code ?? "").trim().toUpperCase();
+      return code ? code === "AVERAGE_DAILY_TURNOVER" : String(row.label ?? "").trim().toLowerCase().startsWith("average daily turnover");
+    });
+    const nextTurnover = {
+      ...(turnoverIndex >= 0 ? nextPortfolio[turnoverIndex] : portfolioRows(nextPortfolio).find((row) => row.metric_code === "AVERAGE_DAILY_TURNOVER")),
+      display_value: normalizedTurnover,
+      value: normalizedTurnover,
+    };
+    if (turnoverIndex >= 0) nextPortfolio[turnoverIndex] = nextTurnover;
+    else nextPortfolio.push(nextTurnover);
+    await api.saveDocument(report.id, version, next);
+  }, [content, normalizedTurnover, report.id, version]);
+  useLayoutEffect(() => {
+    registerPendingSave(dirty ? persist : null);
+    return () => registerPendingSave(null);
+  }, [dirty, persist, registerPendingSave]);
   const sectorChart = analytics.sector_chart as SectorChartSnapshot | undefined;
   const sectorSeries = sectorSlices(sectorChart, locale);
   const monthName = reportMonthName(report);
@@ -253,7 +296,12 @@ function AnalyticsModule({ report, busy, run }: Omit<ModuleProps, "active">) {
     };
   });
   const numberLocale = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en-HK";
-  return <><ModuleHeading eyebrow={t("pageDetail", { page: "05", detail: t("calculatedOutputs") })} title={t("finalAnalytics")} description={t("analyticsDescription")} actions={<button className="primary" disabled={busy || isReportReadOnly(report) || !report.active_snapshot_id} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> {t("refreshAnalytics")}</button>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title={t("top10")} /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{shownName(row)}</th><td>{percent(row.weight, numberLocale, t("noData"))}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section"><SectionTitle index="02" title={t("sectorBreakdown")} />{sectorSeries.length ? <SectorDonut chart={sectorChart} /> : <EmptyData />}</section><section className="analytics-section"><SectionTitle index="03" title={t("performersIn", { month: monthName })} /><div className="performer-columns"><PerformerList title={t("top")} data={top} /><PerformerList title={t("bottom")} data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={t("portfolioAnalysis", { product: productTicker })} /><dl className="portfolio-list">{displayPortfolio.map((row) => <div key={String(row.metric_code)}><dt>{String(row.label)}</dt><dd><data value={row.raw_value == null ? undefined : String(row.raw_value)}>{portfolioDisplayValue(row) === "N/A" ? t("noData") : portfolioDisplayValue(row)}</data></dd></div>)}</dl></section></div><FormulaStrip title={t("analyticsFormula")} formula={t("analyticsFormulaExpression")} detail={t("analyticsFormulaDetail")} /></>;
+  const top10Title = t("top10", { product: productTicker });
+  const sectorTitle = t("sectorBreakdown", { product: productTicker });
+  return <><ModuleHeading eyebrow={t("pageDetail", { page: "05", detail: t("calculatedOutputs") })} title={t("finalAnalytics")} description={t("analyticsDescription")} actions={<button className="primary" disabled={busy || isReportReadOnly(report) || !report.active_snapshot_id} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> {t("refreshAnalytics")}</button>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title={top10Title} /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{shownName(row)}</th><td>{percent(row.weight, numberLocale, t("noData"))}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section"><SectionTitle index="02" title={sectorTitle} />{sectorSeries.length ? <SectorDonut chart={sectorChart} title={sectorTitle} /> : <EmptyData />}</section><section className="analytics-section"><SectionTitle index="03" title={t("performersIn", { month: monthName })} /><div className="performer-columns"><PerformerList title={t("top")} data={top} /><PerformerList title={t("bottom")} data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={t("portfolioAnalysis", { product: productTicker })} /><dl className="portfolio-list">{displayPortfolio.map((row) => {
+    const editableTurnover = turnoverEnabled && row.metric_code === "AVERAGE_DAILY_TURNOVER";
+    return <div key={String(row.metric_code)} className={editableTurnover ? "portfolio-turnover-row" : undefined}><dt>{String(row.label)}</dt><dd>{editableTurnover ? <div className="portfolio-turnover-editor"><input aria-label={String(row.label)} size={16} value={turnover} disabled={busy || frozen} onChange={(event) => setTurnover(event.target.value)} /><button className="icon-button" type="button" aria-label={t("save")} title={t("save")} disabled={busy || frozen || !dirty} onClick={() => run(persist)}><Save size={16} /></button></div> : <data value={row.raw_value == null ? undefined : String(row.raw_value)}>{portfolioDisplayValue(row) === "N/A" ? t("noData") : portfolioDisplayValue(row)}</data>}</dd></div>;
+  })}</dl></section></div><FormulaStrip title={t("analyticsFormula")} formula={t("analyticsFormulaExpression")} detail={t("analyticsFormulaDetail")} /></>;
 }
 
 function IndustryMasterStatus({ report }: { report: Report }) {

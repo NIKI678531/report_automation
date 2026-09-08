@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { needsAutomaticBackfill } from "./App";
 import { api, type Product, type Report } from "./api";
@@ -86,6 +86,46 @@ function renderAt(path: string, withLocale = false) {
 }
 
 describe("report center navigation", () => {
+  it("does not return to a report after abandoning a pending language switch", async () => {
+    const english = report("english", "2026-08-31", "EDITING");
+    const chinese = report("chinese", "2026-08-31", "EDITING", 1, "ZH_HANS");
+    vi.spyOn(api, "listReports").mockResolvedValue([english, chinese]);
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "getReport").mockImplementation(async id => id === english.id ? english : chinese);
+    let finish: () => void = () => undefined;
+    const sync = vi.spyOn(api, "syncLanguageVariant").mockImplementation(() => new Promise(resolve => { finish = () => resolve(chinese); }));
+    renderAt(`/reports/${english.id}`, true);
+    await screen.findByRole("button", { name: "Report center" });
+    fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-Hans" } });
+    await waitFor(() => expect(sync).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Report center" }));
+    await screen.findByRole("heading", { name: "Report center" });
+    await act(async () => { finish(); });
+    expect(window.location.pathname).toBe("/");
+    expect(screen.getByRole("heading", { name: "Report center" })).toBeTruthy();
+  });
+
+  it.each([
+    ["en", "ZH_HANS", "zh-Hans", "语言", "报告中心"],
+    ["en", "ZH_HANT", "zh-Hant", "語言", "報告中心"],
+    ["zh-Hans", "EN", "en", "Language", "Report center"],
+  ] as const)("isolates center %s from report %s", async (centerLocale, language, reportLocale, label, backLabel) => {
+    window.localStorage.setItem("commentary.locale", centerLocale);
+    const selected = report("localized", "2026-08-31", "EDITING", 1, language);
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "listReports").mockResolvedValue([selected]);
+    vi.spyOn(api, "getReport").mockResolvedValue(selected);
+    const createVariant = vi.spyOn(api, "createLanguageVariant");
+    renderAt("/", true);
+    fireEvent.click(await screen.findByRole("button", { name: /2026-08-31/ }));
+    expect(await screen.findByLabelText(label)).toHaveProperty("value", reportLocale);
+    expect(window.localStorage.getItem("commentary.locale")).toBe(centerLocale);
+    expect(createVariant).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: backLabel }));
+    expect(await screen.findByRole("heading", { name: centerLocale === "en" ? "Report center" : "报告中心" })).toBeTruthy();
+    expect(document.documentElement.lang).toBe(centerLocale === "en" ? "en" : "zh-CN");
+  });
+
   it("opens the report center without loading or refreshing an individual report", async () => {
     const augustDraft = report("august-draft", "2026-08-31", "DRAFT");
     const augustFinal = report("august-final", "2026-08-31", "FINALIZED");
@@ -149,6 +189,19 @@ describe("report center navigation", () => {
 
     fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-Hans" } });
     await waitFor(() => expect(window.location.pathname).toBe("/reports/" + archivedChinese.id));
+  });
+
+  it("keeps the archived report language when the requested variant does not exist", async () => {
+    const archived = report("only-archive", "2026-07-31", "ARCHIVED");
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "listReports").mockResolvedValue([archived]);
+    vi.spyOn(api, "getReport").mockResolvedValue(archived);
+    renderAt(`/reports/${archived.id}`, true);
+    await screen.findByText("Archived · read-only");
+    fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-Hans" } });
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "No archived report exists in the requested language.");
+    expect(screen.getByLabelText("Language")).toHaveProperty("value", "en");
+    expect(window.location.pathname).toBe(`/reports/${archived.id}`);
   });
 
   it("shows a not-found state for an unknown report URL", async () => {
@@ -350,26 +403,25 @@ describe("3033 product scope", () => {
     ));
 
     renderAt(`/reports/${english.id}`, true);
-    const language = await screen.findByLabelText("Language");
-    fireEvent.click(screen.getByRole("button", { name: /Footnotes & Disclosures/ }));
-    fireEvent.change(language, { target: { value: "zh-Hans" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Footnotes & Disclosures/ }));
+    fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-Hans" } });
 
     await waitFor(() => expect(createVariant).toHaveBeenCalledWith(english.id, "ZH_HANS", 1));
     await waitFor(() => expect(syncVariant).toHaveBeenCalledWith(english.id, chinese.id, 1, 1));
     await waitFor(() => expect(screen.getByText("月度评论")).toBeTruthy());
     expect(screen.getByRole("button", { name: /脚注与披露/ }).getAttribute("aria-current")).toBe("page");
-    expect(window.localStorage.getItem("commentary.locale")).toBe("zh-Hans");
+    expect(window.localStorage.getItem("commentary.locale")).toBeNull();
 
     fireEvent.change(screen.getByLabelText("语言"), { target: { value: "en" } });
     await waitFor(() => expect(syncVariant).toHaveBeenCalledWith(chinese.id, english.id, 1, 1));
-    expect(screen.getByRole("button", { name: /Footnotes & Disclosures/ }).getAttribute("aria-current")).toBe("page");
+    expect((await screen.findByRole("button", { name: /Footnotes & Disclosures/ })).getAttribute("aria-current")).toBe("page");
 
     fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-Hant" } });
     await waitFor(() => expect(createVariant).toHaveBeenCalledWith(english.id, "ZH_HANT", 1));
     await waitFor(() => expect(syncVariant).toHaveBeenCalledWith(english.id, traditional.id, 1, 1));
     await waitFor(() => expect(screen.getByText("月度評論")).toBeTruthy());
     expect(screen.getByRole("button", { name: /註腳與披露/ }).getAttribute("aria-current")).toBe("page");
-    expect(window.localStorage.getItem("commentary.locale")).toBe("zh-Hant");
+    expect(window.localStorage.getItem("commentary.locale")).toBeNull();
   });
 
   it.each([

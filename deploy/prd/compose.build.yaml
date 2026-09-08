@@ -1,0 +1,18 @@
+name: fund-cmt-auto-prd-build
+services:
+  srvapp:
+    image: 449732370091.dkr.ecr.ap-east-1.amazonaws.com/ih-prd-remote-fund-cmt-auto-srvapp:${RELEASE_TAG:?set a unique release tag}
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile.vm
+      args:
+        BACKEND_BASE_IMAGE: ${BACKEND_BASE_IMAGE:?set an approved Playwright Python image digest}
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:?match the browser base image version}
+  webapp:
+    image: 449732370091.dkr.ecr.ap-east-1.amazonaws.com/ih-prd-remote-fund-cmt-auto-webapp:${RELEASE_TAG:?set a unique release tag}
+    build:
+      context: ../..
+      dockerfile: frontend/Dockerfile.vm
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:?set an approved Node 24 image digest}
+        NGINX_BASE_IMAGE: ${NGINX_BASE_IMAGE:?set an approved nginx-unprivileged Alpine digest}

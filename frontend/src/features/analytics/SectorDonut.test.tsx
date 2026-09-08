@@ -54,9 +54,9 @@ describe("SectorDonut", () => {
   });
 
   it("renders an accessible multi-slice SVG that shows the backend display value", () => {
-    const { container } = render(<SectorDonut chart={CHART} />);
+    const { container } = render(<SectorDonut chart={CHART} title="3033.HK Sectors Breakdown" />);
 
-    expect(screen.getByRole("img", { name: /Index Sectors Breakdown/i })).toBeTruthy();
+    expect(screen.getByRole("img", { name: /3033\.HK Sectors Breakdown/i })).toBeTruthy();
     expect(container.querySelectorAll(".sector-donut-slice")).toHaveLength(2);
     expect(screen.getByText("Technology")).toBeTruthy();
     expect(screen.getByText("60.0%")).toBeTruthy();

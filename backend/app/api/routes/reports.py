@@ -6,11 +6,17 @@ Everything numeric arrives through the snapshot and calculation endpoints in
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Response, status
+from typing import Annotated
+
+from fastapi import APIRouter, Header, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain import service
+from app.core.config import settings
+from app.domain.service import translations
+from app.domain.schemas import TranslationJobRead
+from app.worker import dispatch_translation
 from app.domain.models import DataSnapshot, RenderArtifact, Report, ReportStatus
 from app.domain.schemas import (
     AiDraftRequest,
@@ -91,8 +97,31 @@ def delete_report(report_id: str, version: int, db: Db, x_request_id: RequestId)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/reports/{source_report_id}/language-variants/{target_report_id}/translations", response_model=TranslationJobRead, status_code=202)
+def translate_report(source_report_id: str, target_report_id: str, command: LanguageVariantSync, db: Db, x_request_id: RequestId, idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]):
+    job, created = translations.create_translation(db, source_report_id, target_report_id, command, idempotency_key, x_request_id)
+    if created:
+        try:
+            dispatch_translation(job.id, db)
+        except Exception:
+            translations.fail_translation(db, job.id, "TRANSLATION_DISPATCH_FAILED")
+        db.refresh(job)
+    return job
+
+
+@router.get("/reports/{report_id}/translation-jobs/latest", response_model=TranslationJobRead | None)
+def latest_translation(report_id: str, db: Db):
+    return translations.latest_translation(db, report_id)
+
+
+@router.get("/reports/{report_id}/translation-jobs/{job_id}", response_model=TranslationJobRead)
+def translation_status(report_id: str, job_id: str, db: Db):
+    return translations.translation_status(db, report_id, job_id)
+
+
 def detail(db: Session, report: Report) -> ReportDetail:
     document = service.latest_document(db, report.id)
+    source = db.get(Report, report.translation_source_report_id) if report.translation_source_report_id else None
     quality = []
     if report.active_snapshot_id:
         snapshot = db.get(DataSnapshot, report.active_snapshot_id)
@@ -101,6 +130,8 @@ def detail(db: Session, report: Report) -> ReportDetail:
     base = ReportRead.model_validate(report).model_dump()
     return ReportDetail(
         **base,
+        translation_enabled=settings.translation_provider == "OPENAI_COMPATIBLE" and not settings.translation_problems(),
+        translation_source_language_mode=source.language_mode if source else None,
         latest_document={"version": document.version, "checksum": document.checksum, "content": document.content},
         quality_results=quality,
         artifacts=[{

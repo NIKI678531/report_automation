@@ -26,8 +26,24 @@ var/
 .playwright-cli/
 
 # Secrets: the container gets these from the environment, not from a copied file.
-.env
-**/.env
+.env*
+**/.env*
+*.sql
+**/*.sql
+*.sql.gz
+**/*.sql.gz
+*.sqlite*
+**/*.sqlite*
+**/*.db
+*.pem
+**/*.pem
+*.key
+**/*.key
+*.pfx
+**/*.pfx
+*.p12
+**/*.p12
 
 docs/
 README.md
+k8s/

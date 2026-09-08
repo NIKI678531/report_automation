@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hkg-csop-prd-fund-cmt-auto
+  namespace: ih
+  labels: {app: ih-prd-remote-fund-cmt-auto, env: prd}
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-east-1:449732370091:certificate/REPLACE-ME
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=900
+spec:
+  ingressClassName: alb
+  rules:
+    - host: replace-me-prd.example.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ih-prd-remote-fund-cmt-auto-webapp
+                port: {number: 80}

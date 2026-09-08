@@ -49,8 +49,8 @@ MIME = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.
 
 def renderer_version_for(format_name: str) -> str:
     return (
-        f"{settings.renderer_version}-paged-i18n-v2" if format_name == "pdf"
-        else "html-continuous-i18n-v2" if format_name == "html"
+        f"{settings.renderer_version}-paged-i18n-v3" if format_name == "pdf"
+        else "html-continuous-i18n-v3" if format_name == "html"
         else "docx-paged-i18n-v3"
     )
 
@@ -822,7 +822,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         page3, 3, report, language_mode, tokens,
         footnote=str(footnotes.get("constituents") or ""), banner=banner,
     )
-    heading = document.add_heading(term("constituent_performance", language_mode, index=getattr(report, "constituent_index_code", report.benchmark_code)), 1)
+    heading = document.add_heading(term("constituent_performance", language_mode, product=content["product_ticker"]), 1)
     _format_paragraph(heading, alignment=WD_ALIGN_PARAGRAPH.CENTER, before=8, after=3, keep_with_next=True)
     for run in heading.runs:
         _set_run_font(run, font_name, size=16, bold=True, color=deep)
@@ -865,7 +865,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         _set_cell_borders(cell)
     _set_cell_margins(left, right=170)
     _set_cell_margins(right, left=170)
-    _add_blue_title(left, term("top10", language_mode), "(%)", width=outer_widths[0] - 170, font_name=font_name, blue=blue_hex)
+    _add_blue_title(left, term("top10", language_mode, product=content["product_ticker"]), "(%)", width=outer_widths[0] - 170, font_name=font_name, blue=blue_hex)
     _table(
         left,
         None,
@@ -878,18 +878,18 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         row_height_cm=0.62,
     )
     _remove_initial_empty_paragraph(left)
-    _add_blue_title(right, term("sector_breakdown", language_mode), None, width=outer_widths[1] - 170, font_name=font_name, blue=blue_hex)
+    _add_blue_title(right, term("sector_breakdown", language_mode, product=content["product_ticker"]), None, width=outer_widths[1] - 170, font_name=font_name, blue=blue_hex)
     # The Word contract permits charts as high-resolution images; the chart data and labels are
     # still sourced from the same immutable snapshot used by HTML/PDF.
     source_chart = analytics.get("sector_chart") or {}
     sector_series = source_chart.get("series") or []
     industry_overrides = content.get("_industry_overrides") or {}
-    chart = sector_chart(source_chart, tokens["chart"]["sectorDonut"], language_mode, industry_overrides)
+    chart = sector_chart(source_chart, tokens["chart"]["sectorDonut"], language_mode, content["product_ticker"], industry_overrides)
     chart_paragraph = right.add_paragraph()
     _format_paragraph(chart_paragraph, alignment=WD_ALIGN_PARAGRAPH.CENTER)
     if chart.get("has_data"):
         picture = chart_paragraph.add_run().add_picture(_sector_chart_image(chart, sector_series, font_name), width=Cm(7.2))
-        picture._inline.docPr.set("title", term("sector_breakdown", language_mode))
+        picture._inline.docPr.set("title", term("sector_breakdown", language_mode, product=content["product_ticker"]))
         picture._inline.docPr.set("descr", str(chart.get("alt_text") or ""))
         _sector_legend(right, chart["rows"], font_name=font_name)
     _remove_initial_empty_paragraph(right)

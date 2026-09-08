@@ -1041,6 +1041,11 @@ tbody tr:last-child th, tbody tr:last-child td { box-shadow: none; }
 .portfolio-list > div:last-child { box-shadow: none; }
 .portfolio-list dt { color: var(--color-text-secondary); font-size: var(--text-body-sm); }
 .portfolio-list dd { margin: 0; color: var(--color-text); font-family: var(--font-numeric); font-weight: var(--weight-emphasis); font-variant-numeric: var(--numeric-features); }
+.portfolio-list > .portfolio-turnover-row { flex-wrap: wrap; align-items: center; gap: var(--space-sm) var(--space-lg); }
+.portfolio-turnover-row dd { min-width: var(--space-none); max-width: 100%; }
+.portfolio-turnover-editor { display: flex; align-items: center; gap: var(--space-xs); }
+.portfolio-turnover-editor input { width: 100%; min-width: var(--space-none); padding: var(--space-sm); font-size: var(--text-numeric); }
+.portfolio-turnover-editor .icon-button { flex-shrink: 0; }
 
 /* ===================================================================== *
  * 16. Company News workbench

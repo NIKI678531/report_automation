@@ -323,6 +323,27 @@ class QualityCheckResult(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TranslationJob(Base):
+    __tablename__ = "translation_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    source_report_id: Mapped[str] = mapped_column(ForeignKey("reports.id"), index=True)
+    target_report_id: Mapped[str] = mapped_column(ForeignKey("reports.id"), index=True)
+    source_document_version: Mapped[int] = mapped_column(Integer)
+    target_document_version: Mapped[int] = mapped_column(Integer)
+    actor: Mapped[str] = mapped_column(String(120))
+    request_id: Mapped[str] = mapped_column(String(100))
+    idempotency_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(20), default="QUEUED")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    result_document_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    preserved_fields: Mapped[list[str]] = mapped_column(JSON, default=list)
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class RenderJob(Base):
     __tablename__ = "render_jobs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

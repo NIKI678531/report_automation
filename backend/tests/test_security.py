@@ -33,6 +33,63 @@ AUDIENCE = "api://commentary-test"
 KEY_ID = "test-signing-key"
 
 
+@pytest.fixture()
+def translation_job_context(client, monkeypatch):
+    from app.api.routes import reports as routes
+
+    monkeypatch.setattr(settings, "translation_provider", "OPENAI_COMPATIBLE")
+    monkeypatch.setattr(settings, "translation_base_url", "https://approved.example/v1")
+    monkeypatch.setattr(settings, "translation_model", "approved-model")
+    monkeypatch.setattr(settings, "translation_api_key", "test-only")
+    monkeypatch.setattr(routes, "dispatch_translation", lambda *_: None)
+    source = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
+    target = client.post(f"/api/v1/reports/{source['id']}/language-variants", json={"language_mode": "ZH_HANS", "source_document_version": 1}).json()
+    return source, target, f"/api/v1/reports/{source['id']}/language-variants/{target['id']}/translations", {"source_document_version": 1, "target_document_version": 1}
+
+
+def test_translation_roles_scope_and_idempotency_are_isolated(client, translation_job_context):
+    source, target, url, command = translation_job_context
+    assert client.post(url, json=command, headers={"X-User-Role": "VIEWER", "Idempotency-Key": "key"}).status_code == 403
+    assert client.post(url, json=command, headers={"X-Product-Scope": "3037", "Idempotency-Key": "key"}).status_code == 404
+    first = client.post(url, json=command, headers={"X-User-ID": "alice", "Idempotency-Key": "key"}).json()
+    second = client.post(url, json=command, headers={"X-User-ID": "bob", "Idempotency-Key": "key"}).json()
+    assert first["id"] != second["id"]
+    assert client.get(first["status_url"], headers={"X-Product-Scope": "3037"}).status_code == 404
+    assert client.get(f"/api/v1/reports/{source['id']}/translation-jobs/{first['id']}").status_code == 404
+    conflict = client.post(url, json={**command, "target_document_version": 2}, headers={"X-User-ID": "alice", "Idempotency-Key": "key"})
+    assert conflict.status_code == 409
+    assert conflict.json()["error_code"] == "IDEMPOTENCY_CONFLICT"
+
+
+def test_translation_does_not_accept_provider_or_prompt_from_request(client, translation_job_context):
+    _, _, url, command = translation_job_context
+    response = client.post(url, json={**command, "base_url": "https://unapproved.example", "prompt": "override"}, headers={"Idempotency-Key": "key"})
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("setting,value", [("translation_base_url", "http://approved.example"), ("translation_base_url", "https://user:password@approved.example"), ("translation_base_url", "https://approved.example?token=secret"), ("translation_model", ""), ("translation_api_key", ""), ("translation_provider", "UNKNOWN"), ("translation_timeout_seconds", 0)])
+def test_translation_configuration_is_fail_closed(setting, value):
+    configured = Settings(translation_provider="OPENAI_COMPATIBLE", translation_base_url="https://approved.example/v1", translation_model="test", translation_api_key="test-only")
+    setattr(configured, setting, value)
+    assert configured.translation_problems()
+    configured.auth_mode = "ENTRA"
+    assert any("TRANSLATION_" in problem for problem in configured.deployment_problems())
+
+
+def test_translation_target_finalized_while_queued_is_not_changed(client, translation_job_context):
+    from app.core.database import get_db
+    from app.domain.service.translations import execute_translation
+
+    _, target, url, command = translation_job_context
+    job = client.post(url, json=command, headers={"Idempotency-Key": "key"}).json()
+    assert client.post(f"/api/v1/reports/{target['id']}/finalize", json={"version": 1}).status_code == 200
+    with next(client.app.dependency_overrides[get_db]()) as db:
+        assert execute_translation(db, job["id"]) == "FAILED"
+    current = client.get(f"/api/v1/reports/{target['id']}").json()
+    assert current["status"] == "FINALIZED"
+    assert current["latest_document"]["version"] == 1
+
+
 # --------------------------------------------------------------------------------------------
 # LOCAL mode: the role a caller asserts, and what it lets them do
 # --------------------------------------------------------------------------------------------
@@ -889,3 +946,170 @@ def test_the_application_refuses_to_start_on_an_unsafe_configuration(monkeypatch
     with pytest.raises(ConfigurationError) as raised:
         create_app()
     assert "DOWNLOAD_SECRET" in str(raised.value)
+
+
+def _run_vm_entrypoint_guard(monkeypatch, **overrides):
+    from pathlib import Path
+
+    from app.core import config
+
+    configured = {"redis_url": "redis://broker.example.invalid:6379/0", **overrides}
+    monkeypatch.setattr(config, "settings", _deployed(**configured))
+    path = Path(__file__).resolve().parents[1] / "vm-entrypoint.sh"
+    source = path.read_text(encoding="utf-8").split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    exec(compile(source, str(path), "exec"), {})
+
+
+def test_vm_entrypoint_guard_accepts_production_configuration_without_network(monkeypatch):
+    _run_vm_entrypoint_guard(monkeypatch)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"auth_mode": "LOCAL"},
+    {"database_url": "sqlite:///local.db"},
+    {"database_url": "postgresql://user:password@db/app"},
+    {"database_url": "mysql+pymysql://user:password@db/app?charset=utf8"},
+    {"database_url": "not-a-url"},
+    {"storage_backend": "LOCAL"},
+    {"s3_endpoint_url": "http://storage.example.invalid"},
+    {"redis_url": "https://broker.example.invalid"},
+    {"allow_testing_lane": True},
+    {"download_secret": "short"},
+])
+def test_vm_entrypoint_guard_refuses_unsafe_configuration_before_migration(monkeypatch, overrides):
+    with pytest.raises(ConfigurationError):
+        _run_vm_entrypoint_guard(monkeypatch, **overrides)
+
+
+def test_vm_entrypoint_guard_redacts_malformed_database_url(monkeypatch):
+    sensitive = "do-not-print-this-credential"
+    with pytest.raises(ConfigurationError) as raised:
+        _run_vm_entrypoint_guard(monkeypatch, database_url=f"mysql+pymysql://user:{sensitive}@db:{sensitive}/app")
+    assert sensitive not in str(raised.value)
+    assert "DATABASE_URL" in str(raised.value)
+
+
+def _k8s_secret_builder():
+    from pathlib import Path
+    import runpy
+
+    path = Path(__file__).resolve().parents[2] / "k8s" / "create-secret.py"
+    return runpy.run_path(str(path))["build_secret"]
+
+
+def _k8s_secret_values():
+    return {
+        "DATABASE_URL": "mysql+pymysql://test:test@db.invalid/app?charset=utf8mb4",
+        "REDIS_URL": "rediss://test@redis.invalid/1?ssl_cert_reqs=required",
+        "DOWNLOAD_SECRET": "test-generated-placeholder-" * 3,
+        "S3_ACCESS_KEY_ID": "test-key",
+        "S3_SECRET_ACCESS_KEY": "literal$KEY with spaces=and-equals",
+        "DA_REPORT_OBJECT_URL": "",
+        "DA_REPORT_SQLITE_SHA256": "",
+        "DATAWAREHOUSE_MYSQL_HOST": "",
+        "DATAWAREHOUSE_MYSQL_DATABASE": "",
+        "DATAWAREHOUSE_MYSQL_USERNAME": "",
+        "DATAWAREHOUSE_MYSQL_PASSWORD": "",
+        "FMP_API_KEY": "",
+        "MARKETAUX_API_KEY": "",
+    }
+
+
+def test_k8s_secret_builder_preserves_literal_values_and_all_optional_keys(tmp_path):
+    import base64
+
+    values = _k8s_secret_values()
+    env_file = tmp_path / ".env.secrets"
+    env_file.write_text("\n".join(f"{key}='{value}'" for key, value in values.items()), encoding="utf-8")
+    secret = _k8s_secret_builder()("uat", "approved-namespace", env_file)
+    assert secret["metadata"]["name"] == "ih-uat-remote-fund-cmt-auto-srvapp-secret"
+    assert {key: base64.b64decode(value).decode("utf-8") for key, value in secret["data"].items()} == values
+    assert "stringData" not in secret
+
+
+@pytest.mark.parametrize("change", ["missing", "empty", "unexpected", "short", "namespace"])
+def test_k8s_secret_builder_refuses_incomplete_or_unsafe_input_without_leaking_values(tmp_path, change):
+    values = _k8s_secret_values()
+    namespace = "approved-namespace"
+    if change == "missing":
+        values.pop("MARKETAUX_API_KEY")
+    elif change == "empty":
+        values["DATABASE_URL"] = ""
+    elif change == "unexpected":
+        values["AUTH_MODE"] = "LOCAL"
+    elif change == "short":
+        values["DOWNLOAD_SECRET"] = "short"
+    else:
+        namespace = "replace-me-namespace"
+    env_file = tmp_path / ".env.secrets"
+    env_file.write_text("\n".join(f"{key}='{value}'" for key, value in values.items()), encoding="utf-8")
+    with pytest.raises(ValueError) as raised:
+        _k8s_secret_builder()("prd", namespace, env_file)
+    assert "literal$KEY" not in str(raised.value)
+
+
+def _secret_draft_builder(tmp_path):
+    from pathlib import Path
+    import runpy
+    import shutil
+
+    root = Path(__file__).resolve().parents[2]
+    for environment in ("uat", "prd"):
+        destination = tmp_path / "k8s" / environment
+        destination.mkdir(parents=True)
+        shutil.copyfile(root / "k8s" / environment / "secret.example.yaml.txt", destination / "secret.example.yaml.txt")
+    return runpy.run_path(str(root / "k8s" / "prepare-secret-drafts.py"))
+
+
+def test_secret_drafts_isolate_production_and_preserve_literal_local_values(tmp_path):
+    module = _secret_draft_builder(tmp_path)
+    (tmp_path / ".env").write_text("FMP_API_KEY='uat$literal value'\nDATABASE_URL=sqlite:///local.db\nDOWNLOAD_SECRET=do-not-reuse\n", encoding="utf-8")
+    documents, statuses = module["build_drafts"](tmp_path, "ih")
+    assert documents["uat"]["stringData"]["FMP_API_KEY"] == "uat$literal value"
+    assert documents["prd"]["stringData"]["FMP_API_KEY"] == ""
+    assert documents["uat"]["stringData"]["DATABASE_URL"] == ""
+    first = documents["uat"]["stringData"]["DOWNLOAD_SECRET"]
+    second = documents["prd"]["stringData"]["DOWNLOAD_SECRET"]
+    assert len(first) >= 32 and len(second) >= 32 and first != second
+    assert "uat$literal" not in str(statuses)
+
+
+def test_secret_drafts_read_only_explicit_prd_values_for_production(tmp_path):
+    module = _secret_draft_builder(tmp_path)
+    (tmp_path / ".env").write_text("FMP_API_KEY=uat-only\n", encoding="utf-8")
+    (tmp_path / ".env.prd").write_text("FMP_API_KEY=prd-only\n", encoding="utf-8")
+    documents, _ = module["build_drafts"](tmp_path, "ih")
+    assert documents["uat"]["stringData"]["FMP_API_KEY"] == "uat-only"
+    assert documents["prd"]["stringData"]["FMP_API_KEY"] == "prd-only"
+
+
+@pytest.mark.parametrize("key,value", [
+    ("DATABASE_URL", "sqlite:///local.db"),
+    ("DATABASE_URL", "mysql+pymysql://user:password@localhost/app?charset=utf8mb4"),
+    ("DATABASE_URL", "mysql+pymysql://user:password@db/app?charset=utf8mb4"),
+    ("DATABASE_URL", "mysql+pymysql://user:password@mysql.internal/app?charset=utf8"),
+    ("REDIS_URL", "redis://redis:6379/0"),
+    ("DA_REPORT_OBJECT_URL", "C:/local/snapshot.sqlite"),
+    ("DA_REPORT_SQLITE_SHA256", "replace-with-sha"),
+    ("FMP_API_KEY", "${SHARED_KEY}"),
+])
+def test_secret_drafts_refuse_workstation_and_placeholder_configuration(tmp_path, key, value):
+    module = _secret_draft_builder(tmp_path)
+    assert module["acceptable"](key, value) is False
+
+
+def test_secret_drafts_write_valid_yaml_without_overwriting_or_reporting_secrets(tmp_path):
+    import yaml
+
+    module = _secret_draft_builder(tmp_path)
+    (tmp_path / ".env").write_text("FMP_API_KEY='private$fake with spaces'\n", encoding="utf-8")
+    module["write_drafts"](tmp_path, "ih")
+    path = tmp_path / "k8s" / "uat" / "secrets" / "secret.local.yaml"
+    original = path.read_bytes()
+    document = yaml.safe_load(original)
+    assert document["stringData"]["FMP_API_KEY"] == "private$fake with spaces"
+    assert document["metadata"]["namespace"] == "ih"
+    assert "private$fake" not in (tmp_path / "k8s" / "secret-readiness.local.md").read_text()
+    with pytest.raises(ValueError):
+        module["write_drafts"](tmp_path, "ih")
+    assert path.read_bytes() == original

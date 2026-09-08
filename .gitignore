@@ -16,6 +16,8 @@ __pycache__/
 # variables a deployer has to supply must be readable from a fresh clone.
 !.env.example
 !**/.env.example
+k8s/*/secrets/
+k8s/secret-readiness.local.md
 *.log
 
 # Local datasets, rendered reports, and binary office artifacts.

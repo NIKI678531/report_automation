@@ -20,11 +20,20 @@ require_fixtures(REFERENCE, module_level=True)
 # recorded value" is what turns this suite red on a regression while staying honest about
 # the gap that remains. Measured from this exact deterministic path -- do not copy numbers
 # from a hand-edited document version.
-PIXEL_DIFFERENCE_BASELINE = {1: 0.266693, 2: 0.212917, 3: 0.162226, 4: 0.105378}
+PIXEL_DIFFERENCE_BASELINE = {1: 0.266693, 2: 0.212917, 3: 0.163345, 4: 0.105995}
 
 # A ratchet only works in one direction, so every raise is recorded with its cause. Editing a
 # number here without adding an entry is how a real regression gets absorbed silently.
 BASELINE_RAISES = [
+    {
+        "date": "2026-09-08",
+        "previous": {1: 0.266693, 2: 0.212917, 3: 0.162226, 4: 0.105378},
+        "reason": (
+            "Marketing replaced the Page 3 HSTECH heading and the two generic Page 4 Index "
+            "headings with the listed product ticker 3033.HK. Only the intended title glyphs "
+            "differ; page count, safe areas, tables and chart geometry remain unchanged."
+        ),
+    },
     {
         "date": "2026-08-24",
         "previous": {1: 0.266693, 2: 0.212917, 3: 0.162226, 4: 0.105307},

@@ -45,3 +45,26 @@ def dispatch_render(job_id: str, db=None) -> None:
         execute_render(db, job_id)
     else:
         render_job_task.apply(args=[job_id], throw=True)
+
+
+@celery_app.task(name="commentary.translate", bind=True, max_retries=2, soft_time_limit=75, time_limit=85)
+def translation_job_task(self, job_id: str) -> None:
+    from app.domain.service.translations import execute_translation
+
+    with SessionLocal() as db:
+        if execute_translation(db, job_id) == "QUEUED":
+            raise self.retry(countdown=2 ** (self.request.retries + 1))
+
+
+def dispatch_translation(job_id: str, db=None) -> None:
+    from app.domain.service.translations import execute_translation
+
+    if settings.task_mode == "CELERY":
+        translation_job_task.delay(job_id)
+    elif db is not None:
+        for attempt in range(3):
+            if execute_translation(db, job_id) != "QUEUED":
+                break
+    else:
+        with SessionLocal() as session:
+            dispatch_translation(job_id, session)

@@ -32,7 +32,7 @@ entra = ["pyjwt[crypto]>=2.10,<3"]
 # AWS S3). LOCAL storage needs none of it, and a deployment that selects S3 without the extra is
 # told which extra to install rather than failing on an ImportError at the first download.
 storage = ["boto3>=1.35,<2"]
-dev = ["pytest>=8.4,<9", "pyjwt[crypto]>=2.10,<3"]
+dev = ["pytest>=8.4,<9", "pyjwt[crypto]>=2.10,<3", "PyYAML>=6,<7"]
 render = ["playwright>=1.54,<2", "pypdfium2>=4.30,<5", "pillow>=11,<12"]
 
 [tool.setuptools.packages.find]

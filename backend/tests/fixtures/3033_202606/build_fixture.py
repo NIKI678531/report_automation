@@ -140,7 +140,7 @@ def expected_document() -> dict:
         },
         "analytics": {
             "reference_page": 4,
-            # "Top 10 Index Constituents*(%)", in the order the report lists them.
+            # "Top 10 3033.HK Constituents*(%)", in the order the report lists them.
             "top10": [
                 {"security_code": "981", "weight_pct": 10.15},
                 {"security_code": "9999", "weight_pct": 9.53},
@@ -153,7 +153,7 @@ def expected_document() -> dict:
                 {"security_code": "9888", "weight_pct": 4.96},
                 {"security_code": "9618", "weight_pct": 4.73},
             ],
-            # "Index Sectors Breakdown*", in the donut's legend order.
+            # "3033.HK Sectors Breakdown*", in the donut's legend order.
             "sectors": [
                 {"code": "23", "label": "Consumer Discretionary", "display_value": "47.8%"},
                 {"code": "70", "label": "Information Technology", "display_value": "49.3%"},

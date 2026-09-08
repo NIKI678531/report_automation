@@ -22,16 +22,23 @@ from .catalog import resolve_product
 from .lifecycle import ensure_report_editable
 
 
-def latest_document(db: Session, report_id: str) -> ReportDocument:
-    document = db.scalar(select(ReportDocument).where(ReportDocument.report_id == report_id).order_by(ReportDocument.version.desc()))
+def latest_document(db: Session, report_id: str, *, for_update: bool = False) -> ReportDocument:
+    query = select(ReportDocument).where(ReportDocument.report_id == report_id).order_by(ReportDocument.version.desc()).limit(1)
+    document = db.scalar(query.with_for_update().execution_options(populate_existing=True) if for_update else query)
     if not document:
         raise HTTPException(status_code=404, detail={"error_code": "DOCUMENT_NOT_FOUND", "message": "Report document not found."})
     return document
 
 
+def lock_report(db: Session, report: Report) -> None:
+    db.flush()
+    db.refresh(report, with_for_update=True)
+
+
 def update_document(db: Session, report: Report, expected_version: int, content: dict, request_id: str) -> ReportDocument:
+    lock_report(db, report)
     ensure_report_editable(report)
-    current = latest_document(db, report.id)
+    current = latest_document(db, report.id, for_update=True)
     if current.version != expected_version:
         raise HTTPException(status_code=409, detail={
             "error_code": "VERSION_CONFLICT",

@@ -319,6 +319,14 @@ def _copy_review_layout(source: dict, target: dict, language_mode: str) -> None:
             title = "未命名區塊" if language_mode == ZH_HANT else "未命名区块" if language_mode == ZH_HANS else "Untitled section"
         copied.update({"title": title, "content": existing.get("content", "")})
         target_blocks.append(copied)
+    if "EN" in {source.get("language_mode", "EN"), language_mode}:
+        source_ids = {str(block.get("block_id")) for block in blocks}
+        for block_id, existing in existing_blocks.items():
+            if block_id in source_ids:
+                continue
+            retained = deepcopy(existing)
+            retained["y"] = max((block["y"] + block["h"] for block in target_blocks), default=0)
+            target_blocks.append(retained)
     target_review["blocks"] = target_blocks
     target_review["layout_schema_version"] = source_review.get("layout_schema_version", 2)
 
@@ -851,6 +859,9 @@ def visible_product_codes() -> frozenset[str] | None:
 
 def delete_report(db: Session, report: Report, expected_version: int, request_id: str) -> None:
     """Soft-delete a report while preserving its regulated lineage and artifacts."""
+    from .documents import lock_report
+
+    lock_report(db, report)
     ensure_report_not_archived(report)
     if report.version != expected_version:
         raise HTTPException(
@@ -919,8 +930,11 @@ def _numeric_values(tokens: set[str]) -> set[Decimal]:
 
 
 def ai_number_check(db: Session, report: Report, document: ReportDocument) -> dict:
+    from ..editorial_translation import translated_review_text
+
+    translated = translated_review_text(document.content)
     provenance = document.content.get("ai_provenance")
-    if not provenance:
+    if not provenance and not translated:
         return {
             "check_id": "QC-008",
             "severity": "BLOCKING",
@@ -930,7 +944,7 @@ def ai_number_check(db: Session, report: Report, document: ReportDocument) -> di
             "fix_hint": "",
         }
     review = document.content.get("sections", {}).get("month_in_review", {})
-    actual_tokens = _numeric_tokens(review)
+    actual_tokens = _numeric_tokens(review if provenance else " ".join(translated))
     allowed_values: set[Decimal] = set()
     if report.active_snapshot_id:
         metrics = db.scalars(select(MetricValue).where(MetricValue.snapshot_id == report.active_snapshot_id))
@@ -1061,10 +1075,13 @@ def release_gate_checks(db: Session, report: Report, document: ReportDocument) -
 
 
 def finalize(db: Session, report: Report, expected_version: int, request_id: str) -> Report:
+    from .documents import lock_report
+
+    lock_report(db, report)
     ensure_report_not_archived(report)
     if report.status == ReportStatus.FINALIZED:
         return report
-    document = latest_document(db, report.id)
+    document = latest_document(db, report.id, for_update=True)
     if document.version != expected_version:
         raise HTTPException(status_code=409, detail={"error_code": "VERSION_CONFLICT", "current_version": document.version})
     advisory_failures = [

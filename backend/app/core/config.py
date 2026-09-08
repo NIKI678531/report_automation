@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import tempfile
+from urllib.parse import urlsplit
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
@@ -115,6 +116,13 @@ class Settings(BaseModel):
     renderer_version: str = "chromium-v1"
     auth_mode: str = _env_str("AUTH_MODE", _LOCAL_AUTH_MODE).upper()
     task_mode: str = _env_str("TASK_MODE", "EAGER").upper()
+    translation_provider: str = _env_str("TRANSLATION_PROVIDER", "DISABLED").upper()
+    translation_base_url: str = _env_str("TRANSLATION_BASE_URL", "")
+    translation_model: str = _env_str("TRANSLATION_MODEL", "")
+    translation_api_key: str = Field(default=_env_str("TRANSLATION_API_KEY", ""), repr=False)
+    translation_timeout_seconds: float = _env_float("TRANSLATION_TIMEOUT_SECONDS", 45)
+    translation_max_characters: int = _env_int("TRANSLATION_MAX_CHARACTERS", 30000)
+    translation_max_tokens: int = _env_int("TRANSLATION_MAX_TOKENS", 16000)
     redis_url: str = _env_str("REDIS_URL", "redis://localhost:6379/0")
     storage_backend: str = _env_str("STORAGE_BACKEND", "LOCAL").upper()
     # S3-compatible object storage: Volcengine TOS, MinIO and AWS S3 all speak this API. A bucket
@@ -300,6 +308,32 @@ class Settings(BaseModel):
                 "so migrations, concurrency and durability match what was tested."
             )
         problems.extend(self._storage_problems())
+        problems.extend(self.translation_problems())
+        return problems
+
+    def translation_problems(self) -> list[str]:
+        if self.translation_provider == "DISABLED":
+            return []
+        problems = []
+        if self.translation_provider != "OPENAI_COMPATIBLE":
+            problems.append("TRANSLATION_PROVIDER must be DISABLED or OPENAI_COMPATIBLE.")
+        try:
+            endpoint = urlsplit(self.translation_base_url)
+            valid = endpoint.scheme == "https" and bool(endpoint.hostname) and not (endpoint.username or endpoint.password or endpoint.query or endpoint.fragment)
+        except ValueError:
+            valid = False
+        if not valid:
+            problems.append("TRANSLATION_BASE_URL must be an approved HTTPS base URL without credentials or query parameters.")
+        if not self.translation_model.strip() or len(self.translation_model) > 255:
+            problems.append("TRANSLATION_MODEL requires 1 to 255 characters.")
+        if not self.translation_api_key.strip():
+            problems.append("TRANSLATION_API_KEY is required from the secret store.")
+        if not 1 <= self.translation_timeout_seconds <= 60:
+            problems.append("TRANSLATION_TIMEOUT_SECONDS must be between 1 and 60.")
+        if not 1 <= self.translation_max_characters <= 50000:
+            problems.append("TRANSLATION_MAX_CHARACTERS must be between 1 and 50000.")
+        if not 256 <= self.translation_max_tokens <= 32000:
+            problems.append("TRANSLATION_MAX_TOKENS must be between 256 and 32000.")
         return problems
 
     def _storage_problems(self) -> list[str]:

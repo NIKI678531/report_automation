@@ -14,9 +14,19 @@ effective-dated `ProductCatalog` row.
 _Avoid_: ETF, instrument, security
 
 **Report**:
-One month's commentary for one product, identified by `product_code` + `report_date`. Every
-snapshot, document, metric and artifact hangs off exactly one report.
+One month's commentary for one product in one language and revision. Every snapshot, document,
+metric and artifact hangs off exactly one report.
 _Avoid_: Commentary, monthly note, deliverable
+
+**Language variant**:
+A separately editable language edition of the same product, report month and revision, sharing
+auditable facts while retaining its own editorial decisions.
+_Avoid_: Interface language, translated screen
+
+**Report Centre language**:
+The reader's preferred language for navigating the report library, independent of the language of
+any report they open.
+_Avoid_: Report language, output language
 
 **Report date**:
 The month-end date a report speaks as of. It selects the effective product catalog row, the news

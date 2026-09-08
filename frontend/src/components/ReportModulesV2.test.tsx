@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, type Report } from "../api";
+import { LocaleProvider, type Locale } from "../i18n";
 import { ReportModule } from "./ReportModulesV2";
 
 afterEach(() => {
@@ -29,6 +30,7 @@ const report: Report = {
     version: 4,
     checksum: "document-checksum",
     content: {
+      product_ticker: "3033.HK",
       next_rebalancing_date: "2026-09-04",
       next_rebalancing_date_source: "SNAPSHOT",
       sections: {
@@ -117,6 +119,7 @@ describe("report module data responsibilities", () => {
 
     render(<ReportModule report={report} active="constituents" busy={false} run={run} />);
 
+    expect(screen.getByRole("heading", { name: "The Performance of 3033.HK Constituents" })).toBeTruthy();
     expect(await screen.findByText("01 · CSV OVERRIDE")).toBeTruthy();
     const csvOverride = screen.getByLabelText("index_constituents data import");
     expect(within(csvOverride).getByRole("button", { name: /Upload file/i })).toBeTruthy();
@@ -147,14 +150,39 @@ describe("report module data responsibilities", () => {
     render(<ReportModule report={report} active="analytics" busy={false} run={run} />);
 
     expect(screen.queryByRole("button", { name: /Upload file/i })).toBeNull();
-    expect(screen.getByRole("img", { name: /Index Sectors Breakdown/i })).toBeTruthy();
+    expect(screen.getByText("Top 10 3033.HK Constituents")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "3033.HK Sectors Breakdown" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: /3033\.HK Sectors Breakdown/i })).toBeTruthy();
     expect(screen.getByText(/Derived by the backend from the active constituent snapshot/i)).toBeTruthy();
     expect(screen.getByText("Asset Under Management (HKD)^")).toBeTruthy();
     expect(screen.getByText("67,536.55 million").closest("data")?.getAttribute("value")).toBe("67536.55");
     expect(screen.getByText("Average Daily Turnover (HKD)^^")).toBeTruthy();
-    expect(screen.getByText("12,882 million")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)^^" })).toHaveProperty("value", "12,882 million");
     fireEvent.click(screen.getByRole("button", { name: "Refresh analytics" }));
     await waitFor(() => expect(calculate).toHaveBeenCalledWith(report.id));
+  });
+
+  it.each([
+    { locale: "zh-Hans", languageMode: "ZH_HANS", constituent: "3033.HK 成分股表现", top10: "3033.HK 十大成分股", sectors: "3033.HK 行业分布" },
+    { locale: "zh-Hant", languageMode: "ZH_HANT", constituent: "3033.HK 成分股表現", top10: "3033.HK 十大成分股", sectors: "3033.HK 行業分佈" },
+  ] as const)("uses the product ticker in $locale web headings", async ({ locale, languageMode, constituent, top10, sectors }) => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const localizedReport = { ...report, language_mode: languageMode } as Report;
+    const { rerender } = render(
+      <LocaleProvider locale={locale as Locale}>
+        <ReportModule report={localizedReport} active="constituents" busy={false} run={run} />
+      </LocaleProvider>,
+    );
+    expect(screen.getByRole("heading", { name: constituent })).toBeTruthy();
+
+    rerender(
+      <LocaleProvider locale={locale as Locale}>
+        <ReportModule report={localizedReport} active="analytics" busy={false} run={run} />
+      </LocaleProvider>,
+    );
+    expect(screen.getByText(top10)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: sectors })).toBeTruthy();
+    expect(screen.getByRole("img", { name: new RegExp(sectors.replace(".", "\\.")) })).toBeTruthy();
   });
 
   it("keeps the AUM and turnover rows visible for a legacy holding-only document", () => {
@@ -170,7 +198,8 @@ describe("report module data responsibilities", () => {
 
     expect(screen.getByText("Asset Under Management (HKD)^")).toBeTruthy();
     expect(screen.getByText("Average Daily Turnover (HKD)^^")).toBeTruthy();
-    expect(screen.getAllByText("N/A")).toHaveLength(2);
+    expect(screen.getAllByText("N/A")).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)^^" })).toHaveProperty("value", "NA");
     expect(screen.getByText("Number of holdings").nextElementSibling?.textContent).toBe("30");
   });
 
@@ -195,8 +224,178 @@ describe("report module data responsibilities", () => {
     render(<ReportModule report={monthlyReport} active="analytics" busy={false} run={run} />);
 
     expect(screen.getByText(aum)).toBeTruthy();
-    expect(screen.getByText(turnover)).toBeTruthy();
+    expect(screen.getByDisplayValue(turnover)).toBeTruthy();
     expect(screen.getByText(`Performers in ${monthName}`)).toBeTruthy();
+  });
+
+  it("saves only the 3033 turnover display text without changing any other report data", async () => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    const original = structuredClone(report);
+    render(<ReportModule report={report} active="analytics" busy={false} run={run} />);
+
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toHaveProperty("disabled", true);
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    fireEvent.change(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)^^" }), { target: { value: "9,876 million" } });
+    fireEvent.click(save);
+
+    const expected = structuredClone(report.latest_document!.content);
+    const sections = expected.sections as Record<string, Record<string, unknown>>;
+    const portfolio = sections.analytics.portfolio as Record<string, unknown>[];
+    portfolio[1] = { ...portfolio[1], display_value: "9,876 million", value: "9,876 million" };
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledExactlyOnceWith(report.id, report.latest_document!.version, expected));
+    expect(report).toEqual(original);
+  });
+
+  it.each([
+    { stored: { display_value: null }, expected: "NA" },
+    { stored: { display_value: "" }, expected: "NA" },
+    { stored: { display_value: "   " }, expected: "NA" },
+    { stored: { display_value: "N/A" }, expected: "NA" },
+    { stored: {}, expected: "NA" },
+    { stored: { display_value: 0 }, expected: "0" },
+    { stored: { display_value: "0" }, expected: "0" },
+    { stored: { value: "1,234 million" }, expected: "1,234 million" },
+  ])("prefills turnover as $expected from $stored without saving a default", ({ stored, expected }) => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    const missingReport = structuredClone(report);
+    const sections = missingReport.latest_document!.content.sections as Record<string, Record<string, unknown>>;
+    sections.analytics.portfolio = [{ metric_code: "AVERAGE_DAILY_TURNOVER", ...stored }];
+    render(<ReportModule report={missingReport} active="analytics" busy={false} run={run} />);
+
+    expect(screen.getByRole("textbox")).toHaveProperty("value", expected);
+    expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
+    expect(saveDocument).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   "])("saves an emptied turnover as NA (%j)", async (value) => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    render(<ReportModule report={report} active="analytics" busy={false} run={run} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value } });
+    expect(screen.getByRole("textbox")).toHaveProperty("value", value);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledOnce());
+    const sections = saveDocument.mock.calls[0][2].sections as Record<string, Record<string, unknown>>;
+    expect((sections.analytics.portfolio as Record<string, unknown>[])[1]).toEqual(expect.objectContaining({ display_value: "NA", value: "NA", raw_value: "12882" }));
+  });
+
+  it.each([false, true])("saves legacy portfolio turnover without normalizing other rows (existing: %j)", async (existing) => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    const legacyReport = structuredClone(report);
+    const sections = legacyReport.latest_document!.content.sections as Record<string, Record<string, unknown>>;
+    const holdings = { label: "Number of holdings", value: "30" };
+    sections.analytics.portfolio = existing ? [holdings, { label: "Average Daily Turnover (HKD)^^", value: "100 million" }] : [holdings];
+    render(<ReportModule report={legacyReport} active="analytics" busy={false} run={run} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "200 million" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledOnce());
+    const savedSections = saveDocument.mock.calls[0][2].sections as Record<string, Record<string, unknown>>;
+    const savedPortfolio = savedSections.analytics.portfolio as Record<string, unknown>[];
+    expect(savedPortfolio).toHaveLength(2);
+    expect(savedPortfolio[0]).toEqual(holdings);
+    expect(savedPortfolio[1]).toEqual(expect.objectContaining({ label: "Average Daily Turnover (HKD)^^", display_value: "200 million", value: "200 million" }));
+    expect({ ...savedSections.analytics, portfolio: sections.analytics.portfolio }).toEqual(sections.analytics);
+  });
+
+  it("registers only dirty turnover for navigation saves and clears it on unmount", async () => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    const registerPendingSave = vi.fn<(save: (() => Promise<void>) | null) => void>();
+    const { unmount } = render(<ReportModule report={report} active="analytics" busy={false} run={run} registerPendingSave={registerPendingSave} />);
+    expect(registerPendingSave).toHaveBeenLastCalledWith(null);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "123 million" } });
+    const pending = registerPendingSave.mock.lastCall![0];
+    expect(pending).toBeTypeOf("function");
+    await pending!();
+    expect(saveDocument).toHaveBeenCalledOnce();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "12,882 million" } });
+    expect(registerPendingSave).toHaveBeenLastCalledWith(null);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "456 million" } });
+    unmount();
+    expect(registerPendingSave).toHaveBeenLastCalledWith(null);
+  });
+
+  it.each([
+    { saved: false, fresh: "456 million", expected: "456 million" },
+    { saved: true, fresh: "456 million", expected: "456 million" },
+    { saved: false, fresh: "N/A", expected: "NA" },
+    { saved: true, fresh: "N/A", expected: "NA" },
+  ])("restores returned $expected after Refresh analytics (saved: $saved)", async ({ saved, fresh, expected }) => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    const calculate = vi.spyOn(api, "calculate").mockResolvedValue({
+      snapshot_id: "snapshot-1", formula_version: "hstech-2026.1", metrics: {}, document_version: 6, quality_results: [],
+    });
+    const registerPendingSave = vi.fn<(save: (() => Promise<void>) | null) => void>();
+    const { rerender } = render(<ReportModule report={report} active="analytics" busy={false} run={run} registerPendingSave={registerPendingSave} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "123 million" } });
+    if (saved) {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saveDocument).toHaveBeenCalledOnce());
+      const savedReport = structuredClone(report);
+      savedReport.latest_document!.version = 5;
+      savedReport.latest_document!.content = saveDocument.mock.calls[0][2];
+      rerender(<ReportModule report={savedReport} active="analytics" busy={false} run={run} registerPendingSave={registerPendingSave} />);
+      expect(screen.getByRole("textbox")).toHaveProperty("value", "123 million");
+      expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Refresh analytics" }));
+    await waitFor(() => expect(calculate).toHaveBeenCalledWith(report.id));
+    const refreshedReport = structuredClone(report);
+    refreshedReport.latest_document!.version = 6;
+    const sections = refreshedReport.latest_document!.content.sections as Record<string, Record<string, unknown>>;
+    (sections.analytics.portfolio as Record<string, unknown>[])[1].display_value = fresh;
+    rerender(<ReportModule report={refreshedReport} active="analytics" busy={false} run={run} registerPendingSave={registerPendingSave} />);
+
+    expect(screen.getByRole("textbox")).toHaveProperty("value", expected);
+    expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
+    expect(registerPendingSave).toHaveBeenLastCalledWith(null);
+    expect(saveDocument).toHaveBeenCalledTimes(saved ? 1 : 0);
+  });
+
+  it.each(["Save", "Refresh analytics"])("retains the turnover draft when %s fails", async (action) => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    vi.spyOn(api, "saveDocument").mockRejectedValue(new Error("Save failed"));
+    vi.spyOn(api, "calculate").mockRejectedValue(new Error("Refresh failed"));
+    const onError = vi.fn();
+    const failedRun = async (work: () => Promise<unknown>) => { try { await work(); } catch (caught) { onError(String(caught)); } };
+    render(<ReportModule report={report} active="analytics" busy={false} run={failedRun} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "123 million" } });
+    fireEvent.click(screen.getByRole("button", { name: action }));
+    await waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    expect(screen.getByRole("textbox")).toHaveProperty("value", "123 million");
+    expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", false);
+  });
+
+  it.each([
+    { status: "FINALIZED", busy: false, document: true },
+    { status: "ARCHIVED", busy: false, document: true },
+    { status: "EDITING", busy: true, document: true },
+    { status: "EDITING", busy: false, document: false },
+  ] as const)("disables turnover edits for $status (busy: $busy, document: $document)", ({ status, busy, document }) => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const frozenReport = { ...report, status, latest_document: document ? report.latest_document : null };
+    render(<ReportModule report={frozenReport} active="analytics" busy={busy} run={run} />);
+    expect(screen.getByRole("textbox")).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
+  });
+
+  it("resets the draft for another report and keeps other products read-only", () => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const { rerender } = render(<ReportModule report={report} active="analytics" busy={false} run={run} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "123 million" } });
+    rerender(<ReportModule report={{ ...report, id: "report-2" }} active="analytics" busy={false} run={run} />);
+    expect(screen.getByRole("textbox")).toHaveProperty("value", "12,882 million");
+    rerender(<ReportModule report={{ ...report, product_code: "3037" }} active="analytics" busy={false} run={run} />);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getByText("12,882 million")).toBeTruthy();
   });
 
   it("uses the selected month as the summary title and saves block alignment without a duplicate title field", async () => {

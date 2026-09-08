@@ -40,11 +40,16 @@ describe("report module page labels", () => {
     expect(reportProductTicker(canonical)).toBe("9999.HK");
     expect(reportMonthName({ product_code: "TEST", report_date: "2026-07-31" })).toBe("July");
     expect(reportProductTicker({ product_code: "TEST", report_date: "2026-07-31" })).toBe("TEST");
+    expect(reportProductTicker({ product_code: "3033", report_date: "2026-07-31" })).toBe("3033.HK");
   });
 
-  it("builds the constituent heading from the selected fund index", () => {
-    expect(reportConstituentsTitle({ constituent_index_code: "HSTECH" })).toBe("The Performance of HSTECH Constituents");
-    expect(reportConstituentsTitle({ constituent_index_code: "MSCI CHINA" })).toBe("The Performance of MSCI CHINA Constituents");
+  it("builds the constituent heading from the selected fund ticker", () => {
+    expect(reportConstituentsTitle({ product_code: "3033", report_date: "2026-06-30" })).toBe("The Performance of 3033.HK Constituents");
+    expect(reportConstituentsTitle({
+      product_code: "TEST",
+      report_date: "2026-06-30",
+      latest_document: { content: { product_ticker: "9999.HK" } },
+    })).toBe("The Performance of 9999.HK Constituents");
   });
 
   it("treats saved Review blocks as canonical content even when legacy summary is stale", () => {

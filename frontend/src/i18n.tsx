@@ -6,6 +6,15 @@ export type ReportLanguage = "EN" | "ZH_HANS" | "ZH_HANT";
 const baseMessages = {
   en: {
     appName: "Monthly Commentary",
+    syncTranslation: "Sync translation",
+    translationRunning: "Translating review",
+    translationComplete: "Translation updated",
+    translationPreserved: "Manual changes preserved; source changes need review",
+    translationFailed: "Translation not applied. The saved report is unchanged.",
+    translationDisabled: "Automatic translation is not configured",
+    translationNewVersion: "A translated version is available. Save your edits before reloading.",
+    reloadTranslation: "Reload translated version",
+    noArchivedLanguage: "No archived report exists in the requested language.",
     brandEyebrow: "REPORT AUTOMATION",
     workspace: "Canonical report workspace",
     working: "Working",
@@ -74,6 +83,7 @@ const baseMessages = {
     historicalPerformance: "Historical Performance",
     companyNews: "Company News",
     constituentPerformance: "Constituent Performance",
+    constituentsTitle: "The Performance of {product} Constituents",
     finalAnalytics: "Final Analytics",
     footnotes: "Footnotes & Disclosures",
     pageDetail: "Page {page} · {detail}",
@@ -101,8 +111,8 @@ const baseMessages = {
     closingPrice: "Closing Price (HKD)",
     weighting: "Weighting (%)",
     refreshAnalytics: "Refresh analytics",
-    top10: "Top 10 Index Constituents",
-    sectorBreakdown: "Index Sectors Breakdown",
+    top10: "Top 10 {product} Constituents",
+    sectorBreakdown: "{product} Sectors Breakdown",
     performersIn: "Performers in {month}",
     top: "Top",
     bottom: "Bottom",
@@ -251,6 +261,15 @@ const baseMessages = {
   },
   "zh-Hans": {
     appName: "月度评论",
+    syncTranslation: "同步译文",
+    translationRunning: "正在翻译回顾",
+    translationComplete: "译文已更新",
+    translationPreserved: "已保留人工改稿；源文变更待核对",
+    translationFailed: "译文未应用，已保存的报告保持不变。",
+    translationDisabled: "自动翻译尚未配置",
+    translationNewVersion: "新的译文版本已就绪，请先保存修改再重新加载。",
+    reloadTranslation: "加载译文版本",
+    noArchivedLanguage: "没有对应语言的归档报告。",
     brandEyebrow: "报告自动化",
     workspace: "标准报告工作台",
     working: "处理中",
@@ -319,6 +338,7 @@ const baseMessages = {
     historicalPerformance: "历史表现",
     companyNews: "公司新闻",
     constituentPerformance: "成份股表现",
+    constituentsTitle: "{product} 成分股表现",
     finalAnalytics: "最终分析",
     footnotes: "脚注与披露",
     pageDetail: "第 {page} 部分 · {detail}",
@@ -346,8 +366,8 @@ const baseMessages = {
     closingPrice: "收市价（港元）",
     weighting: "权重（%）",
     refreshAnalytics: "刷新分析",
-    top10: "指数十大成份股",
-    sectorBreakdown: "指数行业分布",
+    top10: "{product} 十大成分股",
+    sectorBreakdown: "{product} 行业分布",
     performersIn: "{month}成份股表现",
     top: "表现最佳",
     bottom: "表现最弱",
@@ -526,6 +546,15 @@ const zhHantMessages: Record<keyof typeof baseMessages.en, string> = {
   archivedReadOnly: "已封存 · 唯讀",
   openReport: "開啟 {date} 的{language}報告，狀態：{status}",
   appName: "月度評論",
+  syncTranslation: "同步譯文",
+  translationRunning: "正在翻譯回顧",
+  translationComplete: "譯文已更新",
+  translationPreserved: "已保留人工改稿；原文變更待核對",
+  translationFailed: "譯文未套用，已儲存的報告保持不變。",
+  translationDisabled: "自動翻譯尚未配置",
+  translationNewVersion: "新的譯文版本已就緒，請先儲存修改再重新載入。",
+  reloadTranslation: "載入譯文版本",
+  noArchivedLanguage: "沒有對應語言的封存報告。",
   brandEyebrow: "報告自動化",
   workspace: "標準報告工作台",
   working: "處理中",
@@ -564,6 +593,7 @@ const zhHantMessages: Record<keyof typeof baseMessages.en, string> = {
   historicalPerformance: "歷史表現",
   companyNews: "公司新聞",
   constituentPerformance: "成份股表現",
+  constituentsTitle: "{product} 成分股表現",
   finalAnalytics: "最終分析",
   footnotes: "註腳與披露",
   freeLayout: "自由佈局",
@@ -587,8 +617,8 @@ const zhHantMessages: Record<keyof typeof baseMessages.en, string> = {
   stockName: "股票名稱",
   closingPrice: "收市價（港元）",
   weighting: "權重（%）",
-  top10: "指數十大成份股",
-  sectorBreakdown: "指數行業分佈",
+  top10: "{product} 十大成分股",
+  sectorBreakdown: "{product} 行業分佈",
   performersIn: "{month}成份股表現",
   top: "表現最佳",
   bottom: "表現最弱",
@@ -748,16 +778,22 @@ const fallback: LocaleContextValue = {
 
 const LocaleContext = createContext<LocaleContextValue>(fallback);
 
-export function LocaleProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => (
+export function reportLocale(language: ReportLanguage | "BILINGUAL"): Locale {
+  return language === "ZH_HANS" ? "zh-Hans" : language === "ZH_HANT" ? "zh-Hant" : "en";
+}
+
+export function LocaleProvider({ children, locale: controlledLocale }: { children: ReactNode; locale?: Locale }) {
+  const [preferredLocale, setLocaleState] = useState<Locale>(() => (
     (["en", "zh-Hans", "zh-Hant"] as const).includes(
       window.localStorage.getItem("commentary.locale") as Locale,
     ) ? window.localStorage.getItem("commentary.locale") as Locale : "en"
   ));
+  const locale = controlledLocale ?? preferredLocale;
   const value = useMemo<LocaleContextValue>(() => ({
     locale,
     languageMode: locale === "zh-Hans" ? "ZH_HANS" : locale === "zh-Hant" ? "ZH_HANT" : "EN",
     setLocale: (next) => {
+      if (controlledLocale !== undefined) return;
       window.localStorage.setItem("commentary.locale", next);
       document.documentElement.lang = next === "zh-Hans" ? "zh-CN" : next === "zh-Hant" ? "zh-HK" : "en";
       setLocaleState(next);
@@ -780,9 +816,11 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
       MISSING: "缺失", AVAILABLE: "可用", VALIDATED: "已验证", NEEDS_MAPPING: "需要映射",
       REJECTED: "已拒绝", APPLIED: "已应用", OVERRIDDEN: "已替代", HIGH: "高", MEDIUM: "中", LOW: "低",
     })[status] ?? status),
-  }), [locale]);
+  }), [locale, controlledLocale]);
   useEffect(() => {
+    const previous = document.documentElement.lang;
     document.documentElement.lang = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en";
+    return () => { document.documentElement.lang = previous; };
   }, [locale]);
   return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }

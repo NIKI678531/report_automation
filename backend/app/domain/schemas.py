@@ -26,6 +26,30 @@ class LanguageVariantSync(BaseModel):
     target_document_version: int = Field(ge=1)
 
 
+class TranslationJobRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    source_report_id: str
+    target_report_id: str
+    source_document_version: int
+    target_document_version: int
+    status: str
+    result_document_version: int | None
+    preserved_fields: list[str]
+    error: dict[str, Any] | None
+    request_id: str
+
+    @computed_field
+    @property
+    def job_id(self) -> str:
+        return self.id
+
+    @computed_field
+    @property
+    def status_url(self) -> str:
+        return f"{settings.api_prefix}/reports/{self.target_report_id}/translation-jobs/{self.id}"
+
+
 class ProductRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
@@ -108,6 +132,8 @@ class ReportRead(BaseModel):
 
 
 class ReportDetail(ReportRead):
+    translation_enabled: bool = False
+    translation_source_language_mode: str | None = None
     latest_document: dict[str, Any] | None = None
     quality_results: list[dict[str, Any]] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
