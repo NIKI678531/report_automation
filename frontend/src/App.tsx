@@ -222,28 +222,23 @@ export function needsAutomaticBackfill(report: Report): boolean {
   const portfolio = analytics && typeof analytics === "object"
     ? (analytics as Record<string, unknown>).portfolio
     : null;
-  const portfolioCodes = new Set(
-    (Array.isArray(portfolio) ? portfolio : [])
-      .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
-      .map((row) => String(row.metric_code ?? "")),
-  );
-  const portfolioLabels = new Set(
-    (Array.isArray(portfolio) ? portfolio : [])
-      .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
-      .map((row) => String(row.label ?? "")),
-  );
-  const hasPortfolioMetric = (code: string, label: string) => (
-    portfolioCodes.has(code) || portfolioLabels.has(label)
-  );
-  const hasAum = (
-    hasPortfolioMetric("AUM", "Asset Under Management")
-    || [...portfolioLabels].some((label) => label.startsWith("Asset Under Management ("))
-  );
-  const hasTurnover = (
-    hasPortfolioMetric("AVERAGE_DAILY_TURNOVER", "Average Daily Turnover")
-    || [...portfolioLabels].some((label) => label.startsWith("Average Daily Turnover ("))
-  );
-  const hasHoldings = hasPortfolioMetric("NUMBER_OF_HOLDINGS", "Number of holdings");
+  const portfolioRows = (Array.isArray(portfolio) ? portfolio : [])
+    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object");
+  const portfolioMetric = (code: string, label: string) => portfolioRows.find((row) => (
+    String(row.metric_code ?? "") === code || String(row.label ?? "").startsWith(label)
+  ));
+  const hasPortfolioValue = (code: string, label: string) => {
+    const row = portfolioMetric(code, label);
+    if (!row) return false;
+    return [row.raw_value, row.display_value, row.value].some((value) => (
+      value !== null
+      && value !== undefined
+      && !["", "N/A", "NA"].includes(String(value).trim().toUpperCase())
+    ));
+  };
+  const hasAum = hasPortfolioValue("AUM", "Asset Under Management");
+  const hasTurnover = hasPortfolioValue("AVERAGE_DAILY_TURNOVER", "Average Daily Turnover");
+  const hasHoldings = Boolean(portfolioMetric("NUMBER_OF_HOLDINGS", "Number of holdings"));
   const portfolioMissing = constituentsReady && (!hasAum || !hasTurnover || !hasHoldings);
   const finalAnalyticsMissing = constituentsReady
     && ((!Array.isArray(top10) || top10.length === 0) || portfolioMissing);

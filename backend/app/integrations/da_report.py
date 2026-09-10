@@ -5,6 +5,7 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import os
 import re
 import ssl
@@ -691,12 +692,18 @@ def _bloomberg_equity_ticker(product_ticker: str) -> str:
     return f"{match.group(1)} {match.group(2)} Equity" if match else normalized
 
 
+def _matches_stored_double(calculated: Decimal, stored: Decimal) -> bool:
+    """Compare a Decimal result with one value that made a round trip through MySQL DOUBLE."""
+    storage_ulp = Decimal(str(math.ulp(float(stored))))
+    return abs(calculated - stored) <= max(Decimal("0.000001"), storage_ulp)
+
+
 def load_monthly_turnover(*, product_ticker: str, report_date: date) -> dict[str, Any]:
     """Load one Bloomberg monthly turnover aggregate from the DA Report snapshot.
 
     The upstream row carries both inputs requested by the business formula: ``INTERVAL_SUM`` and
     the trading-day count. The returned average is recomputed with ``Decimal``; the stored DOUBLE
-    is retained only as source evidence and checked to six decimal places.
+    is retained only as source evidence and checked at its actual floating-point precision.
     """
     source = _data_source()
     month_start = report_date.replace(day=1)
@@ -766,7 +773,7 @@ def load_monthly_turnover(*, product_ticker: str, report_date: date) -> dict[str
     )
     average_matches = (
         calculated_average is not None
-        and abs(calculated_average - source_average) <= Decimal("0.000001")
+        and _matches_stored_double(calculated_average, source_average)
     )
     if (
         not numeric_inputs_valid

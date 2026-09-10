@@ -134,6 +134,28 @@ def test_monthly_turnover_rejects_a_source_average_that_does_not_match_formula(t
     assert raised.value.code == "DA_REPORT_MONTHLY_TURNOVER_INVALID"
 
 
+def test_monthly_turnover_accepts_valid_mysql_double_rounding(tmp_path, monkeypatch):
+    database = tmp_path / "da-report-turnover-double.sqlite"
+    build_monthly_turnover_snapshot(database)
+    total_turnover = 300_008_000_024
+    trading_days = 21
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "UPDATE market_monthly_turnovers SET total_turnover = ?, trading_days = ?, average_daily_turnover = ?",
+        (total_turnover, trading_days, float(total_turnover / trading_days)),
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
+    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
+
+    payload = load_monthly_turnover(product_ticker="3033.HK", report_date=date(2026, 6, 30))
+
+    assert payload["fund_turnover_monthly"][0]["average_daily_turnover"] == (
+        "14286095239.23809523809523810"
+    )
+
+
 def test_monthly_schema_failure_does_not_require_news_tables(tmp_path, monkeypatch):
     database = tmp_path / "incomplete.sqlite"
     sqlite3.connect(database).close()

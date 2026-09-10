@@ -232,6 +232,19 @@ describe("3033 product scope", () => {
       expect(needsAutomaticBackfill(legacy)).toBe(true);
 
       (sections.analytics as Record<string, unknown>).portfolio = [
+        { metric_code: "AUM", label: "Asset Under Management (HKD)^", raw_value: "1000", display_value: "1,000.00 million" },
+        {
+          metric_code: "AVERAGE_DAILY_TURNOVER",
+          label: "Average Daily Turnover (HKD)^^",
+          raw_value: null,
+          display_value: "N/A",
+          availability: "MISSING_SOURCE_DATA",
+        },
+        { metric_code: "NUMBER_OF_HOLDINGS", label: "Number of holdings", raw_value: "1", display_value: "1" },
+      ];
+      expect(needsAutomaticBackfill(legacy)).toBe(true);
+
+      (sections.analytics as Record<string, unknown>).portfolio = [
         { label: "Asset Under Management (HKD)^", value: "1,000.00 million" },
         { label: "Average Daily Turnover (HKD)^^", value: "50 million" },
         { label: "Number of holdings", value: "1" },
