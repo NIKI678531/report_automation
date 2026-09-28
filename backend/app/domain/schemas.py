@@ -231,6 +231,20 @@ class DocumentUpdate(BaseModel):
     content: dict[str, Any]
 
 
+class PreviewRequest(BaseModel):
+    """Optional unsaved draft submitted to the canonical preview renderer."""
+
+    model_config = ConfigDict(extra="forbid")
+    version: int | None = Field(default=None, ge=1)
+    content: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _require_version_and_content_together(self) -> "PreviewRequest":
+        if (self.version is None) != (self.content is None):
+            raise ValueError("version and content must be supplied together")
+        return self
+
+
 class FinalizeRequest(BaseModel):
     version: int
 

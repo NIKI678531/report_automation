@@ -11,7 +11,9 @@ from app.core.config import settings
 from app.core import download_signing
 from app.domain.service.audit import audit
 from app.domain.service.exports import export_source
+from app.domain.page_one_presentation import PageOneLayoutOverflowError
 from app.rendering.artifacts import generate_export, renderer_version_for
+from app.rendering.disclaimer import DisclaimerResourceError, disclaimer_audit_fields
 from app.rendering.download_response import ExportResponse
 from .deps import Db, RequestId
 
@@ -47,11 +49,18 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
                "design_token_version": document.content.get("design_token_version"),
                "renderer_version": renderer_version_for(format_name),
                "lane": document.content.get("lane", report.lane),
-               "language_mode": document.content.get("language_mode", report.language_mode)}
+               "language_mode": document.content.get("language_mode", report.language_mode),
+               **disclaimer_audit_fields()}
     export = None
     try:
         export = generate_export(report, document, format_name)
-        details.update(size_bytes=export.size_bytes, checksum=export.checksum, content_manifest=export.content_manifest)
+        details.update(
+            size_bytes=export.size_bytes,
+            checksum=export.checksum,
+            content_manifest=export.content_manifest,
+            disclaimer_version=export.disclaimer_version,
+            disclaimer_checksum=export.disclaimer_checksum,
+        )
         # This proves generation, not that the browser received or saved the file.
         audit(db, "export.generated", "report", report_id, x_request_id, details)
         db.commit()
@@ -60,12 +69,38 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
         if export is not None:
             export.cleanup()
         db.rollback()
-        code = "PDF_LAYOUT_OVERFLOW" if isinstance(error, ValueError) and str(error).startswith("PDF_LAYOUT_OVERFLOW") else "EXPORT_FAILED"
+        code = (
+            "DISCLAIMER_RESOURCE_INVALID"
+            if isinstance(error, DisclaimerResourceError)
+            else "PAGE_ONE_LAYOUT_OVERFLOW"
+            if isinstance(error, PageOneLayoutOverflowError)
+            else "PDF_LAYOUT_OVERFLOW"
+            if isinstance(error, ValueError) and str(error).startswith("PDF_LAYOUT_OVERFLOW")
+            else "EXPORT_FAILED"
+        )
         # Renderer exceptions can contain private file paths or URLs; log only safe diagnostics.
         logger.error("Report export failed: %s (%s)", code, type(error).__name__)
         audit(db, "export.failed", "report", report_id, x_request_id, {**details, "error_code": code})
         db.commit()
-        raise HTTPException(422 if code == "PDF_LAYOUT_OVERFLOW" else 503, detail={
-            "error_code": code, "message": "The report could not be generated.",
-            "fix_hint": "Retry the download. If it fails again, check the API rendering logs and resources.",
+        raise HTTPException(422 if code in {"PDF_LAYOUT_OVERFLOW", "PAGE_ONE_LAYOUT_OVERFLOW"} else 503, detail={
+            "error_code": code,
+            "message": (
+                "The approved disclaimer resource is unavailable or invalid."
+                if code == "DISCLAIMER_RESOURCE_INVALID"
+                else str(error)
+                if code == "PAGE_ONE_LAYOUT_OVERFLOW"
+                else "The report could not be generated."
+            ),
+            "fix_hint": (
+                "Restore the approved versioned disclaimer resource before retrying the download."
+                if code == "DISCLAIMER_RESOURCE_INVALID"
+                else error.fix_hint
+                if isinstance(error, PageOneLayoutOverflowError)
+                else "Retry the download. If it fails again, check the API rendering logs and resources."
+            ),
+            **(
+                {"findings": list(error.findings)}
+                if isinstance(error, PageOneLayoutOverflowError)
+                else {}
+            ),
         }) from None

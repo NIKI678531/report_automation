@@ -135,12 +135,12 @@ def test_every_rendered_format_carries_the_testing_mark(client, finalized_testin
         assert f'filename="TESTING-3033_2026-06-30_EN_v3.{format_name}"' in download.headers["content-disposition"]
         if format_name == "html":
             html = download.text
-            assert html.count('class="testing-mark"') == 4
-            assert html.count("TESTING DATA - NOT FOR DISTRIBUTION") == 4
+            assert html.count('class="testing-mark"') == 5
+            assert html.count("TESTING DATA - NOT FOR DISTRIBUTION") == 5
         if format_name == "pdf":
             pdf = pdfium.PdfDocument(download.content)
-            assert len(pdf) == 4
-            for index in range(4):
+            assert len(pdf) == 5
+            for index in range(5):
                 assert "TESTING" in pdf[index].get_textpage().get_text_bounded()
 
 

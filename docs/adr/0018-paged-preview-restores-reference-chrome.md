@@ -1,6 +1,6 @@
 # ADR-0018: Online preview restores the paged reference presentation
 
-- Status: Accepted
+- Status: Amended by ADR-0032
 - Date: 2026-08-25
 
 ## Context

@@ -126,7 +126,7 @@ def test_report_golden_lifecycle_and_preview(client):
 
     preview = client.post(f"/api/v1/reports/{report['id']}/preview")
     assert preview.status_code == 200
-    assert preview.text.count('class="report-page"') == 4
+    assert preview.text.count('class="report-page') == 5
     assert "The Performance of 3033.HK Constituents" in preview.text
     assert "Top 10 3033.HK Constituents" in preview.text
     assert "3033.HK Sectors Breakdown" in preview.text
@@ -164,7 +164,7 @@ def test_report_golden_lifecycle_and_preview(client):
     assert all(title in html for title in expected_titles)
 
     pdf = pdfium.PdfDocument(outputs["pdf"])
-    assert len(pdf) == 4
+    assert len(pdf) == 5
     first_page_text = pdf[0].get_textpage().get_text_range()
     assert "June Technology Review" not in first_page_text
     assert "Market Context" in first_page_text
@@ -241,7 +241,7 @@ def test_unfinished_report_preview_keeps_layout_and_fixed_portfolio_rows(client)
     preview = client.post(f"/api/v1/reports/{report['id']}/preview")
 
     assert preview.status_code == 200, preview.text
-    assert preview.text.count('class="report-page"') == 4
+    assert preview.text.count('class="report-page') == 5
     assert "Historical Performance of 3033.HK" in preview.text
     assert "Company News" in preview.text
     assert "Add monthly market review." not in preview.text
@@ -256,10 +256,10 @@ def test_unfinished_report_preview_keeps_layout_and_fixed_portfolio_rows(client)
     assert 'data-layout-mode="paged"' in preview.text
     assert preview.text.count(
         '<header class="page-header">Monthly Commentary | June 30, 2026</header>'
-    ) == 4
-    assert preview.text.count('<footer class="page-footer">') == 4
-    assert preview.text.count('alt="CSOP Asset Management"') == 4
-    for page in range(1, 5):
+    ) == 5
+    assert preview.text.count('<footer class="page-footer">') == 5
+    assert preview.text.count('alt="CSOP Asset Management"') == 5
+    for page in range(1, 6):
         assert f'<span class="page-number">{page}</span>' in preview.text
 
 
@@ -323,9 +323,9 @@ def test_simplified_chinese_variant_rebuilds_snapshot_lineage_and_is_independent
     assert "公司新闻" in preview.text
     assert "Company News" not in preview.text
     assert 'data-layout-mode="paged"' in preview.text
-    assert preview.text.count('<header class="page-header">') == 4
-    assert preview.text.count('<footer class="page-footer">') == 4
-    assert preview.text.count('alt="CSOP Asset Management"') == 4
+    assert preview.text.count('<header class="page-header">') == 5
+    assert preview.text.count('<footer class="page-footer">') == 5
+    assert preview.text.count('alt="CSOP Asset Management"') == 5
 
     duplicate = client.post(
         f"/api/v1/reports/{source['id']}/language-variants",
@@ -385,7 +385,7 @@ def test_simplified_chinese_variant_rebuilds_snapshot_lineage_and_is_independent
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(outputs["pdf"])
-    assert len(pdf) == 4
+    assert len(pdf) == 5
     pdf_text = "\n".join(page.get_textpage().get_text_range() for page in pdf)
     searchable_text = unicodedata.normalize("NFKC", pdf_text)
     assert "月度回顾" in searchable_text
@@ -455,17 +455,16 @@ def test_language_switch_syncs_module_choices_in_both_directions(client):
     assert selected.status_code == 200, selected.text
     source_detail = client.get(f"/api/v1/reports/{source['id']}").json()
     source_content = source_detail["latest_document"]["content"]
-    source_content["sections"]["month_in_review"]["blocks"] = [{
-        "block_id": "summary",
-        "type": "rich_text",
-        "title": "Monthly Review",
+    source_blocks = source_content["sections"]["month_in_review"]["blocks"]
+    source_summary = next(block for block in source_blocks if block["block_id"] == "summary")
+    source_summary.update({
         "content": "<p>English commentary stays English.</p>",
         "x": 2,
-        "y": 1,
+        "y": 0,
         "w": 8,
         "h": 4,
         "text_align": "left",
-    }]
+    })
     source_content["next_rebalancing_date"] = "2026-09-04"
     source_content["next_rebalancing_date_source"] = "MANUAL"
     saved = client.patch(f"/api/v1/reports/{source['id']}/document", json={
@@ -552,19 +551,18 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     assert selected_news.status_code == 200, selected_news.text
     source = client.get(f"/api/v1/reports/{source['id']}").json()
     source_content = source["latest_document"]["content"]
-    source_content["sections"]["month_in_review"]["blocks"] = [{
-        "block_id": "summary",
-        "type": "rich_text",
-        "title": "月度回顾",
+    source_blocks = source_content["sections"]["month_in_review"]["blocks"]
+    source_summary = next(block for block in source_blocks if block["block_id"] == "summary")
+    source_summary.update({
         "content": "<p>科技软件与网络。</p>",
         "x": 0,
         "y": 0,
         "w": 12,
         "h": 4,
         "text_align": "left",
-    }]
+    })
     source_content["sections"]["footnotes"]["historical"] = "历史数据说明。"
-    source_content["terminology_overrides"]["product_name"] = "南方东英测试产品"
+    source_content["terminology_overrides"]["securities"]["700"] = "腾讯控股"
     saved_source = client.patch(
         f"/api/v1/reports/{source['id']}/document",
         json={"version": source["latest_document"]["version"], "content": source_content},
@@ -585,10 +583,11 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     target_content = target["latest_document"]["content"]
     target_block = target_content["sections"]["month_in_review"]["blocks"][0]
     assert target["language_mode"] == "ZH_HANT"
-    assert target_block["title"] == "月度回顧"
+    fixed_target_title = target_content["sections"]["month_in_review"]["display_title"]
+    assert target_block["title"] == fixed_target_title
     assert target_block["content"] == "<p>科技軟件與網絡。</p>"
     assert target_content["sections"]["footnotes"]["historical"] == simplified_to_traditional("历史数据说明。")
-    assert target_content["terminology_overrides"]["product_name"] == "南方東英測試產品"
+    assert target_content["terminology_overrides"]["securities"]["700"] == "騰訊控股"
     assert target_content["sections"]["company_news"][0]["title"] == "騰訊推出新軟件"
     provenance = target_content["translation_provenance"]
     assert provenance["method"] == "CHINESE_VARIANT_SYNC"
@@ -627,7 +626,6 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     source = client.get(f"/api/v1/reports/{source['id']}").json()
     source_content = source["latest_document"]["content"]
     source_block = source_content["sections"]["month_in_review"]["blocks"][0]
-    source_block["title"] = "更新月度回顾"
     source_block["content"] = "<p>更新后的软件内容。</p>"
     source_content["sections"]["footnotes"]["historical"] = "更新后的历史数据说明。"
     saved_source = client.patch(
@@ -649,7 +647,7 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     target = client.get(f"/api/v1/reports/{target_id}").json()
     target_content = target["latest_document"]["content"]
     target_block = target_content["sections"]["month_in_review"]["blocks"][0]
-    assert target_block["title"] == "更新月度回顧"
+    assert target_block["title"] == fixed_target_title
     assert target_block["content"] == "<p>人工繁體內容。</p>"
     assert target_content["sections"]["company_news"][0]["title"] == "人工繁體新聞標題"
     assert target_content["sections"]["footnotes"]["historical"] == simplified_to_traditional("更新后的历史数据说明。")
@@ -673,7 +671,7 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     preview = client.post(f"/api/v1/reports/{target_id}/preview")
     assert preview.status_code == 200, preview.text
     assert 'lang="zh-HK"' in preview.text
-    assert preview.text.count('<header class="page-header">') == 4
+    assert preview.text.count('<header class="page-header">') == 5
 
     downloads = {format_name: download_report(client, target_id, format_name) for format_name in ["html", "pdf", "docx"]}
     outputs = {}
@@ -695,7 +693,7 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     import pypdfium2 as pdfium
 
     pdf = pdfium.PdfDocument(outputs["pdf"])
-    assert len(pdf) == 4
+    assert len(pdf) == 5
     pdf_text = unicodedata.normalize(
         "NFKC", "\n".join(page.get_textpage().get_text_range() for page in pdf)
     )
@@ -704,7 +702,7 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     assert "3033.HK 行業分佈" in pdf_text
     pdf.close()
     document = Document(io.BytesIO(outputs["docx"]))
-    assert len(document.sections) == 4
+    assert len(document.sections) == 5
     assert document.styles["Normal"].font.name == "Noto Sans CJK TC"
     docx_text = "\n".join(
         [paragraph.text for paragraph in document.paragraphs]
@@ -715,6 +713,130 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
     assert "3033.HK 成分股表現" in complete_docx_text
     assert "3033.HK 十大成分股" in complete_docx_text
     assert "3033.HK 行業分佈" in complete_docx_text
+
+
+def test_language_variant_from_finalized_v2_keeps_source_render_identity_after_catalog_upgrade(client):
+    from copy import deepcopy
+
+    from sqlalchemy import select
+
+    from app.domain.document import checksum
+    from app.domain.models import ProductCatalog, Report, ReportDocument
+
+    source = create_report(client)
+    with client.app.state.testing_sessionmaker() as session:
+        source_document = session.scalar(
+            select(ReportDocument).where(ReportDocument.report_id == source["id"])
+        )
+        content = deepcopy(source_document.content)
+        content["sections"]["month_in_review"]["blocks"] = [{
+            "block_id": "summary",
+            "type": "rich_text",
+            "title": "Market Context",
+            "content": "<p>Finalized legacy commentary.</p>",
+            "x": 3,
+            "y": 2,
+            "w": 6,
+            "h": 4,
+        }]
+        source_document.content = content
+        source_document.checksum = checksum(content)
+        session.commit()
+
+    finalized = client.post(
+        f"/api/v1/reports/{source['id']}/finalize",
+        json={"version": 1},
+    )
+    assert finalized.status_code == 200, finalized.text
+    assert finalized.json()["status"] == "FINALIZED"
+
+    with client.app.state.testing_sessionmaker() as session:
+        product = session.scalar(
+            select(ProductCatalog).where(ProductCatalog.product_code == "3033")
+        )
+        product.template_version = "3033-v3"
+        product.design_token_version = "3033-v3"
+        session.commit()
+
+    created = client.post(
+        f"/api/v1/reports/{source['id']}/language-variants",
+        json={"language_mode": "ZH_HANS", "source_document_version": 1},
+    )
+    assert created.status_code == 201, created.text
+
+    with client.app.state.testing_sessionmaker() as session:
+        target_report = session.get(Report, created.json()["id"])
+        target_document = session.scalar(
+            select(ReportDocument).where(ReportDocument.report_id == target_report.id)
+        )
+        target_content = target_document.content
+
+        assert target_report.template_version == "3033-v2"
+        assert target_document.template_version == "3033-v2"
+        assert target_content["template_version"] == "3033-v2"
+        assert target_content["design_token_version"] == "3033-v2"
+        assert "presentation" not in target_content
+        copied_block = target_content["sections"]["month_in_review"]["blocks"][0]
+        assert {key: copied_block[key] for key in ("x", "y", "w", "h")} == {
+            "x": 3,
+            "y": 2,
+            "w": 6,
+            "h": 4,
+        }
+
+
+def test_language_variant_retargets_copied_footnote_styles_to_blank_editorial(client):
+    source = create_report(client)
+    detail = client.get(f"/api/v1/reports/{source['id']}").json()
+    content = detail["latest_document"]["content"]
+    content["sections"]["footnotes"]["historical"] = "First paragraph.\n\nSecond paragraph."
+    footnote = next(
+        element
+        for element in content["presentation"]["page_one"]["elements"]
+        if element["id"] == "footnote:historical"
+    )
+    footnote["paragraph_styles"] = [
+        {
+            "paragraph_index": 0,
+            "font_size_role": "footnote-9",
+            "line_height_role": "1.2",
+            "text_align": "left",
+        },
+        {
+            "paragraph_index": 1,
+            "font_size_role": "footnote-10",
+            "line_height_role": "1.4",
+            "text_align": "right",
+        },
+    ]
+    saved = client.patch(
+        f"/api/v1/reports/{source['id']}/document",
+        json={"version": detail["latest_document"]["version"], "content": content},
+    )
+    assert saved.status_code == 200, saved.text
+
+    created = client.post(
+        f"/api/v1/reports/{source['id']}/language-variants",
+        json={"language_mode": "ZH_HANS", "source_document_version": saved.json()["version"]},
+    )
+    assert created.status_code == 201, created.text
+    target = client.get(f"/api/v1/reports/{created.json()['id']}").json()
+    target_content = target["latest_document"]["content"]
+    target_footnote = next(
+        element
+        for element in target_content["presentation"]["page_one"]["elements"]
+        if element["id"] == "footnote:historical"
+    )
+
+    assert target_content["sections"]["footnotes"].get("historical", "") == ""
+    assert target_footnote["paragraph_styles"] == [{
+        "paragraph_index": 0,
+        "font_size_role": "footnote-9",
+        "line_height_role": "1.2",
+        "text_align": "left",
+    }]
+    preview = client.post(f"/api/v1/reports/{target['id']}/preview")
+    assert preview.status_code == 200, preview.text
 
 
 def test_simplified_variant_converts_traditional_editorial(client):

@@ -7,6 +7,7 @@ import {
   api,
   type CompanyNewsCatalogItem,
   type CompanyNewsCatalogPage,
+  type CompanyNewsCatalogQuery,
   type NewsCandidateInput,
   type NewsSelectionDraft,
   type Report,
@@ -18,9 +19,15 @@ import { isReportReadOnly } from "../../reportModules";
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 type SnapshotNews = Record<string, unknown>;
 type SortOrder = "newest" | "oldest";
-type Importance = "" | "LOW" | "MEDIUM" | "HIGH";
+type SentimentFilter = "" | "bull" | "neutral" | "bear";
 type CompanyScope = "" | "CONSTITUENTS";
 const IGNORE_PENDING_SAVE: RegisterPendingSave = () => undefined;
+const SENTIMENT_FILTERS: Array<{ value: SentimentFilter; label: "allSentiment" | "bullish" | "neutral" | "bearish" }> = [
+  { value: "", label: "allSentiment" },
+  { value: "bull", label: "bullish" },
+  { value: "neutral", label: "neutral" },
+  { value: "bear", label: "bearish" },
+];
 
 export interface Draft extends NewsSelectionDraft {
   selectionKey: string;
@@ -149,6 +156,43 @@ export function publishedDateHkt(value: string): string {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
+export function reportYearDateRange(reportDate: string): { fromDate: string; toDate: string } {
+  const year = reportDate.slice(0, 4);
+  return { fromDate: `${year}-01-01`, toDate: `${year}-12-31` };
+}
+
+export function buildCompanyNewsCatalogQuery({
+  query,
+  companyScope,
+  source,
+  sentiment,
+  fromDate,
+  toDate,
+  sort,
+  cursor,
+}: {
+  query: string;
+  companyScope: CompanyScope;
+  source: string;
+  sentiment: SentimentFilter;
+  fromDate: string;
+  toDate: string;
+  sort: SortOrder;
+  cursor?: string;
+}): CompanyNewsCatalogQuery {
+  return {
+    query: query.trim() || undefined,
+    company_scope: companyScope || undefined,
+    source: source || undefined,
+    sentiment: sentiment || undefined,
+    from_date: fromDate,
+    to_date: toDate,
+    sort,
+    cursor,
+    limit: 50,
+  };
+}
+
 function errorMessage(error: unknown): string {
   return String(error).replace(/^Error:\s*/, "") || "Unable to load DA-Report company news.";
 }
@@ -251,7 +295,7 @@ export function CompanyNewsWorkbench({
   selectedSnapshot: SnapshotNews[];
   registerPendingSave?: RegisterPendingSave;
 }) {
-  const { locale, t, statusLabel } = useLocale();
+  const { locale, t } = useLocale();
   const version = report.latest_document?.version ?? 1;
   const readOnly = isReportReadOnly(report);
   const [catalog, setCatalog] = useState<CompanyNewsCatalogItem[]>([]);
@@ -267,11 +311,11 @@ export function CompanyNewsWorkbench({
   const deferredQuery = useDeferredValue(query);
   const [companyScope, setCompanyScope] = useState<CompanyScope>("");
   const [source, setSource] = useState("");
-  const [sentiment, setSentiment] = useState("");
-  const [importance, setImportance] = useState<Importance>("");
+  const [sentiment, setSentiment] = useState<SentimentFilter>("");
   const [sort, setSort] = useState<SortOrder>("newest");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const reportYearRange = useMemo(() => reportYearDateRange(report.report_date), [report.report_date]);
+  const [fromDate, setFromDate] = useState(reportYearRange.fromDate);
+  const [toDate, setToDate] = useState(reportYearRange.toDate);
   const [adding, setAdding] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const generation = useRef(0);
@@ -294,17 +338,15 @@ export function CompanyNewsWorkbench({
     setCatalog([]);
     setNextCursor(null);
     setHasMore(false);
-    void api.listCompanyNewsCatalog(report.id, {
-      query: deferredQuery.trim() || undefined,
-      company_scope: companyScope || undefined,
-      source: source || undefined,
-      sentiment: sentiment || undefined,
-      importance: importance || undefined,
-      from_date: fromDate || undefined,
-      to_date: toDate || undefined,
+    void api.listCompanyNewsCatalog(report.id, buildCompanyNewsCatalogQuery({
+      query: deferredQuery,
+      companyScope,
+      source,
+      sentiment,
+      fromDate,
+      toDate,
       sort,
-      limit: 50,
-    }).then((page) => {
+    })).then((page) => {
       if (generation.current !== requestGeneration) return;
       setCatalog(page.items);
       setFacets(page.facets);
@@ -316,25 +358,23 @@ export function CompanyNewsWorkbench({
     }).finally(() => {
       if (generation.current === requestGeneration) setLoading(false);
     });
-  }, [report.id, deferredQuery, companyScope, source, sentiment, importance, fromDate, toDate, sort, refreshToken]);
+  }, [report.id, deferredQuery, companyScope, source, sentiment, fromDate, toDate, sort, refreshToken]);
 
   loadMoreRef.current = () => {
     if (loading || loadingMore || !hasMore || !nextCursor) return;
     const requestGeneration = generation.current;
     setLoadingMore(true);
     setCatalogError("");
-    void api.listCompanyNewsCatalog(report.id, {
-      query: deferredQuery.trim() || undefined,
-      company_scope: companyScope || undefined,
-      source: source || undefined,
-      sentiment: sentiment || undefined,
-      importance: importance || undefined,
-      from_date: fromDate || undefined,
-      to_date: toDate || undefined,
+    void api.listCompanyNewsCatalog(report.id, buildCompanyNewsCatalogQuery({
+      query: deferredQuery,
+      companyScope,
+      source,
+      sentiment,
+      fromDate,
+      toDate,
       sort,
       cursor: nextCursor,
-      limit: 50,
-    }).then((page) => {
+    })).then((page) => {
       if (generation.current !== requestGeneration) return;
       setCatalog((current) => mergeCatalogItems(current, page.items));
       setFacets(page.facets);
@@ -389,14 +429,19 @@ export function CompanyNewsWorkbench({
     setCompanyScope("");
     setSource("");
     setSentiment("");
-    setImportance("");
-    setFromDate("");
-    setToDate("");
+    setFromDate(reportYearRange.fromDate);
+    setToDate(reportYearRange.toDate);
     setSort("newest");
   };
-  const filtered = Boolean(query || companyScope || source || sentiment || importance || fromDate || toDate || sort !== "newest");
-  const displayedFromDate = fromDate || facets.date_min || "";
-  const displayedToDate = toDate || facets.date_max || "";
+  const filtered = Boolean(
+    query
+    || companyScope
+    || source
+    || sentiment
+    || fromDate !== reportYearRange.fromDate
+    || toDate !== reportYearRange.toDate
+    || sort !== "newest"
+  );
 
   return <div className="news-workbench news-catalog-workbench">
     <section className="news-column news-candidates">
@@ -420,20 +465,20 @@ export function CompanyNewsWorkbench({
         </div>
         <select value={source} onChange={(event) => setSource(event.target.value)} aria-label={t("filterSource")}>
           <option value="">{t("allSources")}</option>
-          {facets.sources.map((item) => <option key={item.value} value={item.value}>{locale === "zh-Hans" ? (item.label_zh_hans ?? item.value) : locale === "zh-Hant" ? (item.label_zh ?? item.value) : item.label} ({item.count})</option>)}
+          {facets.sources.map((item) => <option key={item.value} value={item.value}>{locale === "zh-Hans" ? (item.label_zh_hans ?? item.value) : locale === "zh-Hant" ? (item.label_zh ?? item.value) : item.label}</option>)}
         </select>
-        <select value={sentiment} onChange={(event) => setSentiment(event.target.value)} aria-label={t("filterSentiment")}>
-          <option value="">{t("allSentiment")}</option>
-          {Object.entries(facets.sentiments).map(([value, count]) => <option key={value} value={value}>{sentimentLabel(value, locale, t)} ({count})</option>)}
-        </select>
-        <select value={importance} onChange={(event) => setImportance(event.target.value as Importance)} aria-label={t("filterImportance")}>
-          <option value="">{t("allImportance")}</option>
-          {(["HIGH", "MEDIUM", "LOW"] as const).map((value) => <option key={value} value={value}>{statusLabel(value)} ({facets.importance[value] ?? 0})</option>)}
-        </select>
+        <div className="scope-control news-company-scope" role="group" aria-label={t("filterSentiment")}>
+          {SENTIMENT_FILTERS.map((option) => <button
+            key={option.value || "all"}
+            className={sentiment === option.value ? "active" : ""}
+            aria-pressed={sentiment === option.value}
+            onClick={() => setSentiment(option.value)}
+          >{t(option.label)}</button>)}
+        </div>
         <div className="news-date-range">
-          <input type="date" value={displayedFromDate} max={displayedToDate || undefined} onChange={(event) => setFromDate(event.target.value)} aria-label={t("fromDate")} />
+          <input type="date" value={fromDate} max={toDate || undefined} onChange={(event) => setFromDate(event.target.value)} aria-label={t("fromDate")} />
           <span aria-hidden="true">→</span>
-          <input type="date" value={displayedToDate} min={displayedFromDate || undefined} onChange={(event) => setToDate(event.target.value)} aria-label={t("toDate")} />
+          <input type="date" value={toDate} min={fromDate || undefined} onChange={(event) => setToDate(event.target.value)} aria-label={t("toDate")} />
         </div>
         <div className="scope-control news-sort-control" role="group" aria-label={t("sortOrder")}>
           <button className={sort === "newest" ? "active" : ""} onClick={() => setSort("newest")}>{t("newest")}</button>

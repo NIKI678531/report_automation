@@ -57,6 +57,38 @@ describe("FastAPI client", () => {
     fetchMock.mockRestore();
   });
 
+  it("posts an unsaved report document to the canonical preview endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>preview</html>", {
+      status: 200,
+      headers: { "Content-Type": "text/html" },
+    }));
+    const controller = new AbortController();
+    const content = { sections: { month_in_review: { summary: "Unsaved copy" } } };
+
+    await expect(api.previewDraft("report/1", 7, content, controller.signal)).resolves.toBe("<html>preview</html>");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/remote/fund-cmt-auto/api/v1/reports/report%2F1/preview",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ version: 7, content }),
+        signal: controller.signal,
+      }),
+    );
+    fetchMock.mockRestore();
+  });
+
+  it("loads the saved preview without submitting a frozen document", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>saved</html>", { status: 200 }));
+    const controller = new AbortController();
+
+    await expect(api.previewSaved("report/1", controller.signal)).resolves.toBe("<html>saved</html>");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/remote/fund-cmt-auto/api/v1/reports/report%2F1/preview",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    fetchMock.mockRestore();
+  });
+
   it("loads the effective product catalog", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 200 }));
     await api.listProducts("2026-06-30");

@@ -8,6 +8,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .localization import is_chinese, is_zh_hans, is_zh_hant, month_name
+from .page_one_presentation import (
+    LINE_HEIGHT_ROLES,
+    REVIEW_FONT_SIZE_ROLES,
+    TEXT_ALIGNMENTS,
+    PageOnePresentationError,
+    page_one_presentation,
+)
 
 
 REVIEW_BLOCK_TYPES = {"rich_text", "heading", "bullet_list", "key_drivers", "areas_to_monitor", "outlook", "metric_callout", "image", "data_table", "page_break"}
@@ -26,13 +33,46 @@ class DocumentValidationError(ValueError):
 
 class ReviewHtmlSanitizer(HTMLParser):
     allowed_tags = {"p", "strong", "em", "ul", "ol", "li", "a", "br", "h2", "h3", "blockquote"}
+    paragraph_attributes = {
+        "data-font-size-role": REVIEW_FONT_SIZE_ROLES,
+        "data-line-height-role": LINE_HEIGHT_ROLES,
+        "data-text-align": TEXT_ALIGNMENTS,
+    }
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "font" or any(key.casefold() == "style" for key, _ in attrs):
+            raise PageOnePresentationError(
+                "Review content cannot contain inline CSS or font declarations.",
+                "sections.month_in_review.blocks.content",
+            )
         if tag not in self.allowed_tags:
+            return
+        if tag in {"p", "li"}:
+            normalized: list[tuple[str, str]] = []
+            seen: set[str] = set()
+            for key, value in attrs:
+                key = key.casefold()
+                if key in seen or key not in self.paragraph_attributes:
+                    raise PageOnePresentationError(
+                        f"Review {tag} contains unsupported formatting attribute {key!r}.",
+                        "sections.month_in_review.blocks.content",
+                    )
+                value = str(value or "")
+                if value not in self.paragraph_attributes[key]:
+                    raise PageOnePresentationError(
+                        f"Review {tag} contains unsupported value {value!r} for {key}.",
+                        "sections.month_in_review.blocks.content",
+                    )
+                seen.add(key)
+                normalized.append((key, value))
+            serialized = "".join(
+                f' {key}="{escape(value, quote=True)}"' for key, value in sorted(normalized)
+            )
+            self.parts.append(f"<{tag}{serialized}>")
             return
         if tag == "a":
             href = next((value for key, value in attrs if key == "href"), None)
@@ -86,6 +126,22 @@ def _has_substantive_review_text(block: dict[str, Any]) -> bool:
     } and not normalized.startswith("add the approved")
 
 
+def has_substantive_review_blocks(review: dict[str, Any]) -> bool:
+    """Return whether a Review already contains editor-authored block copy.
+
+    Initial v3 documents carry the complete page-one topology, including placeholder blocks.
+    Those placeholders must not outrank editorial text supplied later by snapshot binding or the
+    assisted-draft action.  Once any block contains substantive copy, however, the block model is
+    canonical and snapshot rebinding must preserve the editor's work.
+    """
+
+    blocks = review.get("blocks")
+    return isinstance(blocks, list) and any(
+        isinstance(block, dict) and _has_substantive_review_text(block)
+        for block in blocks
+    )
+
+
 def review_display_title(document: dict[str, Any]) -> str:
     review = document.get("sections", {}).get("month_in_review", {})
     for field in ("display_title", "title"):
@@ -98,6 +154,11 @@ def review_display_title(document: dict[str, Any]) -> str:
 
 def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
     result = deepcopy(content)
+    # Validate the authoritative v3 topology before the compatibility block fields. This keeps
+    # all page-one geometry failures on the PAGE_ONE_PRESENTATION_INVALID contract instead of
+    # leaking the legacy REVIEW_LAYOUT_INVALID fallback from an x/y/w/h check below.
+    if result.get("template_version") == "3033-v3" or "presentation" in result:
+        result = page_one_presentation.canonicalize_document(result)
     sections = result.get("sections")
     if not isinstance(sections, dict):
         raise ValueError("sections must be an object")
@@ -147,8 +208,9 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
         )
     result["next_rebalancing_date_source"] = source
     blocks = review.get("blocks")
+    has_block_schema = blocks is not None
     if blocks is None:
-        return result
+        blocks = []
     if not isinstance(blocks, list) or len(blocks) > 40:
         raise ValueError("Review blocks must be a list with at most 40 items")
     ids: set[str] = set()
@@ -199,27 +261,30 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
             vertical = left["y"] < right["y"] + right["h"] and right["y"] < left["y"] + left["h"]
             if horizontal and vertical:
                 raise ValueError(f"Review blocks {left['block_id']} and {right['block_id']} overlap")
-    review["layout_schema_version"] = 2
     ordered = sorted(normalized, key=lambda block: (block["y"], block["x"], block["block_id"]))
-    review["blocks"] = ordered
-    title_block = next((block for block in ordered if block["block_id"] == "summary"), None)
-    if title_block:
-        review["title"] = title_block["title"]
-        review["display_title"] = title_block["title"]
-    substantive = [block for block in ordered if _has_substantive_review_text(block)]
-    summary = (
-        next((block for block in substantive if block["block_id"] == "summary"), None)
-        or next((block for block in substantive if block["type"] == "rich_text"), None)
-        or next(iter(substantive), None)
-    )
-    outlook = (
-        next((block for block in substantive if block["block_id"] == "outlook"), None)
-        or next((block for block in substantive if block["type"] == "outlook"), None)
-    )
-    # Blocks are canonical in layout schema v2. Keep the legacy fields synchronized so older
-    # status checks and renderers cannot retain a placeholder after the editor has saved content.
-    review["summary"] = review_plain_text(summary["content"]) if summary else ""
-    review["outlook"] = review_plain_text(outlook["content"]) if outlook else ""
+    if has_block_schema:
+        review["layout_schema_version"] = 2
+        review["blocks"] = ordered
+        title_block = next((block for block in ordered if block["block_id"] == "summary"), None)
+        if title_block:
+            review["title"] = title_block["title"]
+            review["display_title"] = title_block["title"]
+        substantive = [block for block in ordered if _has_substantive_review_text(block)]
+        summary = (
+            next((block for block in substantive if block["block_id"] == "summary"), None)
+            or next((block for block in substantive if block["type"] == "rich_text"), None)
+            or next(iter(substantive), None)
+        )
+        outlook = (
+            next((block for block in substantive if block["block_id"] == "outlook"), None)
+            or next((block for block in substantive if block["type"] == "outlook"), None)
+        )
+        # Blocks are canonical once present. Keep legacy fields synchronized so older status
+        # checks and renderers cannot retain a placeholder after the editor has saved content.
+        review["summary"] = review_plain_text(summary["content"]) if summary else ""
+        review["outlook"] = review_plain_text(outlook["content"]) if outlook else ""
+    if page_one_presentation.supports(result):
+        result = page_one_presentation.canonicalize_document(result)
     return result
 
 
@@ -304,7 +369,7 @@ def initial_document(
         if is_zh_hans(language_mode)
         else f"{month} in Review"
     )
-    return {
+    document = {
         "report_id": report_id,
         "template_version": template_version,
         "design_token_version": design_token_version,
@@ -338,6 +403,7 @@ def initial_document(
             "footnotes": {},
         },
     }
+    return page_one_presentation.adapt_document(document) if template_version == "3033-v3" else document
 
 
 def bind_snapshot(
@@ -360,7 +426,11 @@ def bind_snapshot(
     if include_testing_editorial and snapshot_payload.get("month_in_review"):
         existing_review = result["sections"].get("month_in_review", {})
         incoming_review = deepcopy(snapshot_payload["month_in_review"])
-        for field in ("title", "display_title", "blocks", "layout_schema_version"):
+        preserve_blocks = has_substantive_review_blocks(existing_review)
+        preserved_fields = ["title", "display_title"]
+        if preserve_blocks:
+            preserved_fields.extend(["blocks", "layout_schema_version"])
+        for field in preserved_fields:
             if field in existing_review:
                 incoming_review[field] = deepcopy(existing_review[field])
         incoming_review["provenance"] = {
@@ -369,8 +439,11 @@ def bind_snapshot(
             "note": "Transcribed from the approved reference report. Not generated, not derived.",
         }
         result["sections"]["month_in_review"] = incoming_review
+        if result.get("template_version") == "3033-v3" and not preserve_blocks:
+            result = page_one_presentation.adapt_document(result)
     result["sections"]["analytics"] = snapshot_payload.get("analytics", result["sections"]["analytics"])
     result["sections"]["footnotes"] = snapshot_payload.get("footnotes", {})
+    result = page_one_presentation.retarget_footnote_styles(result)
     if result.get("next_rebalancing_date_source") != "MANUAL":
         result["next_rebalancing_date"] = snapshot_payload.get("next_rebalancing_date")
         result["next_rebalancing_date_source"] = "SNAPSHOT"

@@ -5,10 +5,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CompanyNewsWorkbench,
+  buildCompanyNewsCatalogQuery,
   catalogSelectionKey,
   draftsFromSnapshot,
   mergeCatalogItems,
   publishedDateHkt,
+  reportYearDateRange,
   toggleCatalogSelection,
 } from "./CompanyNewsWorkbench";
 import { api, type CompanyNewsCatalogItem, type Report } from "../../api";
@@ -103,6 +105,43 @@ describe("DA-Report company news catalog", () => {
 });
 
 describe("Company News report context", () => {
+  it("derives the default catalog window from the report year without timezone conversion", () => {
+    expect(reportYearDateRange("2026-06-30")).toEqual({
+      fromDate: "2026-01-01",
+      toDate: "2026-12-31",
+    });
+  });
+
+  it("uses one catalog-query shape for initial and cursor requests", () => {
+    const filters = {
+      query: " Tencent ",
+      companyScope: "CONSTITUENTS" as const,
+      source: "reuters",
+      sentiment: "bear" as const,
+      fromDate: "2026-01-01",
+      toDate: "2026-12-31",
+      sort: "newest" as const,
+    };
+
+    expect(buildCompanyNewsCatalogQuery(filters)).toEqual({
+      query: "Tencent",
+      company_scope: "CONSTITUENTS",
+      source: "reuters",
+      sentiment: "bear",
+      from_date: "2026-01-01",
+      to_date: "2026-12-31",
+      sort: "newest",
+      cursor: undefined,
+      limit: 50,
+    });
+    expect(buildCompanyNewsCatalogQuery({ ...filters, cursor: "page-2" })).toEqual(expect.objectContaining({
+      from_date: "2026-01-01",
+      to_date: "2026-12-31",
+      sentiment: "bear",
+      cursor: "page-2",
+    }));
+  });
+
   it("uses the HKT publication date across a UTC month boundary", () => {
     expect(publishedDateHkt("2026-05-31T16:30:00Z")).toBe("2026-06-01");
   });
@@ -141,7 +180,35 @@ describe("Company News automatic catalog loading", () => {
     render(<CompanyNewsWorkbench report={report} busy={false} run={run} selectedSnapshot={[]} />);
 
     expect(await screen.findByText("DA-Report headline")).toBeTruthy();
-    expect(catalog).toHaveBeenCalledWith("report-1", expect.objectContaining({ limit: 50, sort: "newest" }));
+    expect(catalog).toHaveBeenCalledWith("report-1", expect.objectContaining({
+      from_date: "2026-01-01",
+      to_date: "2026-12-31",
+      limit: 50,
+      sort: "newest",
+    }));
+    expect(catalog.mock.calls[0]?.[1]).not.toHaveProperty("importance");
+    expect(screen.queryByLabelText("Filter by importance")).toBeNull();
+    expect((screen.getByLabelText("From date") as HTMLInputElement).value).toBe("2026-01-01");
+    expect((screen.getByLabelText("To date") as HTMLInputElement).value).toBe("2026-12-31");
+    expect(screen.queryByRole("button", { name: /Clear filters/ })).toBeNull();
+
+    const sentiment = screen.getByRole("group", { name: "Filter by sentiment" });
+    expect(within(sentiment).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "All", "Bullish", "Neutral", "Bearish",
+    ]);
+    await user.click(within(sentiment).getByRole("button", { name: "Bearish" }));
+    await waitFor(() => expect(catalog).toHaveBeenLastCalledWith(
+      "report-1",
+      expect.objectContaining({ sentiment: "bear", from_date: "2026-01-01", to_date: "2026-12-31" }),
+    ));
+    const fromDate = screen.getByLabelText("From date") as HTMLInputElement;
+    await user.clear(fromDate);
+    await user.type(fromDate, "2026-02-01");
+    await waitFor(() => expect(catalog).toHaveBeenLastCalledWith(
+      "report-1",
+      expect.objectContaining({ from_date: "2026-02-01", to_date: "2026-12-31" }),
+    ));
+
     const companyScope = screen.getByRole("group", { name: "Company scope" });
     expect(within(companyScope).getAllByRole("button")).toHaveLength(2);
     await user.type(screen.getByLabelText("Search company news"), "Tencent");
@@ -156,6 +223,11 @@ describe("Company News automatic catalog loading", () => {
     ));
     await user.click(screen.getByRole("button", { name: /Clear filters/ }));
     expect(within(companyScope).getByRole("button", { name: "All companies" }).className).toContain("active");
+    await waitFor(() => {
+      expect((screen.getByLabelText("From date") as HTMLInputElement).value).toBe("2026-01-01");
+      expect((screen.getByLabelText("To date") as HTMLInputElement).value).toBe("2026-12-31");
+      expect(within(sentiment).getByRole("button", { name: "All" }).className).toContain("active");
+    });
   });
 
   it("disables the company filter when no constituent snapshot is available", async () => {
@@ -178,6 +250,9 @@ describe("Company News automatic catalog loading", () => {
 
     expect(await screen.findByText("DA-Report 标题")).toBeTruthy();
     expect(screen.getByRole("button", { name: "3033.HK 成份股" })).toBeTruthy();
+    expect(within(screen.getByRole("group", { name: "按情绪筛选" })).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "全部", "看多", "中性", "看空",
+    ]);
   });
 
   it("shows Traditional Chinese catalog content and Hong Kong scope copy", async () => {
@@ -188,6 +263,9 @@ describe("Company News automatic catalog loading", () => {
     expect(await screen.findByText("DA-Report 標題")).toBeTruthy();
     expect(screen.getByRole("button", { name: "3033.HK 成份股" })).toBeTruthy();
     expect(screen.getByText("中國")).toBeTruthy();
+    expect(within(screen.getByRole("group", { name: "按情緒篩選" })).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "全部", "看多", "中性", "看空",
+    ]);
   });
 
   it("shows a visible error and retries the catalog request", async () => {

@@ -34,6 +34,9 @@ render = ["playwright>=1.54,<2", "pypdfium2>=4.30,<5", "pillow>=11,<12"]
 where = ["."]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+"app.rendering" = ["templates/*.j2", "tokens/*.json", "static/*.png", "resources/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

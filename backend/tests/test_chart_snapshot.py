@@ -202,7 +202,7 @@ def test_every_output_format_reads_the_same_display_value(client, tmp_path):
     for value in expected:
         assert value in chart_descriptions
     assert len(document.inline_shapes) == 1
-    assert len(document.sections) == 4
+    assert len(document.sections) == 5
     assert document.styles["Normal"].font.name == "Calibri"
     assert document.styles["Normal"].font.size.pt == 10
     assert document.styles["Title"].font.name == "Calibri"

@@ -40,6 +40,16 @@ PAGE4_REQUIRED_TEXT = (
     "Portfolio Analysis",
 )
 
+PAGE5_REQUIRED_TEXT = (
+    "Disclaimer",
+    "This document is not for public distribution outside Hong Kong.",
+    "For the Index Provider Disclaimer, please refer to the Product’s offering document.",
+    "Issuer: CSOP Asset Management Limited",
+)
+
+POINTS_PER_MM = 72 / 25.4
+
+
 def verify_pdf(actual_pdf: Path, reference_pdf: Path, evidence_root: Path) -> dict:
     actual_document = pdfium.PdfDocument(str(actual_pdf))
     reference_document = pdfium.PdfDocument(str(reference_pdf))
@@ -54,16 +64,18 @@ def verify_pdf(actual_pdf: Path, reference_pdf: Path, evidence_root: Path) -> di
     ]
     structural = {
         "page_count": len(actual_document),
-        "expected_page_count": 4,
-        "page_count_passed": len(actual_document) == 4,
+        "expected_page_count": 5,
+        "page_count_passed": len(actual_document) == 5,
         "page_sizes": actual_sizes,
         "a4_sizes_passed": all(abs(width - 595.2) <= 1 and abs(height - 841.92) <= 1 for width, height in actual_sizes),
-        "reference_sizes_match": len(actual_sizes) == len(reference_sizes) and all(
+        # The approved visual reference predates the legal fifth page. Keep comparing its four
+        # report pages exactly while validating the new page independently below.
+        "reference_sizes_match": len(reference_sizes) == 4 and len(actual_sizes) == 5 and all(
             abs(actual[0] - reference[0]) <= 1 and abs(actual[1] - reference[1]) <= 1
-            for actual, reference in zip(actual_sizes, reference_sizes)
+            for actual, reference in zip(actual_sizes[:4], reference_sizes)
         ),
     }
-    visual_passed = len(comparisons) == 4 and all(page["pixel_difference_ratio"] <= 0.005 for page in comparisons)
+    visual_passed = len(comparisons) == len(reference_pages) == 4 and all(page["pixel_difference_ratio"] <= 0.005 for page in comparisons)
     def _page4_content(document: pdfium.PdfDocument, image_path: Path) -> dict:
         if len(document) < 4:
             return {"required_text_passed": False, "missing_text": list(PAGE4_REQUIRED_TEXT), "donut_passed": False}
@@ -108,6 +120,56 @@ def verify_pdf(actual_pdf: Path, reference_pdf: Path, evidence_root: Path) -> di
             "donut_center_white_ratio": round(center_white_ratio, 6),
         }
     page4_content = _page4_content(actual_document, actual_pages[3]) if len(actual_pages) >= 4 else _page4_content(actual_document, Path())
+    page5_text_page = actual_document[4].get_textpage() if len(actual_document) >= 5 else None
+    page5_text = page5_text_page.get_text_bounded() if page5_text_page is not None else ""
+    disclaimer_start = page5_text.find("Disclaimer")
+    disclaimer_end = page5_text.find(PAGE5_REQUIRED_TEXT[-1])
+    disclaimer_end = (
+        disclaimer_end + len(PAGE5_REQUIRED_TEXT[-1])
+        if disclaimer_end >= 0
+        else -1
+    )
+    page5_bounds = None
+    page5_safe_area = None
+    page5_safe_area_passed = False
+    if page5_text_page is not None and disclaimer_start >= 0 and disclaimer_end > disclaimer_start:
+        rectangle_count = page5_text_page.count_rects(
+            disclaimer_start,
+            disclaimer_end - disclaimer_start,
+        )
+        rectangles = [page5_text_page.get_rect(index) for index in range(rectangle_count)]
+        if rectangles:
+            page_width = actual_document[4].get_width()
+            page_height = actual_document[4].get_height()
+            page5_bounds = {
+                "left": round(min(rectangle[0] for rectangle in rectangles), 2),
+                "bottom": round(min(rectangle[1] for rectangle in rectangles), 2),
+                "right": round(max(rectangle[2] for rectangle in rectangles), 2),
+                "top": round(max(rectangle[3] for rectangle in rectangles), 2),
+            }
+            # These limits mirror the paged template's outer content margins and reserve the
+            # complete header/footer bands. They intentionally measure only the approved legal
+            # copy, excluding the running chrome and TESTING watermark.
+            page5_safe_area = {
+                "left": round(10 * POINTS_PER_MM, 2),
+                "bottom": round(15 * POINTS_PER_MM, 2),
+                "right": round(page_width - 8 * POINTS_PER_MM, 2),
+                "top": round(page_height - 13 * POINTS_PER_MM, 2),
+            }
+            tolerance = 1.0
+            page5_safe_area_passed = (
+                page5_bounds["left"] >= page5_safe_area["left"] - tolerance
+                and page5_bounds["bottom"] >= page5_safe_area["bottom"] - tolerance
+                and page5_bounds["right"] <= page5_safe_area["right"] + tolerance
+                and page5_bounds["top"] <= page5_safe_area["top"] + tolerance
+            )
+    page5_content = {
+        "required_text_passed": all(value in page5_text for value in PAGE5_REQUIRED_TEXT),
+        "missing_text": [value for value in PAGE5_REQUIRED_TEXT if value not in page5_text],
+        "content_bounds": page5_bounds,
+        "safe_area": page5_safe_area,
+        "safe_area_passed": page5_safe_area_passed,
+    }
     manifest = {
         "schema_version": "1.0",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -116,9 +178,10 @@ def verify_pdf(actual_pdf: Path, reference_pdf: Path, evidence_root: Path) -> di
         "thresholds": {"pixel_difference_ratio": 0.005},
         "structural": structural,
         "page4_content": page4_content,
+        "page5_content": page5_content,
         "pages": comparisons,
         "visual_passed": visual_passed,
-        "passed": structural["page_count_passed"] and structural["a4_sizes_passed"] and structural["reference_sizes_match"] and page4_content["required_text_passed"] and page4_content["donut_passed"] and visual_passed,
+        "passed": structural["page_count_passed"] and structural["a4_sizes_passed"] and structural["reference_sizes_match"] and page4_content["required_text_passed"] and page4_content["donut_passed"] and page5_content["required_text_passed"] and page5_content["safe_area_passed"] and visual_passed,
     }
     evidence_root.mkdir(parents=True, exist_ok=True)
     (evidence_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

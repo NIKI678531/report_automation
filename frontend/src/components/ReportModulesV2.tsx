@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Calculator, Database, RefreshCw, Save, Sparkles } from "lucide-react";
 import { api, type DatasetSlot, type Report } from "../api";
 import { SectorDonut, sectorSlices, type SectorChartSnapshot } from "../features/analytics/SectorDonut";
 import { CompanyNewsWorkbench } from "../features/news/CompanyNewsWorkbench";
-import { legacyReviewBlocks, ReviewCanvas, type ReviewBlock } from "../features/review/ReviewCanvas";
+import { legacyReviewBlocks, pageOnePresentation, retargetHistoricalFootnoteStyles, ReviewCanvas, type PageOnePresentation, type ReviewBlock } from "../features/review/ReviewCanvas";
 import { FOOTNOTE_SECTIONS, isReportReadOnly, reportConstituentsTitle, reportMonthName, reportProductTicker, reviewLegacyText, type FootnoteSectionKey, type ModuleId } from "../reportModules";
 import type { RegisterPendingSave } from "../pendingSave";
 import { CsvDatasetUpload } from "./CsvDatasetUpload";
@@ -115,15 +115,25 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
   const content = report.latest_document?.content as JsonRecord | undefined;
   const review = (sectionsOf(report).month_in_review as JsonRecord | undefined) ?? {};
   const defaultReviewTitle = reviewTitleOf(report, review);
-  const [blocks, setBlocks] = useState<ReviewBlock[]>(() => legacyReviewBlocks(review, defaultReviewTitle, report.language_mode ?? "EN", !isReportReadOnly(report)));
   const initialTerminology = useMemo(() => (content?.terminology_overrides as JsonRecord | undefined) ?? {}, [report.id, version]);
-  const [terminology, setTerminology] = useState<JsonRecord>(initialTerminology);
   const initialBlocks = useMemo(() => legacyReviewBlocks(review, defaultReviewTitle, report.language_mode ?? "EN", !isReportReadOnly(report)), [report.id, version]);
+  const initialPresentation = useMemo(() => pageOnePresentation(content?.presentation, initialBlocks), [report.id, version]);
+  const initialHistoricalFootnote = useMemo(() => String(((sectionsOf(report).footnotes as JsonRecord | undefined) ?? {}).historical ?? ""), [report.id, version]);
+  const [blocks, setBlocks] = useState<ReviewBlock[]>(initialBlocks);
+  const [presentation, setPresentation] = useState<PageOnePresentation>(initialPresentation);
+  const [historicalFootnote, setHistoricalFootnote] = useState(initialHistoricalFootnote);
+  const [terminology, setTerminology] = useState<JsonRecord>(initialTerminology);
+  const [previewHtml, setPreviewHtml] = useState("");
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const previewSequence = useRef(0);
   useEffect(() => {
-    setBlocks(legacyReviewBlocks(review, reviewTitleOf(report, review), report.language_mode ?? "EN", !isReportReadOnly(report)));
+    setBlocks(initialBlocks);
+    setPresentation(initialPresentation);
+    setHistoricalFootnote(initialHistoricalFootnote);
     setTerminology((content?.terminology_overrides as JsonRecord | undefined) ?? {});
-  }, [report.id, version]);
-  const persist = useCallback(async () => {
+  }, [report.id, version, initialBlocks, initialHistoricalFootnote, initialPresentation]);
+  const draftContent = useMemo(() => {
     const next = structuredClone(content ?? {}) as JsonRecord;
     const nextSections = (next.sections as JsonRecord | undefined) ?? {};
     next.sections = nextSections;
@@ -134,27 +144,57 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
     section.title = normalizedTitle;
     section.display_title = normalizedTitle;
     section.layout_schema_version = 2;
-    section.blocks = blocks;
+    section.blocks = blocks.map((block) => {
+      const element = presentation.page_one.elements.find((candidate) => candidate.id === `review:${block.block_id}`);
+      return element ? { ...block, x: element.x, y: element.row, w: element.w, h: element.row_span } : block;
+    });
     const legacyText = reviewLegacyText(blocks);
     section.summary = legacyText.summary;
     section.outlook = legacyText.outlook;
+    const footnotes = (nextSections.footnotes as JsonRecord | undefined) ?? {};
+    nextSections.footnotes = { ...footnotes, historical: historicalFootnote };
+    next.presentation = presentation;
     next.terminology_overrides = terminology;
-    await api.saveDocument(report.id, version, next);
-  }, [blocks, content, defaultReviewTitle, report.id, terminology, version]);
+    return next;
+  }, [blocks, content, defaultReviewTitle, historicalFootnote, presentation, terminology]);
+  const persist = useCallback(async () => { await api.saveDocument(report.id, version, draftContent); }, [draftContent, report.id, version]);
   const frozen = isReportReadOnly(report);
-  const dirty = !frozen && (JSON.stringify(blocks) !== JSON.stringify(initialBlocks) || JSON.stringify(terminology) !== JSON.stringify(initialTerminology));
+  useEffect(() => {
+    if (!report.latest_document) return undefined;
+    const controller = new AbortController();
+    const sequence = ++previewSequence.current;
+    setPreviewBusy(true);
+    setPreviewError("");
+    const timer = window.setTimeout(() => {
+      (frozen
+        ? api.previewSaved(report.id, controller.signal)
+        : api.previewDraft(report.id, version, draftContent, controller.signal))
+        .then((html) => { if (sequence === previewSequence.current) setPreviewHtml(html); })
+        .catch((caught: unknown) => {
+          if (controller.signal.aborted || sequence !== previewSequence.current) return;
+          setPreviewError(String(caught));
+        })
+        .finally(() => { if (sequence === previewSequence.current) setPreviewBusy(false); });
+    }, 300);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [draftContent, frozen, report.id, report.latest_document, version]);
+  const dirty = !frozen && (
+    JSON.stringify(blocks) !== JSON.stringify(initialBlocks)
+    || JSON.stringify(presentation) !== JSON.stringify(initialPresentation)
+    || historicalFootnote !== initialHistoricalFootnote
+    || JSON.stringify(terminology) !== JSON.stringify(initialTerminology)
+  );
   useLayoutEffect(() => {
     registerPendingSave(dirty ? persist : null);
     return () => registerPendingSave(null);
   }, [dirty, persist, registerPendingSave]);
-  const setTerm = (field: string, value: string) => setTerminology((current) => ({ ...current, [field]: value }));
   const setNamedTerm = (field: "securities" | "industries", key: string, value: string) => setTerminology((current) => ({ ...current, [field]: { ...((current[field] as JsonRecord | undefined) ?? {}), [key]: value } }));
   const constituentNames = rows(sectionsOf(report).constituents);
   const industryNames = rows((((sectionsOf(report).analytics as JsonRecord | undefined)?.sector_chart as JsonRecord | undefined)?.series));
   const assistedPrompt = locale === "zh-Hans" ? "请在审核人确认后完成展望。" : locale === "zh-Hant" ? "請在審閱人確認後完成展望。" : "Complete the outlook after reviewer confirmation.";
   const localizedConstituentName = (row: JsonRecord) => locale === "zh-Hans" ? row.name_zh_hans : row.name_zh_hant;
   const localizedIndustryName = (row: JsonRecord) => locale === "zh-Hans" ? row.label_zh_hans : row.label_zh_hant;
-  return <><ModuleHeading eyebrow={t("pageDetail", { page: "01", detail: t("freeLayout") })} title={t("monthReview")} description={t("reviewDescription")} actions={<><button disabled={busy || !report.active_snapshot_id || frozen} onClick={() => run(() => api.generateDraft(report.id, version, assistedPrompt))}><Sparkles size={16} /> {t("assistedDraft")}</button><button className="primary" disabled={busy || frozen || !dirty} onClick={() => run(persist)}><Save size={16} /> {t("saveLayout")}</button></>} />{locale !== "en" && <section className="terminology-review"><h3>{t("terminologyReview")}</h3><p>{t("terminologyHelp")}</p><div className="terminology-fields"><label>{t("productName")}<input value={String(terminology.product_name ?? "")} disabled={frozen} onChange={(event) => setTerm("product_name", event.target.value)} /></label><label>{t("benchmarkName")}<input value={String(terminology.benchmark_name ?? "")} disabled={frozen} onChange={(event) => setTerm("benchmark_name", event.target.value)} /></label></div>{constituentNames.length > 0 && <details><summary>{t("securityNames")}</summary><div className="terminology-list">{constituentNames.map((row) => { const key = String(row.security_code ?? row.ticker ?? ""); const stored = (terminology.securities as JsonRecord | undefined) ?? {}; return <label key={key}><span>{row.ticker ? String(row.ticker) : key}</span><input value={String(stored[key] ?? localizedConstituentName(row) ?? "")} disabled={frozen} onChange={(event) => setNamedTerm("securities", key, event.target.value)} /></label>; })}</div></details>}{industryNames.length > 0 && <details><summary>{t("industryNames")}</summary><div className="terminology-list">{industryNames.map((row) => { const key = String(row.code ?? ""); const stored = (terminology.industries as JsonRecord | undefined) ?? {}; return <label key={key}><span>{key}</span><input value={String(stored[key] ?? localizedIndustryName(row) ?? "")} disabled={frozen} onChange={(event) => setNamedTerm("industries", key, event.target.value)} /></label>; })}</div></details>}</section>}<ReviewCanvas initialBlocks={blocks} disabled={frozen} onChange={setBlocks} /></>;
+  return <><ModuleHeading eyebrow={t("pageDetail", { page: "01", detail: t("freeLayout") })} title={t("monthReview")} description={t("reviewDescription")} actions={<><button disabled={busy || !report.active_snapshot_id || frozen} onClick={() => run(() => api.generateDraft(report.id, version, assistedPrompt))}><Sparkles size={16} /> {t("assistedDraft")}</button><button className="primary" disabled={busy || frozen || !dirty} onClick={() => run(persist)}><Save size={16} /> {t("saveLayout")}</button></>} />{locale !== "en" && <section className="terminology-review"><h3>{t("terminologyReview")}</h3><p>{t("terminologyHelp")}</p>{constituentNames.length > 0 && <details><summary>{t("securityNames")}</summary><div className="terminology-list">{constituentNames.map((row) => { const key = String(row.security_code ?? row.ticker ?? ""); const stored = (terminology.securities as JsonRecord | undefined) ?? {}; return <label key={key}><span>{row.ticker ? String(row.ticker) : key}</span><input value={String(stored[key] ?? localizedConstituentName(row) ?? "")} disabled={frozen} onChange={(event) => setNamedTerm("securities", key, event.target.value)} /></label>; })}</div></details>}{industryNames.length > 0 && <details><summary>{t("industryNames")}</summary><div className="terminology-list">{industryNames.map((row) => { const key = String(row.code ?? ""); const stored = (terminology.industries as JsonRecord | undefined) ?? {}; return <label key={key}><span>{key}</span><input value={String(stored[key] ?? localizedIndustryName(row) ?? "")} disabled={frozen} onChange={(event) => setNamedTerm("industries", key, event.target.value)} /></label>; })}</div></details>}</section>}<ReviewCanvas blocks={blocks} presentation={presentation} historicalFootnote={historicalFootnote} historicalTitle={t("historicalTitle")} disabled={frozen} previewHtml={previewHtml} previewBusy={previewBusy} previewError={previewError} onBlocksChange={setBlocks} onPresentationChange={setPresentation} onHistoricalFootnoteChange={setHistoricalFootnote} /></>;
 }
 
 function PerformanceModule({ report, busy, run }: Omit<ModuleProps, "active">) {
@@ -335,6 +375,13 @@ function FootnotesModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
     const sections = next.sections as JsonRecord;
     const stored = (sections.footnotes as JsonRecord | undefined) ?? {};
     sections.footnotes = { ...stored, ...footnotes };
+    const presentation = next.presentation as PageOnePresentation | undefined;
+    if (presentation?.schema_version === 1) {
+      next.presentation = retargetHistoricalFootnoteStyles(
+        presentation,
+        footnotes.historical,
+      );
+    }
     await api.saveDocument(report.id, version, next);
   }, [content, footnotes, report.id, version]);
   const dirty = !frozen && JSON.stringify(footnotes) !== JSON.stringify(initialFootnotes);

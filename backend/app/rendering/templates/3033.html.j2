@@ -31,7 +31,7 @@
     .review-flow-cell { min-width:0; }
     .review-layout-block { min-width:0; padding:0; border-left:0; background:transparent; overflow:visible; }
     .review-layout-block h3 { margin:0 0 1.2mm; color:var(--deep); font-size:14pt; line-height:1.1; }
-    .review-layout-content { font-size:10pt; line-height:1.22; }
+    .review-layout-content { min-width:0; overflow-wrap:anywhere; word-break:break-word; font-size:10pt; line-height:1.22; }
     .review-layout-content p { margin:0 0 .8mm; }
     .review-layout-content ul,.review-layout-content ol { margin:0; padding-left:5mm; }
     .review-layout-content li { margin-bottom:.5mm; }
@@ -39,6 +39,21 @@
     .review-layout-block.align-center { text-align:center; }
     .review-layout-block.align-right { text-align:right; }
     .review-layout-block.align-justify { text-align:justify; }
+{%- if page_one %}
+    .review-layout-content { font-size:{{ page_one.style_roles.defaults.review_font_size_pt }}pt; line-height:{{ page_one.style_roles.defaults.review_line_height }}; }
+    .review-layout-content [data-font-size-role="review-10"] { font-size:{{ page_one.style_roles.font_size_pt['review-10'] }}pt; }
+    .review-layout-content [data-font-size-role="review-11"] { font-size:{{ page_one.style_roles.font_size_pt['review-11'] }}pt; }
+    .review-layout-content [data-line-height-role="1.0"] { line-height:{{ page_one.style_roles.line_height['1.0'] }}; }
+    .review-layout-content [data-line-height-role="1.2"] { line-height:{{ page_one.style_roles.line_height['1.2'] }}; }
+    .review-layout-content [data-line-height-role="1.4"] { line-height:{{ page_one.style_roles.line_height['1.4'] }}; }
+    .review-layout-content [data-text-align="left"] { text-align:left; }
+    .review-layout-content [data-text-align="center"] { text-align:center; }
+    .review-layout-content [data-text-align="right"] { text-align:right; }
+    .review-layout-content [data-text-align="justify"] { text-align:justify; }
+    [data-layout-id] { outline:1.2pt solid transparent; outline-offset:1mm; }
+    [data-layout-selected="true"] { outline-color:var(--blue); background:rgba(38,96,173,.06); }
+    [data-layout-overflow="true"] { outline-color:#f5222d; background:rgba(245,34,45,.08); }
+{%- endif %}
     ol { margin:0; padding-left:6mm; } li { padding-left:1mm; margin-bottom:1mm; }
     .history { margin-top:3mm; }
     table { width:100%; border-collapse:collapse; }
@@ -74,6 +89,12 @@
     .simple td { border-bottom:1px solid #000; }
     .portfolio { margin-top:7mm; } .portfolio td { border-bottom:1px solid #000; padding:2mm; }
     .portfolio td:first-child { font-weight:700; }
+    .disclaimer-page { font-family:Calibri,Carlito,Arial,sans-serif; }
+    .disclaimer-page .page-body { padding:4mm 7mm 0; }
+    .disclaimer-page h2 { margin:1mm 0 3mm; font-size:14pt; }
+    .disclaimer-copy { font-size:11pt; line-height:1.24; }
+    .disclaimer-copy p { margin:0 0 2.2mm; }
+    .disclaimer-copy .disclaimer-issuer { margin-top:6mm; }
     .empty-note { color:#666; font-style:italic; }
     .table-scroll { width:100%; overflow-x:auto; }
     [data-page="1"] .page-header { border-bottom:0; height:5mm; }
@@ -99,6 +120,8 @@
     .layout-continuous .page-body { padding:0; }
     .layout-continuous .footnote { position:static; margin:4mm 3mm 0; }
     .layout-continuous .report-page + .report-page { padding-top:4mm; }
+    .layout-continuous .disclaimer-page { margin-top:6mm; border-top:.45pt solid var(--deep); }
+    .layout-continuous .disclaimer-page .page-body { padding:0; }
     @media screen and (max-width:800px) {
       .layout-continuous .report-page { min-height:0; padding:6mm 4mm; overflow:visible; }
       .layout-continuous .constituents { min-width:760px; }
@@ -108,9 +131,9 @@
   </style>
 </head>
 <body class="layout-{{ layout_mode }} language-{{ language_mode|lower|replace('_', '-') }}">
-{% macro chrome(page) -%}
+{% macro chrome(page, header_text='') -%}
   {%- if layout_mode == 'paged' %}
-  <header class="page-header">{{ t('monthly_commentary') }} | {{ report_date_long }}</header>
+  <header class="page-header">{% if header_text %}{{ header_text }}{% else %}{{ t('monthly_commentary') }} | {{ report_date_long }}{% endif %}</header>
   <footer class="page-footer"><img src="data:image/png;base64,{{ logo_data }}" alt="CSOP Asset Management"><span class="page-number">{{ page }}</span></footer>
   {%- endif %}
   {%- if testing_banner %}
@@ -121,7 +144,7 @@
 
 {% macro review_node(node) -%}
   {%- if node.kind == 'block' %}
-  {% set block = node.block %}<section class="review-layout-block align-{{ block.text_align|default('left', true) }}" data-block-id="{{ block.block_id }}"><h3>{{ block.title }}</h3><div class="review-layout-content">{{ block.content|safe }}</div></section>
+  {% set block = node.block %}<section class="review-layout-block align-{{ block.text_align|default('left', true) }}" data-block-id="{{ block.block_id }}"{% if page_one %} data-layout-id="{{ block.layout_id }}" style="margin-top:{{ block.vertical_nudge_pt }}pt"{% endif %}><h3>{{ block.title }}</h3><div class="review-layout-content">{{ block.content|safe }}</div></section>
   {%- elif node.kind == 'columns' %}
   <div class="review-flow-columns" data-review-flow="columns" style="grid-template-columns:repeat({{ node.w }},minmax(0,1fr))">{% for child in node.children %}<div class="review-flow-cell" style="grid-column:{{ child.x - node.x + 1 }} / span {{ child.w }}">{{ review_node(child) }}</div>{% endfor %}</div>
   {%- else %}
@@ -146,9 +169,9 @@
         <section><h2>{{ t('areas_to_monitor') }}</h2><ol>{% for item in sections.month_in_review.get('monitor', []) %}<li><strong>{{ item.get('title', '') }}</strong><br>{{ item.get('body', '') }}</li>{% endfor %}</ol><h2>{{ t('outlook') }}</h2><p>{{ sections.month_in_review.get('outlook', '') }}</p></section>
       </div>
     {% endif %}
-    <h2 class="center">{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}</h2>
-    <div class="table-scroll" role="region" aria-label="{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}"><table class="history"><thead><tr><th></th><th>{{ t('return_1m') }}</th><th>{{ t('return_3m') }}</th><th>{{ t('return_6m') }}</th><th>{{ t('return_ytd') }}</th></tr></thead><tbody>{% for row in sections.historical_performance.get('rows', []) %}<tr><td>{{ row.get('name', '') }}</td><td>{{ row.get('return_1m')|pct(language_mode) }}</td><td>{{ row.get('return_3m')|pct(language_mode) }}</td><td>{{ row.get('return_6m')|pct(language_mode) }}</td><td>{{ row.get('return_ytd')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></div>
-  </main><div class="footnote">{{ sections.footnotes.historical|default('') }}</div>
+    <section class="historical-module"{% if page_one %} data-layout-id="historical_performance" style="margin-top:{{ page_one.historical.vertical_nudge_pt }}pt"{% endif %}><h2 class="center">{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}</h2>
+    <div class="table-scroll" role="region" aria-label="{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}"><table class="history"{% if page_one %} style="font-size:{{ page_one.historical.table_font_size_pt }}pt;line-height:{{ page_one.historical.table_line_height }}"{% endif %}><thead><tr><th></th><th>{{ t('return_1m') }}</th><th>{{ t('return_3m') }}</th><th>{{ t('return_6m') }}</th><th>{{ t('return_ytd') }}</th></tr></thead><tbody>{% for row in sections.historical_performance.get('rows', []) %}<tr><td>{{ row.get('name', '') }}</td><td>{{ row.get('return_1m')|pct(language_mode) }}</td><td>{{ row.get('return_3m')|pct(language_mode) }}</td><td>{{ row.get('return_6m')|pct(language_mode) }}</td><td>{{ row.get('return_ytd')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></div></section>
+  </main><div class="footnote"{% if page_one %} data-layout-id="footnote:historical" style="bottom:{{ page_one.footnote.bottom_mm }}mm"{% endif %}>{% if page_one %}{% for paragraph in page_one.footnote.paragraphs %}<p data-paragraph-index="{{ paragraph.paragraph_index }}" style="font-size:{{ paragraph.font_size_pt }}pt;line-height:{{ paragraph.line_height }};text-align:{{ paragraph.text_align }}">{{ paragraph.text }}</p>{% endfor %}{% else %}{{ sections.footnotes.historical|default('') }}{% endif %}</div>
 </section>
 
 <section class="report-page" data-page="2" data-section-key="company_news">
@@ -164,6 +187,11 @@
   {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title title-split"><span>{{ t('top10', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</span><span>(%)</span></div><table class="top10">{% for row in sections.analytics.get('top10', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('weight')|pct(language_mode) }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">{{ t('sector_breakdown', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</div>{% if sector_chart.has_data %}<svg class="donut" role="img" aria-label="{{ sector_chart.alt_text }}" style="width:{{ sector_chart.box_mm }}mm;height:{{ sector_chart.box_mm }}mm" viewBox="0 0 {{ sector_chart.view_box }} {{ sector_chart.view_box }}"><title>{{ t('sector_breakdown', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</title><desc>{{ sector_chart.alt_text }}</desc>{% for row in sector_chart.rows %}<path class="donut-slice" data-sector-slice="{{ row.sector }}" d="{{ row.path }}" fill="{{ row.color }}" />{% endfor %}{% for row in sector_chart.rows %}{% if not row.inside %}<polyline class="donut-leader" points="{{ row.leader }}" />{% endif %}{% endfor %}{% for row in sector_chart.rows %}<text class="{{ 'donut-label' if row.inside else 'donut-label-outside' }}" data-sector-label="{{ row.sector }}" x="{{ row.label_x }}" y="{{ row.label_y }}" text-anchor="{{ row.label_anchor }}" dominant-baseline="middle">{{ row.display_value }}</text>{% endfor %}</svg><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}</span>{% endfor %}</div>{% else %}<div class="sector-empty" aria-hidden="true"></div>{% endif %}</section></div>
   <div class="analytics-grid performers"><section><h2>{{ t('top_performers', month=doc.month_name) }}</h2><table class="simple"><thead><tr><th>{{ t('issuer') }}</th><th>{{ doc.month_name }} {{ t('return') }}</th></tr></thead><tbody>{% for row in sections.analytics.get('top', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('return')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></section><section><h2>{{ t('bottom_performers', month=doc.month_name) }}</h2><table class="simple"><thead><tr><th>{{ t('issuer') }}</th><th>{{ doc.month_name }} {{ t('return') }}</th></tr></thead><tbody>{% for row in sections.analytics.get('bottom', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('return')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></section></div>
   <section class="portfolio"><h2>{{ t('portfolio_analysis', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</h2><table>{% for row in portfolio_analysis %}<tr data-metric-code="{{ row.get('metric_code', '') }}"><td>{{ row.get('label', '') }}</td><td>{{ row.get('display_value', t('no_data')) }}</td></tr>{% endfor %}</table></section></main><div class="footnote">{{ sections.footnotes.analytics|default('') }}</div>
+</section>
+
+<section class="report-page disclaimer-page" data-page="5" data-section-key="disclaimer" data-disclaimer-version="{{ disclaimer.version }}" aria-labelledby="disclaimer-title">
+  {{ chrome(5, 'Monthly Commentary | ' ~ disclaimer_report_date_long) }}
+  <main class="page-body"><h2 id="disclaimer-title">{{ disclaimer.title }}</h2><div class="disclaimer-copy">{% for paragraph in disclaimer.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}<p class="disclaimer-issuer">{{ disclaimer.issuer }}</p></div></main>
 </section>
 </article>
 </body></html>

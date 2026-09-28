@@ -392,6 +392,18 @@ export const api = {
   calculate: (id: string) => request<CalculationResult>(`/reports/${id}/calculations`, { method: "POST", body: JSON.stringify({}) }),
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
   saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PATCH", body: JSON.stringify({ version, content }) }),
+  previewDraft: async (id: string, version: number, content: Record<string, unknown>, signal?: AbortSignal) => {
+    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview`), {
+      method: "POST",
+      body: JSON.stringify({ version, content }),
+      signal,
+    });
+    return response.text();
+  },
+  previewSaved: async (id: string, signal?: AbortSignal) => {
+    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview`), { signal });
+    return response.text();
+  },
   listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),
   uploadDataset: (id: string, datasetType: DatasetType, file: File) => { const body = new FormData(); body.append("dataset_type", datasetType); body.append("file", file); return request<ImportResult>(`/reports/${id}/imports`, { method: "POST", body }); },
   uploadImportBatch: (id: string, files: File[]) => { const body = new FormData(); files.forEach((file) => body.append("files", file)); return request<ImportBatch>(`/reports/${id}/import-batches`, { method: "POST", body }); },

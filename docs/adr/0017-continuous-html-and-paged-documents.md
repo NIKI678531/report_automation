@@ -1,6 +1,6 @@
 # ADR-0017: Continuous HTML and paged formal documents use separate layouts
 
-- Status: Amended by ADR-0018
+- Status: Amended by ADR-0018 and ADR-0032
 - Date: 2026-08-24
 
 ## Context

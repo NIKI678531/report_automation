@@ -398,13 +398,15 @@ describe("report module data responsibilities", () => {
     expect(screen.getByText("12,882 million")).toBeTruthy();
   });
 
-  it("uses the selected month as the summary title and saves block alignment without a duplicate title field", async () => {
+  it("uses the selected month as the summary title and saves paragraph alignment without changing the block fallback", async () => {
     const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
 
     render(<ReportModule report={report} active="review" busy={false} run={run} />);
 
     expect(screen.queryByLabelText("Month in Review title")).toBeNull();
-    expect(screen.getByLabelText("Title for summary block")).toHaveProperty("value", "June in Review");
+    expect(screen.queryByLabelText("Title for summary block")).toBeNull();
+    expect(screen.getAllByText("June in Review").length).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByTitle("Align center")[0]);
     fireEvent.click(screen.getByRole("button", { name: "Save layout" }));
 
@@ -416,11 +418,55 @@ describe("report module data responsibilities", () => {
           month_in_review: expect.objectContaining({
             title: "June in Review",
             display_title: "June in Review",
-            blocks: expect.arrayContaining([expect.objectContaining({ block_id: "summary", text_align: "center" })]),
+            blocks: expect.arrayContaining([expect.objectContaining({
+              block_id: "summary",
+              text_align: "left",
+              content: expect.stringContaining('data-text-align="center"'),
+            })]),
           }),
         }),
+        presentation: expect.objectContaining({ schema_version: 1 }),
       }),
     ));
+  });
+
+  it("keeps product and benchmark headings fixed in the Chinese Review editor", () => {
+    vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
+    const localizedReport = { ...report, language_mode: "ZH_HANS" } as Report;
+
+    render(
+      <LocaleProvider locale="zh-Hans">
+        <ReportModule report={localizedReport} active="review" busy={false} run={run} />
+      </LocaleProvider>,
+    );
+
+    expect(screen.queryByLabelText("产品名称")).toBeNull();
+    expect(screen.queryByLabelText("基准名称")).toBeNull();
+  });
+
+  it("previews unsaved Review changes and ignores an older response", async () => {
+    const pending: Array<{ resolve: (html: string) => void }> = [];
+    const previewDraft = vi.spyOn(api, "previewDraft").mockImplementation(() => new Promise<string>((resolve) => pending.push({ resolve })));
+
+    render(<ReportModule report={report} active="review" busy={false} run={run} />);
+    await waitFor(() => expect(previewDraft).toHaveBeenCalledTimes(1), { timeout: 1200 });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Historical performance footnote" }), {
+      target: { value: "Unsaved footnote draft." },
+    });
+    await waitFor(() => expect(previewDraft).toHaveBeenCalledTimes(2), { timeout: 1200 });
+    expect(previewDraft.mock.calls[1][2]).toEqual(expect.objectContaining({
+      sections: expect.objectContaining({
+        footnotes: expect.objectContaining({ historical: "Unsaved footnote draft." }),
+      }),
+      presentation: expect.objectContaining({ schema_version: 1 }),
+    }));
+
+    pending[1].resolve('<html><body data-preview="new"></body></html>');
+    await waitFor(() => expect(screen.getByTitle("Live paged preview").getAttribute("srcdoc")).toContain('data-preview="new"'));
+    pending[0].resolve('<html><body data-preview="old"></body></html>');
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(screen.getByTitle("Live paged preview").getAttribute("srcdoc")).toContain('data-preview="new"');
   });
 
   it("edits and saves the next rebalancing date as a manual document override", async () => {
@@ -464,6 +510,47 @@ describe("report module data responsibilities", () => {
       constituents: "Constituent disclosure from this report.",
       analytics: "Analytics disclosure from this report.",
     });
+  });
+
+  it("trims stale Review paragraph styles when Footnotes removes a paragraph", async () => {
+    const styledReport = structuredClone(report);
+    const content = styledReport.latest_document!.content as Record<string, unknown>;
+    const sections = content.sections as Record<string, Record<string, unknown>>;
+    sections.footnotes.historical = "First paragraph.\n\nSecond paragraph.";
+    content.presentation = {
+      schema_version: 1,
+      page_one: {
+        elements: [{
+          id: "footnote:historical",
+          row: 2,
+          row_span: 1,
+          x: 0,
+          w: 12,
+          vertical_nudge_steps: 0,
+          bottom_nudge_steps: 0,
+          paragraph_styles: [
+            { paragraph_index: 0, font_size_role: "footnote-9", line_height_role: "1.2", text_align: "left" },
+            { paragraph_index: 1, font_size_role: "footnote-10", line_height_role: "1.4", text_align: "right" },
+          ],
+        }],
+      },
+    };
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    render(<ReportModule report={styledReport} active="footnotes" busy={false} run={run} />);
+
+    fireEvent.change(screen.getByLabelText("Historical footnote"), {
+      target: { value: "Only one paragraph." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save disclosures" }));
+
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledOnce());
+    const savedContent = saveDocument.mock.calls[0][2] as Record<string, unknown>;
+    const presentation = savedContent.presentation as {
+      page_one: { elements: Array<{ id: string; paragraph_styles?: unknown[] }> };
+    };
+    expect(presentation.page_one.elements[0].paragraph_styles).toEqual([
+      { paragraph_index: 0, font_size_role: "footnote-9", line_height_role: "1.2", text_align: "left" },
+    ]);
   });
 
   it("leaves missing disclosures empty for another product instead of inventing content", () => {

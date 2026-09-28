@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 import pypdfium2 as pdfium
 from docx import Document
 from playwright.sync_api import sync_playwright
+from sqlalchemy import select
+
+from app.domain.models import ProductCatalog
 
 
 def prepared_report(client):
@@ -45,6 +48,51 @@ def test_calculation_and_ai_draft_are_versioned_and_bound(client):
     assert "30 constituents" in content["sections"]["month_in_review"]["summary"]
     review = client.get(f"/api/v1/reports/{report_id}/review")
     assert next(item for item in review.json()["checks"] if item["check_id"] == "QC-008")["status"] == "PASSED"
+
+
+def test_v3_ai_draft_replaces_initial_placeholder_review_blocks(client):
+    with client.app.state.testing_sessionmaker() as db:
+        product = db.scalar(select(ProductCatalog).where(ProductCatalog.product_code == "3033"))
+        product.template_version = "3033-v3"
+        product.design_token_version = "3033-v3"
+        db.commit()
+
+    report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+    initial = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]["content"]
+    snapshot = client.post(
+        f"/api/v1/reports/{report['id']}/snapshots",
+        json={"source_policy": "GOLDEN_FIXTURE"},
+    )
+    assert snapshot.status_code == 201, snapshot.text
+    calculated = client.post(f"/api/v1/reports/{report['id']}/calculations")
+    assert calculated.status_code == 200, calculated.text
+
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    placeholder_content = detail["latest_document"]["content"]
+    placeholder_content["sections"]["month_in_review"] = initial["sections"]["month_in_review"]
+    reset = client.patch(
+        f"/api/v1/reports/{report['id']}/document",
+        json={"version": detail["latest_document"]["version"], "content": placeholder_content},
+    )
+    assert reset.status_code == 200, reset.text
+
+    drafted = client.post(
+        f"/api/v1/reports/{report['id']}/ai/in-review",
+        json={
+            "version": reset.json()["version"],
+            "user_prompt": "Approved v3 outlook pending reviewer confirmation.",
+        },
+    )
+
+    assert drafted.status_code == 200, drafted.text
+    review = drafted.json()["content"]["sections"]["month_in_review"]
+    blocks = {block["block_id"]: block for block in review["blocks"]}
+    assert "30 constituents" in review["summary"]
+    assert "30 constituents" in blocks["summary"]["content"]
+    assert "Differentiated constituent performance" in blocks["drivers"]["content"]
+    assert "Earnings delivery and liquidity" in blocks["monitor"]["content"]
+    assert "Approved v3 outlook" in blocks["outlook"]["content"]
+    assert "Add monthly market review." not in blocks["summary"]["content"]
 
 
 def test_ai_number_check_remains_advisory_for_unbound_numbers(client):
@@ -199,7 +247,7 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
     invalid_content["sections"]["month_in_review"]["blocks"][1].update({"x": 5, "y": 2})
     rejected = client.patch(f"/api/v1/reports/{report_id}/document", json={"version": saved.json()["version"], "content": invalid_content})
     assert rejected.status_code == 422
-    assert rejected.json()["error_code"] == "REVIEW_LAYOUT_INVALID"
+    assert rejected.json()["error_code"] == "PAGE_ONE_PRESENTATION_INVALID"
 
 
 def _review_layout_measurements(markup: str) -> dict:
@@ -266,7 +314,7 @@ def test_review_preview_compacts_sparse_block_heights_without_changing_columns(c
     continuous_html = artifacts["html"].decode("utf-8")
     pdf_path = tmp_path / "compact-review.pdf"
     pdf_path.write_bytes(artifacts["pdf"])
-    assert len(pdfium.PdfDocument(str(pdf_path))) == 4
+    assert len(pdfium.PdfDocument(str(pdf_path))) == 5
 
     for markup in (preview.text, continuous_html):
         measured = _review_layout_measurements(markup)
@@ -412,7 +460,7 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
     assert rebound.status_code == 201, rebound.text
     refreshed = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]["content"]
     assert refreshed["sections"]["month_in_review"]["display_title"] == "Editable Monthly Perspective"
-    assert ">Editable Monthly Perspective</h2>" in client.post(f"/api/v1/reports/{report['id']}/preview").text
+    assert ">Editable Monthly Perspective</h3>" in client.post(f"/api/v1/reports/{report['id']}/preview").text
 
     refreshed["sections"]["month_in_review"]["display_title"] = "   "
     rejected = client.patch(
@@ -421,11 +469,11 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
     )
     assert rejected.status_code == 422
     assert rejected.json() == {
-        "error_code": "REVIEW_TITLE_INVALID",
+        "error_code": "PAGE_ONE_PRESENTATION_INVALID",
         "field": "sections.month_in_review.display_title",
-        "entity_id": None,
-        "message": "Review title cannot be empty.",
+        "entity_id": "review:summary",
+        "message": "The Review module title is fixed for this template.",
         "severity": "BLOCKING",
-        "fix_hint": "Enter a Review title before saving.",
+        "fix_hint": "Keep page-one elements in the 12-column flow, use supported style roles, and do not overlap layout rectangles.",
         "request_id": None,
     }

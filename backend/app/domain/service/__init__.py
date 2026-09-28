@@ -21,7 +21,14 @@ from __future__ import annotations
 from .audit import audit
 from .calculations import persist_calculation_records, run_calculation
 from .catalog import import_industry_master, import_products, list_products, resolve_product
-from .documents import ai_assisted_draft, latest_document, update_document
+from .documents import (
+    ai_assisted_draft,
+    canonicalize_document_content,
+    document_content_for_read,
+    latest_document,
+    preview_document_content,
+    update_document,
+)
 from .imports import dataset_slots, stage_import
 from .lifecycle import ensure_report_editable, ensure_report_not_archived
 from .import_batches import (
@@ -84,11 +91,13 @@ __all__ = [
     "create_import_batch",
     "create_revision",
     "create_snapshot",
+    "canonicalize_document_content",
     "dataset_present",
     "dataset_slots",
     "discard_import",
     "discard_import_batch",
     "delete_report",
+    "document_content_for_read",
     "empty_payload",
     "ensure_report_editable",
     "ensure_report_not_archived",
@@ -109,6 +118,7 @@ __all__ = [
     "missing_required_slots",
     "overlay_slot",
     "persist_calculation_records",
+    "preview_document_content",
     "release_gate_checks",
     "refresh_automatic_data",
     "require_complete_snapshot",

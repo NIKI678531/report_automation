@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "id": "3033-v3",
+  "extends": "3033-v2",
+  "change": "Controlled page-one flow, paragraph typography roles and fixed disclaimer page",
+  "review": {
+    "titleEditable": false,
+    "blockTitlesEditable": false,
+    "columns": 12,
+    "allowOverlap": false,
+    "verticalNudgeStepLines": 0.5,
+    "verticalNudgeMinSteps": -200,
+    "verticalNudgeMaxSteps": 200,
+    "defaultReviewFontSizeRole": "review-10",
+    "defaultReviewLineHeightRole": "1.2",
+    "defaultHistoricalTableFontSizeRole": "history-10",
+    "defaultHistoricalTableLineHeightRole": "1.2",
+    "footnoteBaselineBottomMm": 20,
+    "footnoteBottomNudgeStepLines": 0.5,
+    "fontSizeRolesPt": {
+      "review-10": 10,
+      "review-11": 11,
+      "history-9": 9,
+      "history-10": 10,
+      "history-11": 11,
+      "footnote-8": 8,
+      "footnote-9": 9,
+      "footnote-10": 10
+    },
+    "lineHeightRoles": {
+      "1.0": 1.0,
+      "1.2": 1.2,
+      "1.4": 1.4
+    },
+    "textAlignments": ["left", "center", "right", "justify"],
+    "footnoteBottomNudgeMinSteps": -3,
+    "footnoteBottomNudgeMaxSteps": 4
+  },
+  "rules": {
+    "pages": 5
+  }
+}

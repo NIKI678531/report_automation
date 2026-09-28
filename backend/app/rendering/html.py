@@ -30,6 +30,8 @@ from app.domain.localization import (
 )
 from app.domain.metrics.final_analytics import normalize_portfolio_rows
 from app.domain.models import Report
+from app.domain.page_one_presentation import page_one_presentation
+from .disclaimer import load_disclaimer
 
 ROOT = Path(__file__).resolve().parent
 env = Environment(
@@ -371,89 +373,10 @@ def localized_document(document: dict[str, Any], language_mode: str) -> dict[str
     return result
 
 
-def _interval_groups(
-    blocks: list[dict[str, Any]],
-    *,
-    start_key: str,
-    size_key: str,
-) -> list[list[dict[str, Any]]]:
-    """Return connected components of half-open intervals on one layout axis."""
-    ordered = sorted(
-        blocks,
-        key=lambda block: (
-            int(block[start_key]),
-            int(block[start_key]) + int(block[size_key]),
-            int(block["y"]),
-            int(block["x"]),
-            str(block["block_id"]),
-        ),
-    )
-    groups: list[list[dict[str, Any]]] = []
-    group_end: int | None = None
-    for block in ordered:
-        start = int(block[start_key])
-        end = start + int(block[size_key])
-        if group_end is None or start >= group_end:
-            groups.append([block])
-            group_end = end
-        else:
-            groups[-1].append(block)
-            group_end = max(group_end, end)
-    return groups
-
-
-def _review_flow_node(blocks: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compile non-overlapping editor rectangles into content-sized flow containers.
-
-    Column cuts take precedence so stacked blocks in one column do not inherit the height of a
-    longer neighbouring column. Horizontal cuts then preserve full-width bands and vertical
-    ordering. A non-slicing arrangement falls back to stable source rows rather than reserving
-    the editor's empty grid height in a delivered report.
-    """
-    ordered = sorted(
-        blocks,
-        key=lambda block: (int(block["y"]), int(block["x"]), str(block["block_id"])),
-    )
-    left = min(int(block["x"]) for block in ordered)
-    right = max(int(block["x"]) + int(block["w"]) for block in ordered)
-    top = min(int(block["y"]) for block in ordered)
-    bottom = max(int(block["y"]) + int(block["h"]) for block in ordered)
-    bounds = {"x": left, "y": top, "w": right - left, "h": bottom - top}
-    if len(ordered) == 1:
-        return {**bounds, "kind": "block", "block": ordered[0]}
-
-    column_groups = _interval_groups(ordered, start_key="x", size_key="w")
-    if len(column_groups) > 1:
-        return {
-            **bounds,
-            "kind": "columns",
-            "children": [_review_flow_node(group) for group in column_groups],
-        }
-
-    row_groups = _interval_groups(ordered, start_key="y", size_key="h")
-    if len(row_groups) > 1:
-        return {
-            **bounds,
-            "kind": "stack",
-            "children": [_review_flow_node(group) for group in row_groups],
-        }
-
-    fallback_rows: dict[int, list[dict[str, Any]]] = {}
-    for block in ordered:
-        fallback_rows.setdefault(int(block["y"]), []).append(block)
-    children = [
-        _review_flow_node(row) if len(row) > 1 else _review_flow_node([row[0]])
-        for _, row in sorted(fallback_rows.items())
-    ]
-    if len(children) == 1:
-        # Defensive only: validated layouts cannot contain overlapping blocks with the same y.
-        children = [_review_flow_node([block]) for block in ordered]
-    return {**bounds, "kind": "fallback", "children": children}
-
-
 def _review_flow_layout(blocks: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Build the export-only, content-driven representation of a Review layout."""
-    return _review_flow_node(blocks) if blocks else None
+    """Compatibility seam for v2 callers; topology still comes from the domain resolver."""
+
+    return page_one_presentation.compile_review_flow(blocks)
 
 
 def render_html(
@@ -471,7 +394,15 @@ def render_html(
     template_version = str(document.get("template_version", "3033-v1"))
     design_token_version = str(document.get("design_token_version", "3033-v1"))
     tokens = _render_tokens(design_token_version)
+    page_one = (
+        page_one_presentation.resolve_for_render(document, tokens)
+        if template_version == "3033-v3"
+        else None
+    )
+    if page_one is not None:
+        document = page_one["document"]
     sections = document["sections"]
+    disclaimer = load_disclaimer()
     banner = testing_banner(document)
     enable_review_layout = template_version != "3033-v1"
     if banner and is_chinese(language_mode):
@@ -498,11 +429,16 @@ def render_html(
         product_display_name=(document.get("terminology_overrides") or {}).get("product_name") or report.product_name,
         benchmark_display_name=(document.get("terminology_overrides") or {}).get("benchmark_name") or document.get("benchmark_name") or report.benchmark_code,
         report_date_long=long_date(report.report_date, language_mode),
+        disclaimer_report_date_long=long_date(report.report_date, "EN"),
+        disclaimer=disclaimer.template_context(),
         logo_data=logo,
         review_title=review_display_title(document),
         enable_review_layout=enable_review_layout,
+        page_one=page_one,
         review_layout=(
-            _review_flow_layout(sections.get("month_in_review", {}).get("blocks") or [])
+            page_one["review_layout"]
+            if page_one is not None
+            else _review_flow_layout(sections.get("month_in_review", {}).get("blocks") or [])
             if enable_review_layout
             else None
         ),

@@ -72,6 +72,6 @@ def test_review_flow_uses_stable_rows_for_a_non_slicing_layout():
 
 
 def test_compact_html_and_pdf_have_new_renderer_identities():
-    assert renderer_version_for("html") == "html-continuous-i18n-v3"
-    assert renderer_version_for("pdf").endswith("-paged-i18n-v3")
-    assert renderer_version_for("docx") == "docx-paged-i18n-v3"
+    assert renderer_version_for("html") == "html-continuous-i18n-v4"
+    assert renderer_version_for("pdf").endswith("-paged-i18n-v4")
+    assert renderer_version_for("docx") == "docx-paged-i18n-v4"

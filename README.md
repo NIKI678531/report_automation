@@ -70,9 +70,9 @@ The report title is an effective-dated fund selector backed by the API product c
 
 The workspace is organized around six report modules: Month in Review, Historical Performance, Company News, Constituent Performance, Final Analytics, and Footnotes & Disclosures. Snapshot loading, recalculation, assisted drafting, review, and finalization now live in their relevant module or report stage.
 
-The first module defaults to `<Month> in Review` in `3033-v2`. Its report title and every 12-column block title are editable and versioned in the same `ReportDocument` used by HTML, PDF, and DOCX. The workspace navigation displays physical PDF pages (`01`, `01`, `02`, `03`, `04`); Footnotes & Disclosures shows `01/03/04` because its content is embedded across those pages.
+The first module uses the `3033-v3` controlled page-one presentation model. Review copy and its allowlisted paragraph typography are editable beside a debounced paged preview; product/benchmark headings, module titles and bound financial tables remain fixed. Review blocks can move within a collision-checked 12-column topology, while all page-one modules and the historical footnote have bounded half-line spacing controls. The workspace navigation still maps the editable modules to report pages (`01`, `01`, `02`, `03`, `04`); the immutable professional-investor disclaimer is appended automatically as page `05` and is not an editor module.
 
-Final Analytics takes its displayed month and fund ticker from the canonical report document. Changing the top report date navigates to the latest report for that fund and date, or opens the create-report state when none exists. Company News loads HKT report-month candidates matched to the active constituent snapshot.
+Final Analytics takes its displayed month and fund ticker from the canonical report document. Changing the top report date navigates to the latest report for that fund and date, or opens the create-report state when none exists. Company News loads the report year's DA-Report catalog by default and exposes fixed All / Bullish / Neutral / Bearish sentiment controls.
 
 Report creation loads Historical Performance directly from the read-only CDB warehouse. Page 04 can load report-month HSTECH identity, closing price, weight and HSICS codes from CDB, then calculate 1M/3M/6M/YTD returns from FMP dividend-adjusted EOD history without waiting for a CSV; a constituent CSV remains a separate explicit override. Applying or refreshing data creates a new immutable mixed-source snapshot and derives Final Analytics on the server. Finalization locks the document version. Each subsequent HTML, PDF or DOCX download generates that version anew and deletes its temporary files after the response; no finished files are stored. See [ADR-0029](docs/adr/0029-on-demand-report-downloads.md). See [docs/news-sources-and-data-imports.md](docs/news-sources-and-data-imports.md).
 
@@ -85,4 +85,4 @@ npm run build
 ```
 
 The checked-in 3033 visual baseline is under `backend/tests/fixtures/3033_202606`.
-`scripts/verify_visual.py <downloaded.pdf>` checks an explicitly saved download and records page-4 text and donut-presence checks in `var/artifacts/visual/latest/manifest.json` in addition to the strict pixel comparison.
+`scripts/verify_visual.py <downloaded.pdf>` checks an explicitly saved five-page download, compares the original four report pages, and independently verifies the fixed disclaimer page in `var/artifacts/visual/latest/manifest.json`.

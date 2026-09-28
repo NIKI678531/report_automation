@@ -1,5 +1,5 @@
 from conftest import download_report
-"""Visual regression anchor for the canonical four-page output.
+"""Visual regression anchor for the four reference pages plus the fixed disclaimer page.
 
 This suite renders the *actual* PDF from the golden fixture and compares it with the
 supplied reference. It deliberately does not compare the reference with itself: that
@@ -120,12 +120,14 @@ def test_actual_pdf_holds_the_reference_structure(client, tmp_path):
     result = verify_pdf(actual, REFERENCE, tmp_path / "evidence")
 
     structural = result["structural"]
-    assert structural["page_count"] == 4
+    assert structural["page_count"] == 5
     assert structural["a4_sizes_passed"] is True
     assert structural["reference_sizes_match"] is True
     assert result["page4_content"]["required_text_passed"] is True
     assert result["page4_content"]["donut_passed"] is True
     assert result["page4_content"]["donut_dominant_color_count"] >= 3
+    assert result["page5_content"]["required_text_passed"] is True
+    assert result["page5_content"]["safe_area_passed"] is True
 
 
 def test_pixel_difference_does_not_regress(client, tmp_path):

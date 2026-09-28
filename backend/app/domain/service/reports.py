@@ -20,7 +20,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import current_principal
-from ..document import bind_snapshot, checksum, initial_document
+from ..document import (
+    bind_snapshot,
+    checksum,
+    initial_document,
+    review_plain_text,
+    validate_document_content,
+)
 from ..localization import (
     ZH_HANS,
     ZH_HANT,
@@ -43,6 +49,7 @@ from ..models import (
     SnapshotDataset,
     NewsItem,
 )
+from ..page_one_presentation import PageOneLayoutOverflowError, page_one_presentation
 from ..schemas import LanguageVariantCreate, LanguageVariantSync, ReportCreate
 from .lifecycle import ensure_report_editable, ensure_report_not_archived
 from .audit import audit
@@ -297,6 +304,9 @@ def _sync_chinese_editorial(
 def _copy_review_layout(source: dict, target: dict, language_mode: str) -> None:
     source_review = (source.get("sections") or {}).get("month_in_review") or {}
     blocks = source_review.get("blocks")
+    source_presentation = source.get("presentation")
+    if isinstance(source_presentation, dict):
+        target["presentation"] = deepcopy(source_presentation)
     if not isinstance(blocks, list):
         return
     target_review = target["sections"]["month_in_review"]
@@ -556,6 +566,10 @@ def create_language_variant(
         zh_hans=product.name_zh_hans,
         zh_hant=product.name_zh_hant,
     )
+    target_template_version = source_document.template_version or source.template_version
+    target_design_token_version = str(
+        source_document.content.get("design_token_version") or target_template_version
+    )
     report = Report(
         product_code=source.product_code,
         product_name=f"{product_name or product.ticker} ({product.ticker})",
@@ -568,7 +582,7 @@ def create_language_variant(
         lane=source.lane,
         revision=source.revision,
         translation_source_report_id=source.id,
-        template_version=source.template_version,
+        template_version=target_template_version,
     )
     db.add(report)
     try:
@@ -587,8 +601,8 @@ def create_language_variant(
     content = initial_document(
         report.id,
         report.report_date,
-        product.template_version,
-        product.design_token_version,
+        target_template_version,
+        target_design_token_version,
         product.ticker,
         product.benchmark_instrument_code,
         command.language_mode,
@@ -642,6 +656,10 @@ def create_language_variant(
         cloned_snapshot = _clone_language_snapshot(db, source_snapshot, report)
         content = bind_snapshot(content, cloned_snapshot.payload, lane=cloned_snapshot.lane)
         content["snapshot_id"] = cloned_snapshot.id
+
+    content = page_one_presentation.retarget_footnote_styles(content)
+    if content.get("template_version") == "3033-v3":
+        content = validate_document_content(content)
 
     document = ReportDocument(
         report_id=report.id,
@@ -698,6 +716,9 @@ def create_language_variant(
             source_news_overrides=source_overrides,
             target_news_overrides=current_overrides,
             force=True,
+        )
+        calculated_content = page_one_presentation.retarget_footnote_styles(
+            calculated_content
         )
         _apply_news_selection_overrides(db, report.id, converted_overrides)
         calculated_content["sections"]["company_news"] = _localized_selected_news(
@@ -823,6 +844,8 @@ def sync_language_variant(
         content["next_rebalancing_date"] = source_document.content.get("next_rebalancing_date")
         content["next_rebalancing_date_source"] = "MANUAL"
 
+    content = page_one_presentation.retarget_footnote_styles(content)
+
     if checksum(content) != target_document.checksum:
         update_document(db, target, target_document.version, content, request_id)
     else:
@@ -929,6 +952,26 @@ def _numeric_values(tokens: set[str]) -> set[Decimal]:
     return values
 
 
+def _review_editorial_text(review: object) -> str:
+    """Return authored Review prose without layout coordinates or style-role numbers."""
+
+    if not isinstance(review, dict):
+        return ""
+    blocks = review.get("blocks")
+    if isinstance(blocks, list):
+        return " ".join(
+            review_plain_text(str(block.get("content") or ""))
+            for block in blocks
+            if isinstance(block, dict)
+        )
+    prose: list[str] = [str(review.get("summary") or ""), str(review.get("outlook") or "")]
+    for collection in ("drivers", "monitor"):
+        for item in review.get(collection) or []:
+            if isinstance(item, dict):
+                prose.extend((str(item.get("title") or ""), str(item.get("body") or "")))
+    return " ".join(prose)
+
+
 def ai_number_check(db: Session, report: Report, document: ReportDocument) -> dict:
     from ..editorial_translation import translated_review_text
 
@@ -944,7 +987,9 @@ def ai_number_check(db: Session, report: Report, document: ReportDocument) -> di
             "fix_hint": "",
         }
     review = document.content.get("sections", {}).get("month_in_review", {})
-    actual_tokens = _numeric_tokens(review if provenance else " ".join(translated))
+    actual_tokens = _numeric_tokens(
+        _review_editorial_text(review) if provenance else " ".join(translated)
+    )
     allowed_values: set[Decimal] = set()
     if report.active_snapshot_id:
         metrics = db.scalars(select(MetricValue).where(MetricValue.snapshot_id == report.active_snapshot_id))
@@ -1076,6 +1121,8 @@ def release_gate_checks(db: Session, report: Report, document: ReportDocument) -
 
 def finalize(db: Session, report: Report, expected_version: int, request_id: str) -> Report:
     from .documents import lock_report
+    from app.rendering.artifacts import assert_page_one_layout_fits
+    from app.rendering.disclaimer import DisclaimerResourceError
 
     lock_report(db, report)
     ensure_report_not_archived(report)
@@ -1088,6 +1135,23 @@ def finalize(db: Session, report: Report, expected_version: int, request_id: str
         item for item in release_gate_checks(db, report, document)
         if item.get("severity") == "BLOCKING" and item.get("status") != "PASSED"
     ]
+    try:
+        assert_page_one_layout_fits(report, document.content)
+    except DisclaimerResourceError as error:
+        raise HTTPException(status_code=503, detail={
+            "error_code": "DISCLAIMER_RESOURCE_INVALID",
+            "message": "The approved disclaimer resource is unavailable or invalid.",
+            "severity": "BLOCKING",
+            "fix_hint": "Restore the approved versioned disclaimer resource before finalizing.",
+        }) from error
+    except PageOneLayoutOverflowError as error:
+        raise HTTPException(status_code=422, detail={
+            "error_code": error.error_code,
+            "message": str(error),
+            "severity": "BLOCKING",
+            "fix_hint": error.fix_hint,
+            "findings": list(error.findings),
+        }) from error
 
     report.status = ReportStatus.READY_TO_FINALIZE
     report.finalized_document_version = document.version

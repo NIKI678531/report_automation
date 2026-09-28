@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Response, status
+from fastapi import APIRouter, HTTPException, Header, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from app.domain.schemas import (
     FinalizeRequest,
     LanguageVariantCreate,
     LanguageVariantSync,
+    PreviewRequest,
     ReportCreate,
     ReportDetail,
     ReportRead,
@@ -31,6 +32,7 @@ from app.domain.schemas import (
     RevisionCreate,
 )
 from app.rendering.html import render_html
+from app.rendering.disclaimer import DisclaimerResourceError
 from .deps import Db, RequestId
 
 router = APIRouter()
@@ -130,7 +132,11 @@ def detail(db: Session, report: Report) -> ReportDetail:
         **base,
         translation_enabled=settings.translation_provider == "OPENAI_COMPATIBLE" and not settings.translation_problems(),
         translation_source_language_mode=source.language_mode if source else None,
-        latest_document={"version": document.version, "checksum": document.checksum, "content": document.content},
+        latest_document={
+            "version": document.version,
+            "checksum": document.checksum,
+            "content": service.document_content_for_read(report, document),
+        },
         quality_results=quality,
     )
 
@@ -173,12 +179,41 @@ def finalize(report_id: str, command: FinalizeRequest, db: Db, x_request_id: Req
     return service.finalize(db, report, command.version, x_request_id)
 
 
+def _preview_response(report: Report, content: dict) -> Response:
+    try:
+        html = render_html(report, content, preview=True, layout_mode="paged")
+    except DisclaimerResourceError as error:
+        raise HTTPException(status_code=503, detail={
+            "error_code": "DISCLAIMER_RESOURCE_INVALID",
+            "message": "The approved disclaimer resource is unavailable or invalid.",
+            "severity": "BLOCKING",
+            "fix_hint": "Restore the approved versioned disclaimer resource before previewing.",
+        }) from error
+    return Response(html, media_type="text/html")
+
+
 @router.get("/reports/{report_id}/preview", include_in_schema=False)
-@router.post("/reports/{report_id}/preview")
-def preview(report_id: str, db: Db) -> Response:
+def preview_saved(report_id: str, db: Db) -> Response:
     report = service.get_report(db, report_id)
-    document = service.latest_document(db, report_id)
-    return Response(
-        render_html(report, document.content, preview=True, layout_mode="paged"),
-        media_type="text/html",
+    return _preview_response(
+        report,
+        service.preview_document_content(db, report),
+    )
+
+
+@router.post("/reports/{report_id}/preview")
+def preview_draft(
+    report_id: str,
+    db: Db,
+    command: PreviewRequest | None = None,
+) -> Response:
+    report = service.get_report(db, report_id)
+    return _preview_response(
+        report,
+        service.preview_document_content(
+            db,
+            report,
+            expected_version=command.version if command else None,
+            content=command.content if command else None,
+        ),
     )
