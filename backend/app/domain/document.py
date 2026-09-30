@@ -15,6 +15,7 @@ from .page_one_presentation import (
     PageOnePresentationError,
     page_one_presentation,
 )
+from .rich_text import rich_text_plain_text, sanitize_rich_text
 
 
 REVIEW_BLOCK_TYPES = {"rich_text", "heading", "bullet_list", "key_drivers", "areas_to_monitor", "outlook", "metric_callout", "image", "data_table", "page_break"}
@@ -93,10 +94,15 @@ class ReviewHtmlSanitizer(HTMLParser):
 
 
 def sanitize_review_html(value: str) -> str:
-    sanitizer = ReviewHtmlSanitizer()
-    sanitizer.feed(value)
-    sanitizer.close()
-    return "".join(sanitizer.parts)
+    return sanitize_rich_text(
+        value,
+        error_factory=lambda message: PageOnePresentationError(
+            message,
+            "sections.month_in_review.blocks.content",
+        ),
+        legacy_font_roles=REVIEW_FONT_SIZE_ROLES,
+        legacy_line_roles=LINE_HEIGHT_ROLES,
+    )
 
 
 class ReviewTextExtractor(HTMLParser):
@@ -109,10 +115,7 @@ class ReviewTextExtractor(HTMLParser):
 
 
 def review_plain_text(value: str) -> str:
-    extractor = ReviewTextExtractor()
-    extractor.feed(value)
-    extractor.close()
-    return " ".join(" ".join(extractor.parts).split())
+    return " ".join(rich_text_plain_text(value).split())
 
 
 def _has_substantive_review_text(block: dict[str, Any]) -> bool:
@@ -157,7 +160,7 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
     # Validate the authoritative v3 topology before the compatibility block fields. This keeps
     # all page-one geometry failures on the PAGE_ONE_PRESENTATION_INVALID contract instead of
     # leaking the legacy REVIEW_LAYOUT_INVALID fallback from an x/y/w/h check below.
-    if result.get("template_version") == "3033-v3" or "presentation" in result:
+    if result.get("template_version") in {"3033-v3", "3033-v4"} or "presentation" in result:
         result = page_one_presentation.canonicalize_document(result)
     sections = result.get("sections")
     if not isinstance(sections, dict):
@@ -403,7 +406,11 @@ def initial_document(
             "footnotes": {},
         },
     }
-    return page_one_presentation.adapt_document(document) if template_version == "3033-v3" else document
+    return (
+        page_one_presentation.adapt_document(document)
+        if template_version in {"3033-v3", "3033-v4"}
+        else document
+    )
 
 
 def bind_snapshot(
@@ -439,7 +446,7 @@ def bind_snapshot(
             "note": "Transcribed from the approved reference report. Not generated, not derived.",
         }
         result["sections"]["month_in_review"] = incoming_review
-        if result.get("template_version") == "3033-v3" and not preserve_blocks:
+        if result.get("template_version") in {"3033-v3", "3033-v4"} and not preserve_blocks:
             result = page_one_presentation.adapt_document(result)
     result["sections"]["analytics"] = snapshot_payload.get("analytics", result["sections"]["analytics"])
     result["sections"]["footnotes"] = snapshot_payload.get("footnotes", {})

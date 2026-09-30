@@ -15,6 +15,7 @@ import {
 import type { RegisterPendingSave } from "../../pendingSave";
 import { useLocale, type Locale } from "../../i18n";
 import { isReportReadOnly } from "../../reportModules";
+import { MarkerInput, MarkerTextarea } from "../../components/SuperscriptMarkerControl";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
 type SnapshotNews = Record<string, unknown>;
@@ -227,8 +228,8 @@ function SortableSelected({
       <span>{item.ticker ?? (item.source || "DA-Report")}</span>
       <button className="icon-button danger" title={t("remove")} onClick={onRemove}><X size={15} /></button>
     </header>
-    <input value={item.title} disabled={disabled} onChange={(event) => onUpdate({ ...item, title: event.target.value, title_override: event.target.value })} aria-label={t("selectedNewsTitle")} />
-    <textarea value={item.summary} disabled={disabled} onChange={(event) => onUpdate({ ...item, summary: event.target.value, summary_override: event.target.value })} aria-label={t("selectedNewsSummary")} />
+    <MarkerInput value={item.title} disabled={disabled} onValueChange={(value) => onUpdate({ ...item, title: value, title_override: value })} aria-label={t("selectedNewsTitle")} />
+    <MarkerTextarea value={item.summary} disabled={disabled} onValueChange={(value) => onUpdate({ ...item, summary: value, summary_override: value })} aria-label={t("selectedNewsSummary")} />
     <footer>{item.source} · {publishedLabel(item.publishedAt, locale)} HKT</footer>
   </article>;
 }
@@ -268,12 +269,12 @@ function AddNewsForm({
     });
   }}>
     <div className="news-add-grid">
-      <label><span>{t("headline")}</span><input value={form.title} onChange={set("title")} required /></label>
+      <div className="news-add-field"><span>{t("headline")}</span><MarkerInput value={form.title} disabled={busy} onValueChange={(value) => setForm((current) => ({ ...current, title: value }))} aria-label={t("headline")} required /></div>
       <label><span>{t("publisher")}</span><input value={form.source_name} onChange={set("source_name")} required /></label>
       <label><span>{t("articleUrl")}</span><input type="url" value={form.source_url} onChange={set("source_url")} required /></label>
       <label><span>{t("publishedAt")}</span><input type="datetime-local" value={form.published_at} onChange={set("published_at")} required /></label>
       <label><span>{t("ticker")}</span><input value={form.ticker ?? ""} onChange={set("ticker")} /></label>
-      <label className="news-add-wide"><span>{t("summary")}</span><textarea value={form.summary} onChange={set("summary")} /></label>
+      <div className="news-add-wide"><span>{t("summary")}</span><MarkerTextarea aria-label={t("summary")} value={form.summary} disabled={busy} onValueChange={(value) => setForm((current) => ({ ...current, summary: value }))} /></div>
     </div>
     <div className="news-add-actions">
       <button type="button" onClick={onCancel}>{t("cancel")}</button>

@@ -17,15 +17,46 @@ from html import escape
 import re
 from typing import Any, Mapping
 
+from .rich_text import (
+    FONT_SIZE_MAX_PT,
+    FONT_SIZE_MIN_PT,
+    LINE_HEIGHT_MAX,
+    LINE_HEIGHT_MIN,
+    INDENT_LEVEL_MAX,
+    INDENT_LEVEL_MIN,
+    SPACING_MAX_PT,
+    SPACING_MIN_PT,
+    RichTextValidationError,
+    normalize_color,
+    normalize_font_family,
+    normalize_number,
+    plain_text_to_rich_text,
+    render_safe_rich_text,
+    rich_text_plain_text,
+    sanitize_rich_text,
+)
 
-PRESENTATION_SCHEMA_VERSION = 1
+
+LEGACY_PRESENTATION_SCHEMA_VERSION = 1
+PRESENTATION_SCHEMA_VERSION = 2
 PAGE_COLUMNS = 12
 MAX_ROW = 200
 MAX_ROW_SPAN = 40
+MAX_REVIEW_PAGES = 96
+MIN_OFFSET_Y_PT = -720.0
+MAX_OFFSET_Y_PT = 720.0
 MIN_VERTICAL_NUDGE_STEPS = -200
 MAX_VERTICAL_NUDGE_STEPS = 200
 MIN_FOOTNOTE_BOTTOM_NUDGE_STEPS = -3
 MAX_FOOTNOTE_BOTTOM_NUDGE_STEPS = 4
+
+# v3 positioned its historical footnote from the bottom of the page in 4pt steps. v4
+# expresses the same editor intent as a non-negative gap below the table. A 16pt migration
+# baseline accommodates the full legacy +4 (upward) range without clamping, so every old value
+# has a distinct, reversible v4 gap: -3 -> 28pt, 0 -> 16pt, +4 -> 0pt.
+LEGACY_FOOTNOTE_GAP_BASE_PT = 16.0
+LEGACY_FOOTNOTE_NUDGE_STEP_PT = 4.0
+LEGACY_VERTICAL_NUDGE_STEP_PT = 5.0
 
 REVIEW_FONT_SIZE_ROLES = frozenset({"review-10", "review-11"})
 HISTORICAL_TABLE_FONT_SIZE_ROLES = frozenset({"history-9", "history-10", "history-11"})
@@ -48,6 +79,66 @@ _PARAGRAPH_STYLE_KEYS = frozenset({
     "paragraph_index", "font_size_role", "line_height_role", "text_align",
 })
 
+_STYLE_KEYS = frozenset({
+    "font_family", "font_size_pt", "color", "bold", "italic", "underline",
+    "line_height", "space_before_pt", "space_after_pt", "text_align", "indent_level",
+})
+_V2_REVIEW_ELEMENT_KEYS = _BASE_ELEMENT_KEYS | {"title_style", "body_style"}
+_V2_HISTORICAL_ELEMENT_KEYS = frozenset({
+    "id", "row", "row_span", "x", "w", "page", "offset_y_pt", "title_style",
+    "header_style", "body_style", "cell_padding_y_pt",
+})
+_V2_FOOTNOTE_ELEMENT_KEYS = frozenset({
+    "id", "row", "row_span", "x", "w", "page", "gap_pt", "content_html", "body_style",
+})
+
+
+def _style_defaults(
+    font_size_pt: float,
+    *,
+    bold: bool = False,
+    space_after_pt: float = 0,
+) -> dict[str, Any]:
+    return {
+        "font_family": "Carlito",
+        "font_size_pt": font_size_pt,
+        "color": "#000000",
+        "bold": bold,
+        "italic": False,
+        "underline": False,
+        "line_height": 1.2,
+        "space_before_pt": 0.0,
+        "space_after_pt": float(space_after_pt),
+        "text_align": "left",
+        "indent_level": 0,
+    }
+
+
+DEFAULT_REVIEW_TITLE_STYLE = {
+    **_style_defaults(14.04, bold=True, space_after_pt=4),
+    "font_family": "Calibri",
+    "color": "#22327F",
+}
+DEFAULT_REVIEW_BODY_STYLE = {**_style_defaults(10.0), "font_family": "Calibri"}
+DEFAULT_HISTORY_TITLE_STYLE = {
+    **_style_defaults(12.0, bold=True, space_after_pt=4),
+    "font_family": "Calibri",
+    "color": "#22327F",
+    "text_align": "center",
+}
+DEFAULT_HISTORY_HEADER_STYLE = {
+    **_style_defaults(11.0, bold=True),
+    "font_family": "Calibri",
+    "color": "#FFFFFF",
+    "text_align": "center",
+}
+DEFAULT_HISTORY_BODY_STYLE = {
+    **_style_defaults(10.0),
+    "font_family": "Calibri",
+    "text_align": "center",
+}
+DEFAULT_FOOTNOTE_BODY_STYLE = {**_style_defaults(9.0), "font_family": "Calibri"}
+
 
 @dataclass(frozen=True)
 class PageOnePresentationError(ValueError):
@@ -68,17 +159,17 @@ class PageOnePresentationError(ValueError):
 
 @dataclass(frozen=True)
 class PageOneLayoutOverflowError(ValueError):
-    """Raised by render adapters after measuring content against page one's safe area."""
+    """Raised by render adapters after measuring content against a paged safe area."""
 
     findings: tuple[Mapping[str, Any], ...]
     error_code: str = "PAGE_ONE_LAYOUT_OVERFLOW"
     fix_hint: str = (
-        "Shorten page-one content or move blocks upward until the preview no longer enters the "
-        "footer safe area."
+        "Adjust the flagged element so it remains inside the page safe area without clipping, "
+        "overlap, hidden content, or contact with the running page chrome."
     )
 
     def __str__(self) -> str:
-        return "Page-one content enters the footer safe area."
+        return "One or more report elements violate the paged layout safety rules."
 
 
 def _int(value: Any, *, field: str, minimum: int, maximum: int) -> int:
@@ -90,6 +181,117 @@ def _int(value: Any, *, field: str, minimum: int, maximum: int) -> int:
             f"{field} must be between {minimum} and {maximum}.", field
         )
     return normalized
+
+
+def _number(value: Any, *, field: str, minimum: float, maximum: float) -> float:
+    try:
+        return normalize_number(value, minimum=minimum, maximum=maximum, field=field)
+    except RichTextValidationError as error:
+        raise PageOnePresentationError(str(error), field) from error
+
+
+def _normalize_style(
+    raw: object,
+    *,
+    field: str,
+    defaults: Mapping[str, Any],
+) -> dict[str, Any]:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping) or set(raw) - _STYLE_KEYS:
+        raise PageOnePresentationError(
+            f"{field} must be an object containing only supported typography fields.", field
+        )
+    values = {**deepcopy(dict(defaults)), **dict(raw)}
+    try:
+        font_family = normalize_font_family(values.get("font_family"), field=f"{field}.font_family")
+        color = normalize_color(values.get("color"), field=f"{field}.color")
+    except RichTextValidationError as error:
+        raise PageOnePresentationError(str(error), field) from error
+    booleans: dict[str, bool] = {}
+    for key in ("bold", "italic", "underline"):
+        value = values.get(key)
+        if type(value) is not bool:
+            raise PageOnePresentationError(f"{field}.{key} must be a boolean.", f"{field}.{key}")
+        booleans[key] = value
+    alignment = str(values.get("text_align") or "").casefold()
+    if alignment not in TEXT_ALIGNMENTS:
+        raise PageOnePresentationError(
+            f"Unsupported paragraph alignment: {alignment}.", f"{field}.text_align"
+        )
+    return {
+        "font_family": font_family,
+        "font_size_pt": _number(
+            values.get("font_size_pt"), field=f"{field}.font_size_pt",
+            minimum=FONT_SIZE_MIN_PT, maximum=FONT_SIZE_MAX_PT,
+        ),
+        "color": color,
+        **booleans,
+        "line_height": _number(
+            values.get("line_height"), field=f"{field}.line_height",
+            minimum=LINE_HEIGHT_MIN, maximum=LINE_HEIGHT_MAX,
+        ),
+        "space_before_pt": _number(
+            values.get("space_before_pt"), field=f"{field}.space_before_pt",
+            minimum=SPACING_MIN_PT, maximum=SPACING_MAX_PT,
+        ),
+        "space_after_pt": _number(
+            values.get("space_after_pt"), field=f"{field}.space_after_pt",
+            minimum=SPACING_MIN_PT, maximum=SPACING_MAX_PT,
+        ),
+        "text_align": alignment,
+        "indent_level": _int(
+            values.get("indent_level"), field=f"{field}.indent_level",
+            minimum=INDENT_LEVEL_MIN, maximum=INDENT_LEVEL_MAX,
+        ),
+    }
+
+
+def _normalize_locked_title_style(
+    raw: object,
+    *,
+    field: str,
+    defaults: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep brand title typography fixed while accepting layout-only controls."""
+
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise PageOnePresentationError(f"{field} must be an object.", field)
+    result = deepcopy(dict(defaults))
+    if "space_after_pt" in raw:
+        result["space_after_pt"] = _number(
+            raw.get("space_after_pt"),
+            field=f"{field}.space_after_pt",
+            minimum=SPACING_MIN_PT,
+            maximum=SPACING_MAX_PT,
+        )
+    if "indent_level" in raw:
+        result["indent_level"] = _int(
+            raw.get("indent_level"),
+            field=f"{field}.indent_level",
+            minimum=INDENT_LEVEL_MIN,
+            maximum=INDENT_LEVEL_MAX,
+        )
+    return result
+
+
+def _sanitize_footnote_html(value: object, field: str) -> str:
+    html = str(value or "")
+    if len(html) > 50_000:
+        raise PageOnePresentationError(
+            "Historical footnote rich text cannot exceed 50,000 characters.", field,
+            HISTORICAL_FOOTNOTE_ID,
+        )
+    return sanitize_rich_text(
+        html,
+        error_factory=lambda message: PageOnePresentationError(
+            message, field, HISTORICAL_FOOTNOTE_ID
+        ),
+        legacy_font_roles=FOOTNOTE_FONT_SIZE_ROLES,
+        legacy_line_roles=LINE_HEIGHT_ROLES,
+    )
 
 
 def _paragraph_count(value: object) -> int:
@@ -107,6 +309,58 @@ def _default_footnote_styles(count: int) -> list[dict[str, Any]]:
         }
         for index in range(count)
     ]
+
+
+def _legacy_footnote_rich_text(
+    value: object,
+    paragraph_styles: object,
+) -> str:
+    """Lift v3 paragraph roles into v4's controlled semantic rich text.
+
+    Font size is an inline property in the v4 vocabulary, while line height and alignment are
+    paragraph properties. Emitting an explicit span for every paragraph preserves heterogeneous
+    v3 styling even though the v4 element also has a single default ``body_style``.
+    """
+
+    text = str(value or "").replace("\r\n", "\n")
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()] or [""]
+    raw_styles = paragraph_styles if isinstance(paragraph_styles, list) else []
+    styles = {
+        item.get("paragraph_index"): item
+        for item in raw_styles
+        if isinstance(item, Mapping) and type(item.get("paragraph_index")) is int
+    }
+    font_sizes = {"footnote-8": 8.0, "footnote-9": 9.0, "footnote-10": 10.0}
+    line_heights = {"1.0": 1.0, "1.2": 1.2, "1.4": 1.4}
+    rendered: list[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        style = styles.get(index) or {}
+        font_size = font_sizes.get(str(style.get("font_size_role")), 8.0)
+        line_height = line_heights.get(str(style.get("line_height_role")), 1.2)
+        text_align = str(style.get("text_align") or "left")
+        if text_align not in TEXT_ALIGNMENTS:
+            text_align = "left"
+        escaped = escape(paragraph).replace("\n", "<br>")
+        rendered.append(
+            f'<p data-line-height="{line_height:g}" data-text-align="{text_align}">'
+            f'<span data-font-size-pt="{font_size:g}">{escaped}</span></p>'
+        )
+    return "".join(rendered)
+
+
+def _legacy_footnote_gap_pt(bottom_nudge_steps: object) -> float:
+    steps = (
+        bottom_nudge_steps
+        if type(bottom_nudge_steps) is int
+        and MIN_FOOTNOTE_BOTTOM_NUDGE_STEPS
+        <= bottom_nudge_steps
+        <= MAX_FOOTNOTE_BOTTOM_NUDGE_STEPS
+        else 0
+    )
+    return round(
+        LEGACY_FOOTNOTE_GAP_BASE_PT - steps * LEGACY_FOOTNOTE_NUDGE_STEP_PT,
+        4,
+    )
 
 
 def _legacy_review_blocks(content: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -336,10 +590,10 @@ class PageOnePresentationResolver:
 
     @staticmethod
     def supports(content: Mapping[str, Any]) -> bool:
-        return content.get("template_version") in {"3033-v2", "3033-v3"} or "presentation" in content
+        return content.get("template_version") in {"3033-v2", "3033-v3", "3033-v4"} or "presentation" in content
 
     def adapt_document(self, content: Mapping[str, Any]) -> dict[str, Any]:
-        """Return a v3-shaped copy without mutating or persisting the source document."""
+        """Return a canonical copy without mutating or persisting the source document."""
 
         result = deepcopy(dict(content))
         if not self.supports(result):
@@ -362,12 +616,133 @@ class PageOnePresentationResolver:
                 "sections.month_in_review.blocks",
             )
         if "presentation" not in result:
+            schema_version = (
+                PRESENTATION_SCHEMA_VERSION
+                if result.get("template_version") == "3033-v4"
+                else LEGACY_PRESENTATION_SCHEMA_VERSION
+            )
             result["presentation"] = {
-                "schema_version": PRESENTATION_SCHEMA_VERSION,
+                "schema_version": schema_version,
                 "page_one": {"elements": _legacy_elements(result)},
             }
+            if schema_version == PRESENTATION_SCHEMA_VERSION:
+                result = self._upgrade_v1_shape(result)
         result["presentation"] = self._normalize_presentation(result)
+        self._sync_v2_footnote_plain_text(result)
         self._sync_legacy_block_geometry(result)
+        return result
+
+    def upgrade_document_to_v4(
+        self,
+        content: Mapping[str, Any],
+        *,
+        stamp_template: bool = True,
+    ) -> dict[str, Any]:
+        """Adapt an editable v1-v3 draft to the v4 contract in memory.
+
+        Callers decide whether a report is editable before invoking this method.  Consequently
+        finalized historical documents can continue to render byte-for-byte from their original
+        template while draft GET/preview/save paths share one v4 shape.
+        """
+
+        source = deepcopy(dict(content))
+        original_template = str(source.get("template_version") or "")
+        if original_template == "3033-v1" and "presentation" not in source:
+            # v1 predates the presentation envelope. Reuse the v2 lift without changing the
+            # externally observed template identity until the first successful save.
+            source["template_version"] = "3033-v2"
+        result = self.adapt_document(source)
+        if original_template == "3033-v1" and not stamp_template:
+            result["template_version"] = original_template
+        presentation = result.get("presentation") or {}
+        if presentation.get("schema_version") == LEGACY_PRESENTATION_SCHEMA_VERSION:
+            result = self._upgrade_v1_shape(result)
+        if stamp_template:
+            result["template_version"] = "3033-v4"
+            result["design_token_version"] = "3033-v4"
+        result["presentation"] = self._normalize_presentation(result)
+        self._sync_v2_footnote_plain_text(result)
+        self._sync_legacy_block_geometry(result)
+        return result
+
+    def _upgrade_v1_shape(self, content: Mapping[str, Any]) -> dict[str, Any]:
+        result = deepcopy(dict(content))
+        migrating_legacy_document = result.get("template_version") != "3033-v4"
+        presentation = result.get("presentation") or {}
+        page_one = presentation.get("page_one") or {}
+        raw_elements = page_one.get("elements") or []
+        footnote_plain = str(
+            (((result.get("sections") or {}).get("footnotes") or {}).get("historical")) or ""
+        )
+        upgraded: list[dict[str, Any]] = []
+        for raw in raw_elements:
+            if not isinstance(raw, Mapping):
+                upgraded.append(deepcopy(raw))
+                continue
+            element = deepcopy(dict(raw))
+            element_id = str(element.get("id") or "")
+            geometry = {
+                key: element[key] for key in ("id", "row", "row_span", "x", "w") if key in element
+            }
+            if element_id.startswith(REVIEW_ID_PREFIX):
+                upgraded.append({
+                    **geometry,
+                    "vertical_nudge_steps": element.get("vertical_nudge_steps", 0),
+                    "title_style": deepcopy(DEFAULT_REVIEW_TITLE_STYLE),
+                    "body_style": deepcopy(DEFAULT_REVIEW_BODY_STYLE),
+                })
+            elif element_id == HISTORICAL_PERFORMANCE_ID:
+                legacy_font_role = str(element.get("table_font_size_role") or "history-10")
+                legacy_line_role = str(element.get("table_line_height_role") or "1.2")
+                body_style = deepcopy(DEFAULT_HISTORY_BODY_STYLE)
+                body_style["font_size_pt"] = {
+                    "history-9": 9.0, "history-10": 10.0, "history-11": 11.0,
+                }.get(legacy_font_role, 10.0)
+                body_style["line_height"] = {
+                    "1.0": 1.0, "1.2": 1.2, "1.4": 1.4,
+                }.get(legacy_line_role, 1.2)
+                upgraded.append({
+                    **geometry,
+                    "page": 1,
+                    "offset_y_pt": max(
+                        MIN_OFFSET_Y_PT,
+                        min(
+                            MAX_OFFSET_Y_PT,
+                            round(
+                                float(element.get("vertical_nudge_steps", 0))
+                                * LEGACY_VERTICAL_NUDGE_STEP_PT,
+                                4,
+                            ),
+                        ),
+                    ),
+                    "title_style": deepcopy(DEFAULT_HISTORY_TITLE_STYLE),
+                    "header_style": deepcopy(DEFAULT_HISTORY_HEADER_STYLE),
+                    "body_style": body_style,
+                    "cell_padding_y_pt": 2.0,
+                })
+            elif element_id == HISTORICAL_FOOTNOTE_ID:
+                upgraded.append({
+                    **geometry,
+                    "page": 1,
+                    "gap_pt": (
+                        _legacy_footnote_gap_pt(element.get("bottom_nudge_steps", 0))
+                        if migrating_legacy_document
+                        else 6.0
+                    ),
+                    "content_html": (
+                        _legacy_footnote_rich_text(
+                            footnote_plain,
+                            element.get("paragraph_styles"),
+                        )
+                        if migrating_legacy_document
+                        else plain_text_to_rich_text(footnote_plain)
+                    ),
+                    "body_style": deepcopy(DEFAULT_FOOTNOTE_BODY_STYLE),
+                })
+        result["presentation"] = {
+            "schema_version": PRESENTATION_SCHEMA_VERSION,
+            "page_one": {"review_page_count": 1, "elements": upgraded},
+        }
         return result
 
     def reconcile_submission(
@@ -383,22 +758,53 @@ class PageOnePresentationResolver:
         """
 
         result = deepcopy(dict(submitted))
-        current_is_v3 = str((current or {}).get("template_version") or "") == "3033-v3"
+        current_template = str((current or {}).get("template_version") or "")
+        current_is_controlled = current_template in {"3033-v3", "3033-v4"}
+        if current_is_controlled and not isinstance(result.get("presentation"), Mapping):
+            raise PageOnePresentationError(
+                "A controlled-layout document must include its page-one presentation.",
+                "presentation",
+            )
+        if current_template == "3033-v4" and result["presentation"].get(
+            "schema_version"
+        ) != PRESENTATION_SCHEMA_VERSION:
+            raise PageOnePresentationError(
+                f"A v4 document must use presentation.schema_version={PRESENTATION_SCHEMA_VERSION}.",
+                "presentation.schema_version",
+            )
         if not self.supports(result):
-            if current_is_v3:
+            if current_is_controlled:
                 raise PageOnePresentationError(
-                    "A v3 document must include its page-one presentation.",
+                    "A controlled-layout document must include its page-one presentation.",
                     "presentation",
                 )
             return result
         if current is None:
             return result
-        baseline = self.adapt_document(current)
+        incoming_schema = (
+            (result.get("presentation") or {}).get("schema_version")
+            if isinstance(result.get("presentation"), Mapping)
+            else None
+        )
+        if incoming_schema == LEGACY_PRESENTATION_SCHEMA_VERSION or not isinstance(
+            result.get("presentation"), Mapping
+        ):
+            result = self.upgrade_document_to_v4(result)
+        elif current_template in {"3033-v1", "3033-v2", "3033-v3"}:
+            # The read adapter already gave this client a v2 presentation.  Do not normalize it
+            # before the compatibility reconciliation below has removed unchanged legacy orphans.
+            result["template_version"] = "3033-v4"
+            result["design_token_version"] = "3033-v4"
+        baseline = (
+            self.upgrade_document_to_v4(current)
+            if current_template in {"3033-v1", "3033-v2", "3033-v3"}
+            else self.adapt_document(current)
+        )
         incoming_presentation = result.get("presentation")
         if not isinstance(incoming_presentation, Mapping):
-            if current_is_v3:
+            if current_is_controlled:
                 raise PageOnePresentationError(
-                    "A v3 document must include its page-one presentation.",
+                    "A controlled-layout document must include its page-one presentation.",
                     "presentation",
                 )
             return result
@@ -462,17 +868,86 @@ class PageOnePresentationResolver:
             if isinstance(item, Mapping)
         }
 
-        if current_is_v3 and set(incoming_blocks) != set(baseline_blocks):
+        # Editable v1-v3 drafts may be saved by a client that changed the legacy block list while
+        # carrying the untouched presentation returned by the read adapter.  Preserve that
+        # one-time migration path by rebuilding only the Review elements from the submitted block
+        # geometry.  Once the document is v4, identities stay fixed as before.
+        if current_template in {"3033-v1", "3033-v2", "3033-v3"}:
+            baseline_review_element_ids = {
+                element_id for element_id in baseline_elements
+                if element_id.startswith(REVIEW_ID_PREFIX)
+            }
+            incoming_review_element_ids = {
+                element_id for element_id in incoming_elements
+                if element_id.startswith(REVIEW_ID_PREFIX)
+            }
+            expected_review_element_ids = {
+                f"{REVIEW_ID_PREFIX}{block_id}" for block_id in incoming_blocks
+            }
+            if expected_review_element_ids != incoming_review_element_ids:
+                if incoming_review_element_ids != baseline_review_element_ids:
+                    raise PageOnePresentationError(
+                        "Legacy Review blocks and presentation elements changed inconsistently.",
+                        "presentation.page_one.elements",
+                    )
+                retained = [
+                    deepcopy(dict(item))
+                    for item in incoming_element_list
+                    if isinstance(item, Mapping)
+                    and not str(item.get("id") or "").startswith(REVIEW_ID_PREFIX)
+                ]
+                rebuilt = []
+                for block_id, block in incoming_blocks.items():
+                    previous = baseline_elements.get(f"{REVIEW_ID_PREFIX}{block_id}") or {}
+                    rebuilt.append({
+                        "id": f"{REVIEW_ID_PREFIX}{block_id}",
+                        "row": block.get("y", 0),
+                        "row_span": block.get("h", 4),
+                        "x": block.get("x", 0),
+                        "w": block.get("w", PAGE_COLUMNS),
+                        "vertical_nudge_steps": previous.get("vertical_nudge_steps", 0),
+                        "title_style": deepcopy(DEFAULT_REVIEW_TITLE_STYLE),
+                        "body_style": deepcopy(
+                            previous.get("body_style") or DEFAULT_REVIEW_BODY_STYLE
+                        ),
+                    })
+                incoming_element_list[:] = [*rebuilt, *retained]
+                incoming_elements = {
+                    str(item.get("id")): item
+                    for item in incoming_element_list
+                    if isinstance(item, Mapping)
+                }
+
+        # Compatibility for callers that still edit the historical plain-text field directly.
+        # In v4 rich text is authoritative, but when the semantic HTML is byte-for-byte unchanged
+        # from the current document, a changed legacy field is unambiguous and can be lifted.
+        baseline_footnote = baseline_elements.get(HISTORICAL_FOOTNOTE_ID)
+        incoming_footnote = incoming_elements.get(HISTORICAL_FOOTNOTE_ID)
+        baseline_footnotes = ((baseline.get("sections") or {}).get("footnotes") or {})
+        incoming_footnotes = incoming_sections.get("footnotes") or {}
+        if (
+            isinstance(baseline_footnote, Mapping)
+            and isinstance(incoming_footnote, dict)
+            and isinstance(baseline_footnotes, Mapping)
+            and isinstance(incoming_footnotes, Mapping)
+            and incoming_footnotes.get("historical") != baseline_footnotes.get("historical")
+            and incoming_footnote.get("content_html") == baseline_footnote.get("content_html")
+        ):
+            incoming_footnote["content_html"] = plain_text_to_rich_text(
+                incoming_footnotes.get("historical")
+            )
+
+        if current_is_controlled and set(incoming_blocks) != set(baseline_blocks):
             raise PageOnePresentationError(
                 "Review block identities are fixed after the v3 layout is created.",
                 "sections.month_in_review.blocks",
             )
-        if current_is_v3 and set(incoming_elements) != set(baseline_elements):
+        if current_is_controlled and set(incoming_elements) != set(baseline_elements):
             raise PageOnePresentationError(
                 "Page-one element identities are fixed after the v3 layout is created.",
                 "presentation.page_one.elements",
             )
-        if current_is_v3:
+        if current_is_controlled:
             # Validate geometry, style roles and nested shapes before compatibility comparison.
             # This keeps malformed draft payloads on the stable structured 422 path instead of
             # leaking AttributeError/KeyError/TypeError as a server error.
@@ -481,7 +956,7 @@ class PageOnePresentationResolver:
         baseline_review = ((baseline.get("sections") or {}).get("month_in_review") or {})
         incoming_review = incoming_review_value
 
-        if current_is_v3:
+        if current_is_controlled:
             baseline_terms_value = baseline.get("terminology_overrides")
             incoming_terms_value = result.get("terminology_overrides")
             if baseline_terms_value is None:
@@ -506,9 +981,8 @@ class PageOnePresentationResolver:
 
         # During the compatibility window an older client can still edit the four legacy prose
         # fields while carrying unchanged v3 blocks returned by GET. Preserve that edit by
-        # updating only the matching block content. If the block itself changed, the v3 editor is
-        # authoritative. Once a document is already v3, module titles are immutable server-side
-        # as well as hidden in the UI.
+        # updating only the matching block content. If the block itself changed, the controlled
+        # editor is authoritative, including its validated Review module title.
         generated_blocks = {
             str(block["block_id"]): block for block in _legacy_review_blocks(result)
         }
@@ -535,22 +1009,7 @@ class PageOnePresentationResolver:
         ).strip()
         baseline_summary = baseline_blocks.get("summary")
         incoming_summary = incoming_blocks.get("summary")
-        if str(current.get("template_version") or "") == "3033-v3":
-            for block_id, incoming_block in incoming_blocks.items():
-                baseline_block = baseline_blocks.get(block_id)
-                if baseline_block is not None and incoming_block.get("title") != baseline_block.get("title"):
-                    raise PageOnePresentationError(
-                        "Review module titles are fixed for this template.",
-                        f"sections.month_in_review.blocks.{block_id}.title",
-                        f"{REVIEW_ID_PREFIX}{block_id}",
-                    )
-            if incoming_title != baseline_title:
-                raise PageOnePresentationError(
-                    "The Review module title is fixed for this template.",
-                    "sections.month_in_review.display_title",
-                    f"{REVIEW_ID_PREFIX}summary",
-                )
-        elif (
+        if not current_is_controlled and (
             incoming_title != baseline_title
             and baseline_summary is not None
             and incoming_summary is not None
@@ -646,6 +1105,15 @@ class PageOnePresentationResolver:
         elements = page_one.get("elements") if isinstance(page_one, Mapping) else None
         if not isinstance(elements, list):
             return result
+        if presentation.get("schema_version") == PRESENTATION_SCHEMA_VERSION:
+            footnote_text = str(
+                (((result.get("sections") or {}).get("footnotes") or {}).get("historical")) or ""
+            )
+            for element in elements:
+                if isinstance(element, dict) and element.get("id") == HISTORICAL_FOOTNOTE_ID:
+                    element["content_html"] = plain_text_to_rich_text(footnote_text)
+                    break
+            return result
         paragraph_count = _paragraph_count(
             ((result.get("sections") or {}).get("footnotes") or {}).get("historical")
         )
@@ -692,6 +1160,9 @@ class PageOnePresentationResolver:
         """
 
         document = self.adapt_document(content)
+        schema_version = document["presentation"]["schema_version"]
+        if schema_version == PRESENTATION_SCHEMA_VERSION:
+            return self._resolve_v2_for_render(document)
         raw_elements = document["presentation"]["page_one"]["elements"]
         review_tokens = tokens.get("review") if isinstance(tokens.get("review"), Mapping) else {}
         font_tokens = tokens.get("font") if isinstance(tokens.get("font"), Mapping) else {}
@@ -806,6 +1277,7 @@ class PageOnePresentationResolver:
         historical["table_font_size_pt"] = font_sizes[historical["table_font_size_role"]]
         historical["table_line_height"] = line_heights[historical["table_line_height_role"]]
         return {
+            "schema_version": LEGACY_PRESENTATION_SCHEMA_VERSION,
             "document": document,
             "elements": elements,
             "review_blocks": review_blocks,
@@ -824,7 +1296,128 @@ class PageOnePresentationResolver:
             },
         }
 
+    @staticmethod
+    def _render_style(style: Mapping[str, Any]) -> dict[str, Any]:
+        requested = str(style["font_family"])
+        bundled = {
+            "carlito", "calibri", "noto sans cjk sc", "noto sans cjk tc",
+            "noto sans cjk hk", "noto serif cjk sc", "noto serif cjk tc",
+            "noto serif cjk hk",
+        }
+        pdf_family = "Carlito" if requested.casefold() == "calibri" else (
+            requested if requested.casefold() in bundled else "Carlito"
+        )
+        return {
+            **deepcopy(dict(style)),
+            "pdf_font_family": pdf_family,
+            "indent_em": int(style.get("indent_level") or 0) * 2,
+        }
+
+    def _resolve_v2_for_render(self, document: Mapping[str, Any]) -> dict[str, Any]:
+        page_one = document["presentation"]["page_one"]
+        raw_elements = page_one["elements"]
+        elements: dict[str, dict[str, Any]] = {}
+        for raw in raw_elements:
+            item = deepcopy(raw)
+            for style_key in ("title_style", "body_style", "header_style"):
+                if isinstance(item.get(style_key), Mapping):
+                    item[style_key] = self._render_style(item[style_key])
+            if item["id"].startswith(REVIEW_ID_PREFIX):
+                item["page"] = 1
+                item["vertical_nudge_pt"] = round(item["vertical_nudge_steps"] * 5.0, 4)
+            elements[item["id"]] = item
+
+        review = ((document.get("sections") or {}).get("month_in_review") or {})
+        review_blocks: list[dict[str, Any]] = []
+        for raw_block in review.get("blocks") or []:
+            if not isinstance(raw_block, Mapping):
+                continue
+            element = elements.get(f"{REVIEW_ID_PREFIX}{raw_block.get('block_id')}")
+            if element is None:
+                continue
+            content_html = str(raw_block.get("content") or "")
+            review_blocks.append({
+                **deepcopy(dict(raw_block)),
+                "layout_id": element["id"],
+                "page": 1,
+                "vertical_nudge_pt": element["vertical_nudge_pt"],
+                "title_style": deepcopy(element["title_style"]),
+                "body_style": deepcopy(element["body_style"]),
+                "rendered_content_html": render_safe_rich_text(content_html),
+            })
+
+        historical = elements[HISTORICAL_PERFORMANCE_ID]
+        historical["table_font_size_pt"] = historical["body_style"]["font_size_pt"]
+        historical["table_line_height"] = historical["body_style"]["line_height"]
+        historical["table_font_size_role"] = {
+            9.0: "history-9", 10.0: "history-10", 11.0: "history-11",
+        }.get(historical["table_font_size_pt"], "custom")
+        historical["table_line_height_role"] = {
+            1.0: "1.0", 1.2: "1.2", 1.4: "1.4",
+        }.get(historical["table_line_height"], "custom")
+        footnote = elements[HISTORICAL_FOOTNOTE_ID]
+        footnote["rendered_content_html"] = render_safe_rich_text(footnote["content_html"])
+        plain = rich_text_plain_text(footnote["content_html"], preserve_paragraphs=True)
+        paragraphs = [part for part in re.split(r"\n\s*\n", plain) if part.strip()] or [""]
+        footnote["paragraphs"] = [
+            {
+                "paragraph_index": index,
+                "text": text,
+                "font_size_pt": footnote["body_style"]["font_size_pt"],
+                "line_height": footnote["body_style"]["line_height"],
+                "text_align": footnote["body_style"]["text_align"],
+            }
+            for index, text in enumerate(paragraphs)
+        ]
+        page_count = page_one["review_page_count"]
+        review_pages = [
+            {
+                "page": page,
+                "review_blocks": deepcopy(review_blocks) if page == 1 else [],
+                "has_historical_group": page == historical["page"],
+            }
+            for page in range(1, page_count + 1)
+        ]
+        return {
+            "schema_version": PRESENTATION_SCHEMA_VERSION,
+            "document": deepcopy(dict(document)),
+            "review_page_count": page_count,
+            "review_pages": review_pages,
+            "elements": elements,
+            "review_blocks": review_blocks,
+            "review_layout": self.compile_review_flow(review_blocks),
+            "historical": historical,
+            "footnote": footnote,
+            "style_roles": {
+                "font_size_pt": {"review-10": 10.0, "review-11": 11.0},
+                "line_height": {"1.0": 1.0, "1.2": 1.2, "1.4": 1.4},
+                "defaults": {
+                    "review_font_size_role": "custom",
+                    "review_font_size_pt": DEFAULT_REVIEW_BODY_STYLE["font_size_pt"],
+                    "review_line_height_role": "custom",
+                    "review_line_height": DEFAULT_REVIEW_BODY_STYLE["line_height"],
+                },
+            },
+        }
+
     def _normalize_presentation(self, content: Mapping[str, Any]) -> dict[str, Any]:
+        raw = content.get("presentation")
+        if not isinstance(raw, Mapping):
+            raise PageOnePresentationError("presentation must be an object.", "presentation")
+        schema_version = raw.get("schema_version")
+        if type(schema_version) is not int or schema_version not in {
+            LEGACY_PRESENTATION_SCHEMA_VERSION, PRESENTATION_SCHEMA_VERSION,
+        }:
+            raise PageOnePresentationError(
+                f"presentation.schema_version must be {LEGACY_PRESENTATION_SCHEMA_VERSION} or "
+                f"{PRESENTATION_SCHEMA_VERSION}.",
+                "presentation.schema_version",
+            )
+        if schema_version == PRESENTATION_SCHEMA_VERSION:
+            return self._normalize_presentation_v2(content)
+        return self._normalize_presentation_v1(content)
+
+    def _normalize_presentation_v1(self, content: Mapping[str, Any]) -> dict[str, Any]:
         raw = content.get("presentation")
         if not isinstance(raw, Mapping):
             raise PageOnePresentationError("presentation must be an object.", "presentation")
@@ -833,9 +1426,9 @@ class PageOnePresentationResolver:
                 "presentation contains unsupported fields.", "presentation"
             )
         schema_version = raw.get("schema_version")
-        if type(schema_version) is not int or schema_version != PRESENTATION_SCHEMA_VERSION:
+        if type(schema_version) is not int or schema_version != LEGACY_PRESENTATION_SCHEMA_VERSION:
             raise PageOnePresentationError(
-                f"presentation.schema_version must be {PRESENTATION_SCHEMA_VERSION}.",
+                f"presentation.schema_version must be {LEGACY_PRESENTATION_SCHEMA_VERSION}.",
                 "presentation.schema_version",
             )
         page_one = raw.get("page_one")
@@ -1069,7 +1662,248 @@ class PageOnePresentationResolver:
                         "presentation.page_one.elements",
                         left["id"],
                     )
-        return {"schema_version": PRESENTATION_SCHEMA_VERSION, "page_one": {"elements": ordered}}
+        return {
+            "schema_version": LEGACY_PRESENTATION_SCHEMA_VERSION,
+            "page_one": {"elements": ordered},
+        }
+
+    def _normalize_presentation_v2(self, content: Mapping[str, Any]) -> dict[str, Any]:
+        raw = content.get("presentation")
+        if not isinstance(raw, Mapping) or set(raw) - {"schema_version", "page_one"}:
+            raise PageOnePresentationError(
+                "presentation contains unsupported fields.", "presentation"
+            )
+        page_one = raw.get("page_one")
+        if not isinstance(page_one, Mapping) or set(page_one) - {"review_page_count", "elements"}:
+            raise PageOnePresentationError(
+                "presentation.page_one must contain only review_page_count and elements.",
+                "presentation.page_one",
+            )
+        page_count = _int(
+            page_one.get("review_page_count"),
+            field="presentation.page_one.review_page_count",
+            minimum=1,
+            maximum=MAX_REVIEW_PAGES,
+        )
+        raw_elements = page_one.get("elements")
+        if not isinstance(raw_elements, list) or len(raw_elements) > 42:
+            raise PageOnePresentationError(
+                "presentation.page_one.elements must be a list with at most 42 entries.",
+                "presentation.page_one.elements",
+            )
+
+        sections = content.get("sections")
+        review = sections.get("month_in_review") if isinstance(sections, Mapping) else None
+        blocks = review.get("blocks") if isinstance(review, Mapping) else None
+        if not isinstance(blocks, list) or any(not isinstance(item, Mapping) for item in blocks):
+            raise PageOnePresentationError(
+                "sections.month_in_review.blocks must be a list of objects.",
+                "sections.month_in_review.blocks",
+            )
+        block_ids: set[str] = set()
+        for index, block in enumerate(blocks):
+            raw_id = block.get("block_id")
+            block_id = raw_id.strip() if isinstance(raw_id, str) else ""
+            if not block_id or block_id != raw_id or len(block_id) > 120 or block_id in block_ids:
+                raise PageOnePresentationError(
+                    "Every Review block requires a unique, trimmed id of at most 120 characters.",
+                    f"sections.month_in_review.blocks.{index}.block_id",
+                )
+            block_ids.add(block_id)
+
+        normalized_elements: list[dict[str, Any]] = []
+        ids: set[str] = set()
+        for index, raw_element in enumerate(raw_elements):
+            field = f"presentation.page_one.elements.{index}"
+            if not isinstance(raw_element, Mapping):
+                raise PageOnePresentationError(
+                    f"Page-one element {index} must be an object.", field
+                )
+            element_id = str(raw_element.get("id") or "").strip()
+            if not element_id or len(element_id) > 120 or element_id in ids:
+                raise PageOnePresentationError(
+                    "Every page-one element requires a unique id of at most 120 characters.",
+                    f"{field}.id", element_id or None,
+                )
+            is_review = element_id.startswith(REVIEW_ID_PREFIX)
+            if is_review and element_id[len(REVIEW_ID_PREFIX):] not in block_ids:
+                raise PageOnePresentationError(
+                    f"Page-one element {element_id} does not reference a Review block.",
+                    f"{field}.id", element_id,
+                )
+            if not is_review and element_id not in {
+                HISTORICAL_PERFORMANCE_ID, HISTORICAL_FOOTNOTE_ID,
+            }:
+                raise PageOnePresentationError(
+                    f"Unsupported page-one element id: {element_id}.", f"{field}.id", element_id
+                )
+            allowed = (
+                _V2_REVIEW_ELEMENT_KEYS if is_review
+                else _V2_HISTORICAL_ELEMENT_KEYS
+                if element_id == HISTORICAL_PERFORMANCE_ID
+                else _V2_FOOTNOTE_ELEMENT_KEYS
+            )
+            if set(raw_element) - allowed:
+                raise PageOnePresentationError(
+                    f"Page-one element {element_id} contains unsupported fields.", field, element_id
+                )
+            row = _int(raw_element.get("row"), field=f"{field}.row", minimum=0, maximum=MAX_ROW)
+            row_span = _int(
+                raw_element.get("row_span"), field=f"{field}.row_span",
+                minimum=1, maximum=MAX_ROW_SPAN,
+            )
+            x = _int(raw_element.get("x"), field=f"{field}.x", minimum=0, maximum=PAGE_COLUMNS - 1)
+            width = _int(raw_element.get("w"), field=f"{field}.w", minimum=1, maximum=PAGE_COLUMNS)
+            if x + width > PAGE_COLUMNS:
+                raise PageOnePresentationError(
+                    f"Page-one element {element_id} exceeds the 12-column canvas.", field, element_id
+                )
+            normalized: dict[str, Any] = {
+                "id": element_id, "row": row, "row_span": row_span, "x": x, "w": width,
+            }
+            if is_review:
+                normalized.update({
+                    "vertical_nudge_steps": _int(
+                        raw_element.get("vertical_nudge_steps", 0),
+                        field=f"{field}.vertical_nudge_steps",
+                        minimum=MIN_VERTICAL_NUDGE_STEPS,
+                        maximum=MAX_VERTICAL_NUDGE_STEPS,
+                    ),
+                    # Brand typography remains locked; only the measured gap from a title to its
+                    # following text/table is an editor-controlled layout value.
+                    "title_style": _normalize_locked_title_style(
+                        raw_element.get("title_style"),
+                        field=f"{field}.title_style",
+                        defaults=DEFAULT_REVIEW_TITLE_STYLE,
+                    ),
+                    "body_style": _normalize_style(
+                        raw_element.get("body_style"), field=f"{field}.body_style",
+                        defaults=DEFAULT_REVIEW_BODY_STYLE,
+                    ),
+                })
+            elif element_id == HISTORICAL_PERFORMANCE_ID:
+                normalized.update({
+                    "page": _int(
+                        raw_element.get("page"), field=f"{field}.page",
+                        minimum=1, maximum=MAX_REVIEW_PAGES,
+                    ),
+                    "offset_y_pt": _number(
+                        raw_element.get("offset_y_pt", 0), field=f"{field}.offset_y_pt",
+                        minimum=MIN_OFFSET_Y_PT, maximum=MAX_OFFSET_Y_PT,
+                    ),
+                    "title_style": _normalize_locked_title_style(
+                        raw_element.get("title_style"),
+                        field=f"{field}.title_style",
+                        defaults=DEFAULT_HISTORY_TITLE_STYLE,
+                    ),
+                    "header_style": _normalize_style(
+                        raw_element.get("header_style"), field=f"{field}.header_style",
+                        defaults=DEFAULT_HISTORY_HEADER_STYLE,
+                    ),
+                    "body_style": _normalize_style(
+                        raw_element.get("body_style"), field=f"{field}.body_style",
+                        defaults=DEFAULT_HISTORY_BODY_STYLE,
+                    ),
+                    "cell_padding_y_pt": _number(
+                        raw_element.get("cell_padding_y_pt", 2),
+                        field=f"{field}.cell_padding_y_pt",
+                        minimum=SPACING_MIN_PT, maximum=SPACING_MAX_PT,
+                    ),
+                })
+            else:
+                normalized.update({
+                    "page": _int(
+                        raw_element.get("page"), field=f"{field}.page",
+                        minimum=1, maximum=MAX_REVIEW_PAGES,
+                    ),
+                    "gap_pt": _number(
+                        raw_element.get("gap_pt", 6), field=f"{field}.gap_pt",
+                        minimum=SPACING_MIN_PT, maximum=SPACING_MAX_PT,
+                    ),
+                    "content_html": _sanitize_footnote_html(
+                        raw_element.get("content_html"), f"{field}.content_html"
+                    ),
+                    "body_style": _normalize_style(
+                        raw_element.get("body_style"), field=f"{field}.body_style",
+                        defaults=DEFAULT_FOOTNOTE_BODY_STYLE,
+                    ),
+                })
+            normalized_elements.append(normalized)
+            ids.add(element_id)
+
+        expected_review_ids = {f"{REVIEW_ID_PREFIX}{block_id}" for block_id in block_ids}
+        actual_review_ids = {element_id for element_id in ids if element_id.startswith(REVIEW_ID_PREFIX)}
+        missing_review = expected_review_ids - actual_review_ids
+        if missing_review:
+            raise PageOnePresentationError(
+                f"Missing Review elements: {', '.join(sorted(missing_review))}.",
+                "presentation.page_one.elements",
+            )
+        required = {HISTORICAL_PERFORMANCE_ID, HISTORICAL_FOOTNOTE_ID}
+        missing_fixed = required - ids
+        if missing_fixed:
+            raise PageOnePresentationError(
+                f"Missing required page-one elements: {', '.join(sorted(missing_fixed))}.",
+                "presentation.page_one.elements",
+            )
+
+        by_id = {item["id"]: item for item in normalized_elements}
+        historical = by_id[HISTORICAL_PERFORMANCE_ID]
+        footnote = by_id[HISTORICAL_FOOTNOTE_ID]
+        if historical["page"] != footnote["page"]:
+            raise PageOnePresentationError(
+                "Historical Performance and its footnote must remain on the same page.",
+                "presentation.page_one.elements", HISTORICAL_PERFORMANCE_ID,
+            )
+        if historical["page"] > page_count:
+            raise PageOnePresentationError(
+                "The Historical Performance page must exist in review_page_count.",
+                "presentation.page_one.review_page_count", HISTORICAL_PERFORMANCE_ID,
+            )
+        if (historical["x"], historical["w"]) != (footnote["x"], footnote["w"]):
+            raise PageOnePresentationError(
+                "Historical Performance and its footnote must share x and w alignment.",
+                "presentation.page_one.elements", HISTORICAL_FOOTNOTE_ID,
+            )
+        review_elements = [item for item in normalized_elements if item["id"].startswith(REVIEW_ID_PREFIX)]
+        review_bottom = max(
+            (item["row"] + item["row_span"] for item in review_elements), default=0
+        )
+        if historical["page"] == 1 and historical["row"] < review_bottom:
+            raise PageOnePresentationError(
+                "Historical Performance must follow all Review blocks when placed on page 1.",
+                "presentation.page_one.elements", HISTORICAL_PERFORMANCE_ID,
+            )
+        if footnote["row"] < historical["row"] + historical["row_span"]:
+            raise PageOnePresentationError(
+                "The historical footnote must follow Historical Performance.",
+                "presentation.page_one.elements", HISTORICAL_FOOTNOTE_ID,
+            )
+
+        ordered = sorted(
+            normalized_elements,
+            key=lambda item: (
+                1 if item["id"].startswith(REVIEW_ID_PREFIX) else item["page"],
+                item["row"], item["x"], item["id"],
+            ),
+        )
+        for index, left in enumerate(ordered):
+            left_page = 1 if left["id"].startswith(REVIEW_ID_PREFIX) else left["page"]
+            for right in ordered[index + 1:]:
+                right_page = 1 if right["id"].startswith(REVIEW_ID_PREFIX) else right["page"]
+                if right_page != left_page:
+                    continue
+                horizontal = left["x"] < right["x"] + right["w"] and right["x"] < left["x"] + left["w"]
+                vertical = left["row"] < right["row"] + right["row_span"] and right["row"] < left["row"] + left["row_span"]
+                if horizontal and vertical:
+                    raise PageOnePresentationError(
+                        f"Page-one elements {left['id']} and {right['id']} overlap.",
+                        "presentation.page_one.elements", left["id"],
+                    )
+        return {
+            "schema_version": PRESENTATION_SCHEMA_VERSION,
+            "page_one": {"review_page_count": page_count, "elements": ordered},
+        }
 
     def _normalize_footnote(
         self,
@@ -1160,6 +1994,31 @@ class PageOnePresentationResolver:
         }
 
     @staticmethod
+    def _sync_v2_footnote_plain_text(content: dict[str, Any]) -> None:
+        presentation = content.get("presentation") or {}
+        if presentation.get("schema_version") != PRESENTATION_SCHEMA_VERSION:
+            return
+        elements = ((presentation.get("page_one") or {}).get("elements") or [])
+        footnote = next(
+            (
+                item for item in elements
+                if isinstance(item, Mapping) and item.get("id") == HISTORICAL_FOOTNOTE_ID
+            ),
+            None,
+        )
+        if footnote is None:
+            return
+        sections = content.get("sections")
+        if not isinstance(sections, dict):
+            return
+        footnotes = sections.get("footnotes")
+        if not isinstance(footnotes, dict):
+            return
+        footnotes["historical"] = rich_text_plain_text(
+            str(footnote.get("content_html") or ""), preserve_paragraphs=True
+        )
+
+    @staticmethod
     def _sync_legacy_block_geometry(content: dict[str, Any]) -> None:
         elements = {
             item["id"]: item
@@ -1181,7 +2040,11 @@ class PageOnePresentationResolver:
                     "w": element["w"],
                     "h": element["row_span"],
                 })
-        review["layout_schema_version"] = 3
+        review["layout_schema_version"] = (
+            4
+            if content["presentation"].get("schema_version") == PRESENTATION_SCHEMA_VERSION
+            else 3
+        )
 
 
 page_one_presentation = PageOnePresentationResolver()

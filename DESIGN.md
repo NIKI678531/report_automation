@@ -124,6 +124,16 @@ spacing:
   page-y: 32px
   grid-gap: 24px
 
+layout:
+  review-inspector-width: min(680px, 92vw)
+  review-group-min-height: 360px
+  review-control-min: 132px
+  marker-input-width: 72px
+
+opacity:
+  disabled: 0.48
+  modal-backdrop: 0.72
+
 components:
   # ===== 主按钮 =====
   button-primary:
@@ -328,8 +338,11 @@ components:
 - **响应式断点**：`768 / 1024 / 1440`。
 - **背景遮罩**：在动态背景（WebGL / Canvas）上必须叠加
   `{colors.background-overlay}` 半透明层以保障可读性。
-- **z-index 层级**：`bg: 0`，`content: 2`，`dropdown: 1000`，`modal: 2000`，
-  `message: 3000`。
+- **z-index 层级**：`bg: 0`，`content: 2`，`dropdown: 1000`，`modal backdrop: 2000`，
+  `modal panel: 2001`，`message: 3000`。
+- **Review 编辑器专用尺寸**：浮动编辑栏、History/footnote 组、数值控件及角标输入分别使用
+  `layout.review-inspector-width / review-group-min-height / review-control-min / marker-input-width`；
+  浮层与禁用态分别使用 `opacity.modal-backdrop / opacity.disabled`，不得借用图表 hover 状态。
 
 ## Elevation & Depth
 

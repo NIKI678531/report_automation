@@ -73,7 +73,7 @@ def test_initial_migration_upgrade_and_downgrade(sqlite_url):
         profiles = dict(connection.execute(text("SELECT profile_id, status FROM mapping_profiles")).all())
     assert ("3037", "3037.HK", "CSOP Hang Seng Index ETF") in products
     assert ("3535", "3535.HK", "CSOP Nomura FTSE HK-Japan Equity Cash Flow ETF") in products
-    assert bindings == ("3033.HK", "3033", "HK", "3033-v3", "3033-v3")
+    assert bindings == ("3033.HK", "3033", "HK", "3033-v4", "3033-v4")
     assert profiles["standard_constituent_returns_csv"] == "APPROVED"
     assert profiles["standard_total_return_series_csv"] == "APPROVED"
     assert profiles["standard_fund_kpi_daily_csv"] == "APPROVED"

@@ -6,9 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ReviewCanvas,
   historicalFootnoteParagraphs,
+  historicalGroupDownRoomPt,
+  legacyReviewBlocks,
   markPreviewOverflows,
+  pageOnePreviewHtml,
   pageOnePresentation,
   retargetHistoricalFootnoteStyles,
+  richHtmlToPlainText,
   type PageOnePresentation,
   type ReviewBlock,
 } from "./ReviewCanvas";
@@ -32,6 +36,32 @@ const blocks: ReviewBlock[] = [
     content: "<p>Driver.</p>",
     x: 6,
     y: 0,
+    w: 6,
+    h: 2,
+    text_align: "left",
+  },
+];
+
+const allBlocks: ReviewBlock[] = [
+  ...blocks,
+  {
+    block_id: "monitor",
+    type: "areas_to_monitor",
+    title: "Key Areas to Monitor",
+    content: "<p>Monitor.</p>",
+    x: 0,
+    y: 2,
+    w: 6,
+    h: 2,
+    text_align: "left",
+  },
+  {
+    block_id: "outlook",
+    type: "outlook",
+    title: "Outlook",
+    content: "<p>Outlook.</p>",
+    x: 6,
+    y: 2,
     w: 6,
     h: 2,
     text_align: "left",
@@ -68,25 +98,47 @@ describe("Review page-one layout controls", () => {
     expect(historicalFootnoteParagraphs("\n\n")).toEqual([""]);
   });
 
-  it("drops paragraph styles that no longer have target footnote text", () => {
+  it("extracts nested list paragraphs once when synchronizing rich footnotes", () => {
+    expect(richHtmlToPlainText("<ul><li><p>First</p></li><li><p>Second</p></li></ul>"))
+      .toBe("First\n\nSecond");
+  });
+
+  it("shows draggable and resizable controls for all six modules and disables them when read-only", () => {
+    const presentation = pageOnePresentation(undefined, allBlocks);
+    const { container, rerender } = render(<ReviewCanvas {...props(presentation)} blocks={allBlocks} />);
+
+    expect(container.querySelectorAll(".review-drag-handle")).toHaveLength(6);
+    expect(container.querySelectorAll(".react-resizable-handle")).toHaveLength(6);
+    expect([...container.querySelectorAll(".review-drag-handle")].every((node) => node.getAttribute("aria-disabled") === "false")).toBe(true);
+
+    rerender(<ReviewCanvas {...props(presentation)} blocks={allBlocks} disabled />);
+    expect([...container.querySelectorAll(".review-drag-handle")].every((node) => node.getAttribute("aria-disabled") === "true")).toBe(true);
+    expect(screen.getByLabelText("Opening page number")).toHaveProperty("disabled", true);
+  });
+
+  it("moves the Historical Performance group to a new opening page and keeps both elements aligned", () => {
+    const onPresentationChange = vi.fn();
+    render(<ReviewCanvas {...props(pageOnePresentation(undefined, blocks), onPresentationChange)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+
+    const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
+    expect(updated.page_one.review_page_count).toBe(2);
+    expect(updated.page_one.elements.filter((element) => element.id === "historical_performance" || element.id === "footnote:historical"))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "historical_performance", page: 2, x: 0, w: 12 }),
+        expect.objectContaining({ id: "footnote:historical", page: 2, x: 0, w: 12 }),
+      ]));
+  });
+
+  it("keeps the controlled rich footnote synchronized with its plain-text source", () => {
     const presentation = pageOnePresentation(undefined, blocks);
-    presentation.page_one.elements = presentation.page_one.elements.map((element) => (
-      element.id === "footnote:historical"
-        ? {
-          ...element,
-          paragraph_styles: [
-            { paragraph_index: 0, font_size_role: "footnote-9", line_height_role: "1.2", text_align: "left" },
-            { paragraph_index: 1, font_size_role: "footnote-10", line_height_role: "1.4", text_align: "right" },
-          ],
-        }
-        : element
-    ));
 
     const retargeted = retargetHistoricalFootnoteStyles(presentation, "Only one paragraph.");
+    const footnote = retargeted.page_one.elements.find((element) => element.id === "footnote:historical");
 
-    expect(retargeted.page_one.elements.find((element) => element.id === "footnote:historical")?.paragraph_styles).toEqual([
-      { paragraph_index: 0, font_size_role: "footnote-9", line_height_role: "1.2", text_align: "left" },
-    ]);
+    expect(footnote?.content_html).toBe("<p>Only one paragraph.</p>");
+    expect(footnote?.body_style?.font_size_pt).toBe(9);
   });
 
   it("marks horizontal bounds and nested scroll overflow in the paged preview", () => {
@@ -141,26 +193,70 @@ describe("Review page-one layout controls", () => {
     expect(footnote.hasAttribute("data-layout-overflow")).toBe(false);
   });
 
+  it("measures the remaining rendered page room for manual cross-page nudging", () => {
+    const previewDocument = document.implementation.createHTMLDocument("preview");
+    previewDocument.body.innerHTML = `
+      <section class="report-page">
+        <div data-layout-id="footnote:historical">Footnote</div>
+        <footer class="page-footer"></footer>
+      </section>`;
+    const page = previewDocument.querySelector<HTMLElement>(".report-page")!;
+    const footnote = previewDocument.querySelector<HTMLElement>('[data-layout-id="footnote:historical"]')!;
+    const footer = previewDocument.querySelector<HTMLElement>(".page-footer")!;
+    const a4HeightPt = (297 / 25.4) * 72;
+    const rect = (top: number, bottom: number): DOMRect => ({
+      left: 0, top, right: 210, bottom, width: 210, height: bottom - top,
+      x: 0, y: top, toJSON: () => ({}),
+    });
+    vi.spyOn(page, "getBoundingClientRect").mockReturnValue(rect(0, a4HeightPt));
+    vi.spyOn(footnote, "getBoundingClientRect").mockReturnValue(rect(780, 794));
+    vi.spyOn(footer, "getBoundingClientRect").mockReturnValue(rect(800, 820));
+
+    expect(historicalGroupDownRoomPt(previewDocument)).toBeCloseTo(6, 5);
+  });
+
   it("reflows provisional fixed elements when legacy presentation has no Review geometry", () => {
     const presentation = pageOnePresentation({
       schema_version: 1,
       page_one: {
         elements: [
           { id: "historical_performance", row: 0, row_span: 1, x: 0, w: 12, vertical_nudge_steps: 2 },
-          { id: "footnote:historical", row: 1, row_span: 1, x: 0, w: 12, vertical_nudge_steps: 0, bottom_nudge_steps: 1, paragraph_styles: [] },
+          {
+            id: "footnote:historical",
+            row: 1,
+            row_span: 1,
+            x: 0,
+            w: 12,
+            vertical_nudge_steps: 0,
+            bottom_nudge_steps: 1,
+            paragraph_styles: [
+              { paragraph_index: 0, font_size_role: "footnote-8", line_height_role: "1.0", text_align: "left" },
+              { paragraph_index: 1, font_size_role: "footnote-10", line_height_role: "1.4", text_align: "justify" },
+            ],
+          },
         ],
       },
-    }, blocks);
+    }, blocks, "First <source>.\ncontinuation\n\nSecond & final.");
 
-    expect(presentation.page_one.elements.find((element) => element.id === "historical_performance")).toMatchObject({ row: 2, vertical_nudge_steps: 2 });
-    expect(presentation.page_one.elements.find((element) => element.id === "footnote:historical")).toMatchObject({ row: 3, bottom_nudge_steps: 1 });
+    expect(presentation).toMatchObject({ schema_version: 2, page_one: { review_page_count: 1 } });
+    expect(presentation.page_one.elements.find((element) => element.id === "historical_performance")).toMatchObject({ row: 2, row_span: 3, page: 1, offset_y_pt: 10 });
+    expect(presentation.page_one.elements.find((element) => element.id === "footnote:historical")).toMatchObject({
+      row: 5,
+      row_span: 4,
+      page: 1,
+      gap_pt: 12,
+      body_style: { font_size_pt: 9, line_height: 1.2, text_align: "left" },
+      content_html: '<p data-line-height="1" data-text-align="left"><span data-font-size-pt="8">First &lt;source&gt;.<br>continuation</span></p><p data-line-height="1.4" data-text-align="justify"><span data-font-size-pt="10">Second &amp; final.</span></p>',
+    });
   });
 
-  it("defaults and normalizes Historical Performance table style roles", () => {
+  it("defaults and upgrades Historical Performance table style roles to precise values", () => {
     const defaultPresentation = pageOnePresentation(undefined, blocks);
     expect(defaultPresentation.page_one.elements.find((element) => element.id === "historical_performance")).toMatchObject({
-      table_font_size_role: "history-10",
-      table_line_height_role: "1.2",
+      title_style: { font_family: "Calibri", font_size_pt: 12, color: "#22327F", bold: true, text_align: "center" },
+      header_style: { font_size_pt: 11, line_height: 1.2, bold: true, color: "#FFFFFF", text_align: "center" },
+      body_style: { font_size_pt: 10, line_height: 1.2, bold: false },
+      cell_padding_y_pt: 2,
     });
 
     const normalized = pageOnePresentation({
@@ -179,9 +275,53 @@ describe("Review page-one layout controls", () => {
       },
     }, blocks);
     expect(normalized.page_one.elements.find((element) => element.id === "historical_performance")).toMatchObject({
-      table_font_size_role: "history-11",
-      table_line_height_role: "1.4",
+      header_style: { font_size_pt: 11, line_height: 1.4 },
+      body_style: { font_size_pt: 11, line_height: 1.4 },
     });
+  });
+
+  it("preserves only the editable title-to-content spacing for every titled Review-page module", () => {
+    const source = pageOnePresentation(undefined, allBlocks);
+    source.page_one.elements = source.page_one.elements.map((element) => (
+      element.title_style
+        ? {
+          ...element,
+          title_style: {
+            ...element.title_style,
+            font_size_pt: 5,
+            color: "#FF0000",
+            space_after_pt: 7.5,
+          },
+        }
+        : element
+    ));
+
+    const normalized = pageOnePresentation(source, allBlocks);
+    for (const id of ["review:summary", "review:drivers", "review:monitor", "review:outlook"]) {
+      expect(normalized.page_one.elements.find((element) => element.id === id)?.title_style).toMatchObject({
+        font_size_pt: 14.04,
+        color: "#22327F",
+        space_after_pt: 7.5,
+      });
+    }
+    expect(normalized.page_one.elements.find((element) => element.id === "historical_performance")?.title_style).toMatchObject({
+      font_size_pt: 12,
+      color: "#22327F",
+      space_after_pt: 7.5,
+    });
+  });
+
+  it("upgrades legacy paragraph font roles to valid inline semantic spans", () => {
+    const [legacy] = legacyReviewBlocks({
+      blocks: [{
+        ...blocks[0],
+        content: '<p data-font-size-role="review-11" data-line-height-role="1.4"><strong>Legacy</strong> copy.</p>',
+      }],
+    });
+
+    expect(legacy.content).toContain('<p data-line-height="1.4"><span data-font-size-pt="11"><strong>Legacy</strong> copy.</span></p>');
+    expect(legacy.content).not.toContain("data-font-size-role");
+    expect(legacy.content).not.toContain("data-line-height-role");
   });
 
   it("keeps horizontal movement bounded while allowing a default block to move upward", () => {
@@ -227,39 +367,7 @@ describe("Review page-one layout controls", () => {
     expect(onPresentationChange).not.toHaveBeenCalled();
   });
 
-  it("stores font size, line spacing, and alignment for the selected footnote paragraph", () => {
-    const onPresentationChange = vi.fn();
-    const initial = pageOnePresentation(undefined, blocks);
-    initial.page_one.elements = initial.page_one.elements.map((element) => element.id === "footnote:historical" ? {
-      ...element,
-      paragraph_styles: [{ paragraph_index: 0, font_size_role: "footnote-9", line_height_role: "1.0", text_align: "left" }],
-    } : element);
-
-    function StatefulCanvas() {
-      const [presentation, setPresentation] = useState(initial);
-      return <ReviewCanvas
-        {...props(presentation, (next) => {
-          onPresentationChange(next);
-          setPresentation(next);
-        })}
-      />;
-    }
-
-    const { container } = render(<StatefulCanvas />);
-    const footnoteEditor = container.querySelector(".historical-footnote-editor") as HTMLElement;
-    fireEvent.change(within(footnoteEditor).getByLabelText("Paragraph"), { target: { value: "1" } });
-    fireEvent.change(within(footnoteEditor).getByLabelText("Font size"), { target: { value: "footnote-10" } });
-    fireEvent.change(within(footnoteEditor).getByLabelText("Line spacing"), { target: { value: "1.4" } });
-    fireEvent.change(within(footnoteEditor).getByLabelText("Alignment"), { target: { value: "justify" } });
-
-    const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
-    expect(updated.page_one.elements.find((element) => element.id === "footnote:historical")?.paragraph_styles).toEqual([
-      { paragraph_index: 0, font_size_role: "footnote-9", line_height_role: "1.0", text_align: "left" },
-      { paragraph_index: 1, font_size_role: "footnote-10", line_height_role: "1.4", text_align: "justify" },
-    ]);
-  });
-
-  it("stores editable font size and line spacing for the read-only Historical Performance table", () => {
+  it("stores precise default typography for the controlled footnote", () => {
     const onPresentationChange = vi.fn();
     const initial = pageOnePresentation(undefined, blocks);
 
@@ -274,18 +382,132 @@ describe("Review page-one layout controls", () => {
     }
 
     render(<StatefulCanvas />);
-    fireEvent.change(screen.getByLabelText("Historical table font size"), { target: { value: "history-11" } });
-    fireEvent.change(screen.getByLabelText("Historical table line spacing"), { target: { value: "1.4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open Historical performance footnote editor" }));
+    const inspector = screen.getByRole("dialog", { name: "Historical performance footnote detailed editor" });
+    fireEvent.change(within(inspector).getByLabelText("Historical performance footnote Font size"), { target: { value: "9.5" } });
+    fireEvent.change(screen.getByLabelText("Historical performance footnote Line spacing"), { target: { value: "1.4" } });
+    fireEvent.change(screen.getByLabelText("Historical performance footnote Alignment"), { target: { value: "justify" } });
+
+    const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
+    expect(updated.page_one.elements.find((element) => element.id === "footnote:historical")?.body_style).toMatchObject({
+      font_size_pt: 9.5,
+      line_height: 1.4,
+      text_align: "justify",
+    });
+  });
+
+  it("edits the title-to-table gap while keeping Historical Performance title typography locked", () => {
+    const onPresentationChange = vi.fn();
+    const initial = pageOnePresentation(undefined, blocks);
+
+    function StatefulCanvas() {
+      const [presentation, setPresentation] = useState(initial);
+      return <ReviewCanvas
+        {...props(presentation, (next) => {
+          onPresentationChange(next);
+          setPresentation(next);
+        })}
+      />;
+    }
+
+    render(<StatefulCanvas />);
+    fireEvent.click(screen.getByRole("button", { name: `Open ${props().historicalTitle} editor` }));
+    const inspector = screen.getByRole("dialog", { name: `${props().historicalTitle} detailed editor` });
+    fireEvent.change(within(inspector).getByLabelText("Title-to-content spacing (pt)"), { target: { value: "8.5" } });
+    fireEvent.change(screen.getByLabelText("Table header Font size"), { target: { value: "8.5" } });
+    fireEvent.change(screen.getByLabelText("Data rows Line spacing"), { target: { value: "1.35" } });
+    fireEvent.change(screen.getByLabelText("Cell padding (pt)"), { target: { value: "3.5" } });
 
     const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
     expect(updated.page_one.elements.find((element) => element.id === "historical_performance")).toMatchObject({
-      table_font_size_role: "history-11",
-      table_line_height_role: "1.4",
+      title_style: { font_size_pt: 12, color: "#22327F", bold: true, space_after_pt: 8.5 },
+      header_style: { font_size_pt: 8.5 },
+      body_style: { line_height: 1.35 },
+      cell_padding_y_pt: 3.5,
     });
-    expect(screen.getByText("Values are read-only")).toBeTruthy();
+    expect(within(inspector).queryByLabelText("Table title Font size")).toBeNull();
+    expect(within(inspector).queryByLabelText("Table header Paragraph spacing before")).toBeNull();
+    expect(within(inspector).queryByLabelText("Data rows Paragraph spacing after")).toBeNull();
+    expect(within(inspector).getByLabelText("Table header Line spacing")).toBeTruthy();
+    expect(within(inspector).getByLabelText("Data rows Alignment")).toBeTruthy();
+    expect(screen.getAllByText("Values are read-only")).toHaveLength(2);
   });
 
-  it("applies alignment only to the active Review paragraph", async () => {
+  it.each(allBlocks.map((block) => [block.block_id, block.title, block] as const))(
+    "edits the title-to-copy gap for Review block %s",
+    (blockId, title, block) => {
+      const onPresentationChange = vi.fn();
+      const initial = pageOnePresentation(undefined, [block]);
+
+      function StatefulCanvas() {
+        const [presentation, setPresentation] = useState(initial);
+        return <ReviewCanvas
+          {...props(presentation, (next) => {
+            onPresentationChange(next);
+            setPresentation(next);
+          })}
+          blocks={[block]}
+        />;
+      }
+
+      render(<StatefulCanvas />);
+      fireEvent.click(screen.getByRole("button", { name: `Open ${title} editor` }));
+      const inspector = screen.getByRole("dialog", { name: `${title} detailed editor` });
+      fireEvent.change(within(inspector).getByLabelText("Title-to-content spacing (pt)"), { target: { value: "6.5" } });
+
+      const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
+      expect(updated.page_one.elements.find((element) => element.id === `review:${blockId}`)?.title_style).toMatchObject({
+        font_size_pt: 14.04,
+        color: "#22327F",
+        space_after_pt: 6.5,
+      });
+      expect(within(inspector).queryByLabelText("Module title style Font size")).toBeNull();
+    },
+  );
+
+  it("edits a Review subtitle and indents its title and complete body by two-character steps", () => {
+    const onBlocksChange = vi.fn();
+    const onPresentationChange = vi.fn();
+    const initial = pageOnePresentation(undefined, [blocks[0]]);
+
+    function StatefulCanvas() {
+      const [currentBlocks, setCurrentBlocks] = useState([blocks[0]]);
+      const [presentation, setPresentation] = useState(initial);
+      return <ReviewCanvas
+        {...props(presentation, (next) => {
+          onPresentationChange(next);
+          setPresentation(next);
+        })}
+        blocks={currentBlocks}
+        onBlocksChange={(next) => {
+          onBlocksChange(next);
+          setCurrentBlocks(next);
+        }}
+      />;
+    }
+
+    render(<StatefulCanvas />);
+    fireEvent.click(screen.getByRole("button", { name: "Open June in Review editor" }));
+    const inspector = screen.getByRole("dialog", { name: "June in Review detailed editor" });
+    fireEvent.change(within(inspector).getByLabelText("Title for summary block"), {
+      target: { value: "Editable market subheading" },
+    });
+    fireEvent.change(within(inspector).getByLabelText("Module title Indent (2 characters per level)"), {
+      target: { value: "1" },
+    });
+    fireEvent.change(within(inspector).getByLabelText("Editable market subheading Indent (2 characters per level)"), {
+      target: { value: "2" },
+    });
+
+    expect((onBlocksChange.mock.calls.at(-1)?.[0] as ReviewBlock[])[0].title)
+      .toBe("Editable market subheading");
+    const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
+    const element = updated.page_one.elements.find((item) => item.id === "review:summary");
+    expect(element?.title_style?.indent_level).toBe(1);
+    expect(element?.body_style?.indent_level).toBe(2);
+  });
+
+  it("applies an unselected alignment change to the Review module default", async () => {
     Object.defineProperties(window.Range.prototype, {
       getClientRects: { configurable: true, value: () => [] },
       getBoundingClientRect: {
@@ -294,6 +516,7 @@ describe("Review page-one layout controls", () => {
       },
     });
     const onBlocksChange = vi.fn();
+    const onPresentationChange = vi.fn();
     const twoParagraphBlocks = [{
       ...blocks[0],
       content: "<p>First paragraph.</p><p>Second paragraph.</p>",
@@ -304,15 +527,16 @@ describe("Review page-one layout controls", () => {
       {...props(presentation)}
       blocks={twoParagraphBlocks}
       onBlocksChange={onBlocksChange}
+      onPresentationChange={onPresentationChange}
     />);
 
     fireEvent.click(screen.getByTitle("Align center"));
 
-    await waitFor(() => expect(onBlocksChange).toHaveBeenCalled());
-    const updated = onBlocksChange.mock.calls.at(-1)?.[0] as ReviewBlock[];
-    expect(updated[0].text_align).toBe("left");
-    expect(updated[0].content).toContain('data-text-align="center"');
-    expect(updated[0].content.match(/data-text-align=/g)).toHaveLength(1);
+    await waitFor(() => expect(onPresentationChange).toHaveBeenCalled());
+    const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
+    expect(updated.page_one.elements.find((element) => element.id === "review:summary")?.body_style?.text_align).toBe("center");
+    const blocksAfterInitialization = onBlocksChange.mock.calls.at(-1)?.[0] as ReviewBlock[] | undefined;
+    expect(blocksAfterInitialization?.[0].content ?? twoParagraphBlocks[0].content).toBe(twoParagraphBlocks[0].content);
   });
 
   it("selects a layout element by clicking it in the paged preview", () => {
@@ -330,39 +554,19 @@ describe("Review page-one layout controls", () => {
     expect(container.querySelector(".historical-footnote-editor")?.className).toContain("selected");
   });
 
-  it("renders only page one at fixed A4 geometry and rescales its iframe height with the pane", async () => {
+  it("renders every opening Review page and excludes later business pages", () => {
     const previewHtml = `<!doctype html><html><head></head><body><article class="report-document">
-      <section class="report-page" data-page="1"><main class="page-body"><section data-layout-id="review:summary">Review</section><section data-layout-id="historical_performance">History</section></main><div class="footnote" data-layout-id="footnote:historical">Footnote</div><footer class="page-footer"></footer></section>
-      <section class="report-page" data-page="2">Company News</section>
+      <section class="report-page" data-page="1" data-section-key="month_in_review" data-review-page-index="0">Review 1</section>
+      <section class="report-page" data-page="2" data-section-key="month_in_review" data-review-page-index="1">Review 2</section>
+      <section class="report-page" data-page="3" data-section-key="company_news">Company News</section>
     </article></body></html>`;
-    render(<ReviewCanvas {...props()} previewHtml={previewHtml} />);
-    const iframe = screen.getByTitle("Live paged preview") as HTMLIFrameElement;
+    const reviewHtml = pageOnePreviewHtml(previewHtml);
 
-    expect(iframe.getAttribute("srcdoc")).toContain('data-page="1"');
-    expect(iframe.getAttribute("srcdoc")).not.toContain('data-page="2"');
-
-    const iframeDocument = iframe.contentDocument!;
-    iframeDocument.body.innerHTML = previewHtml;
-    const page = iframeDocument.querySelector<HTMLElement>('[data-page="1"]')!;
-    vi.spyOn(page, "getBoundingClientRect").mockReturnValue({
-      left: 0, top: 0, right: 800, bottom: 1200, width: 800, height: 1200,
-      x: 0, y: 0, toJSON: () => ({}),
-    });
-    let paneWidth = 400;
-    Object.defineProperty(iframe, "clientWidth", { configurable: true, get: () => paneWidth });
-
-    fireEvent.load(iframe);
-
-    await waitFor(() => expect(page.style.getPropertyValue("--review-preview-scale")).toBe("0.5"));
-    expect(iframeDocument.querySelector('[data-page="2"]')).toBeNull();
-    expect(iframeDocument.querySelector("style[data-review-preview]")?.textContent).toContain("width: 210mm !important");
-    expect(iframeDocument.querySelector("style[data-review-preview]")?.textContent).toContain("height: 297mm !important");
-    expect(iframe.style.height).toBe("600px");
-
-    paneWidth = 200;
-    fireEvent(window, new Event("resize"));
-    await waitFor(() => expect(page.style.getPropertyValue("--review-preview-scale")).toBe("0.25"));
-    expect(iframe.style.height).toBe("300px");
+    expect(reviewHtml).toContain('data-review-page-index="0"');
+    expect(reviewHtml).toContain('data-review-page-index="1"');
+    expect(reviewHtml).not.toContain("Company News");
+    expect(reviewHtml).toContain("width: 210mm !important");
+    expect(reviewHtml).toContain("height: 297mm !important");
   });
 
   it("collapses and expands the desktop preview without removing its mobile content", () => {

@@ -1,233 +1,97 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Extension } from "@tiptap/core";
-import { EditorContent, useEditor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
-import { AlignCenter, AlignJustify, AlignLeft, AlignRight, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bold, ChevronLeft, ChevronRight, Eye, Italic, Link2, List, Pencil } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  GripVertical,
+  Maximize2,
+  Minimize2,
+  Pencil,
+  Plus,
+} from "lucide-react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import { useLocale } from "../../i18n";
+import { MarkerTextarea } from "../../components/SuperscriptMarkerControl";
+import { BoundedNumberInput, RichTypographyEditor, TextStyleControls, textStyleProperties } from "./RichTypographyEditor";
+import {
+  FOOTNOTE_BODY_STYLE,
+  GRID_COLUMNS,
+  HISTORY_BODY_STYLE,
+  HISTORY_HEADER_STYLE,
+  HISTORY_TITLE_STYLE,
+  MAX_OFFSET_Y_PT,
+  MAX_REVIEW_PAGES,
+  MAX_VERTICAL_NUDGE_STEPS,
+  MIN_OFFSET_Y_PT,
+  MIN_VERTICAL_NUDGE_STEPS,
+  REVIEW_BODY_STYLE,
+  REVIEW_TITLE_STYLE,
+  TYPOGRAPHY_LIMITS,
+  historicalFootnoteParagraphs,
+  legacyReviewBlocks,
+  pageOnePresentation,
+  plainTextToRichHtml,
+  retargetHistoricalFootnoteStyles,
+  richHtmlToPlainText,
+  updateElement,
+  updateHistoricalGroup,
+  type FootnoteFontSizeRole,
+  type FootnoteParagraphStyle,
+  type HistoricalTableFontSizeRole,
+  type LineHeightRole,
+  type PageOneElement,
+  type PageOnePresentation,
+  type ReviewBlock,
+  type ReviewFontSizeRole,
+  type ReviewTextAlign,
+  type TextStyle,
+} from "./reviewPresentation";
+
+export {
+  historicalFootnoteParagraphs,
+  legacyReviewBlocks,
+  pageOnePresentation,
+  retargetHistoricalFootnoteStyles,
+  richHtmlToPlainText,
+};
+export type {
+  FootnoteFontSizeRole,
+  FootnoteParagraphStyle,
+  HistoricalTableFontSizeRole,
+  LineHeightRole,
+  PageOneElement,
+  PageOnePresentation,
+  ReviewBlock,
+  ReviewFontSizeRole,
+  ReviewTextAlign,
+  TextStyle,
+};
 
 const TwelveColumnGrid = WidthProvider(GridLayout);
-const GRID_COLUMNS = 12;
-const MIN_VERTICAL_NUDGE_STEPS = -200;
-const MAX_VERTICAL_NUDGE_STEPS = 200;
-const MIN_FOOTNOTE_NUDGE_STEPS = -3;
-const MAX_FOOTNOTE_NUDGE_STEPS = 4;
-
-export type ReviewTextAlign = "left" | "center" | "right" | "justify";
-export type ReviewFontSizeRole = "review-10" | "review-11";
-export type FootnoteFontSizeRole = "footnote-8" | "footnote-9" | "footnote-10";
-export type HistoricalTableFontSizeRole = "history-9" | "history-10" | "history-11";
-export type LineHeightRole = "1.0" | "1.2" | "1.4";
-
-export interface ReviewBlock {
-  block_id: string;
-  type: "rich_text" | "key_drivers" | "areas_to_monitor" | "outlook";
-  title: string;
-  content: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  text_align: ReviewTextAlign;
-}
-
-export interface FootnoteParagraphStyle {
-  paragraph_index: number;
-  font_size_role: FootnoteFontSizeRole;
-  line_height_role: LineHeightRole;
-  text_align: ReviewTextAlign;
-}
-
-export interface PageOneElement {
-  id: string;
-  row: number;
-  row_span: number;
-  x: number;
-  w: number;
-  vertical_nudge_steps: number;
-  table_font_size_role?: HistoricalTableFontSizeRole;
-  table_line_height_role?: LineHeightRole;
-  bottom_nudge_steps?: number;
-  paragraph_styles?: FootnoteParagraphStyle[];
-}
-
-export interface PageOnePresentation {
-  schema_version: 1;
-  page_one: { elements: PageOneElement[] };
-}
-
-const FONT_SIZE_ROLES: ReviewFontSizeRole[] = ["review-10", "review-11"];
-const FOOTNOTE_FONT_SIZE_ROLES: FootnoteFontSizeRole[] = ["footnote-8", "footnote-9", "footnote-10"];
-const HISTORICAL_TABLE_FONT_SIZE_ROLES: HistoricalTableFontSizeRole[] = ["history-9", "history-10", "history-11"];
-const LINE_HEIGHT_ROLES: LineHeightRole[] = ["1.0", "1.2", "1.4"];
-const TEXT_ALIGNMENTS: Array<{ value: ReviewTextAlign; icon: typeof AlignLeft }> = [
-  { value: "left", icon: AlignLeft },
-  { value: "center", icon: AlignCenter },
-  { value: "right", icon: AlignRight },
-  { value: "justify", icon: AlignJustify },
-];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function integer(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) ? value : fallback;
-}
-
-function listHtml(rows: Array<Record<string, unknown>>, languageMode = "EN"): string {
-  if (!rows.length) return languageMode === "ZH_HANS" || languageMode === "ZH_HANT" ? "<p></p>" : "<p>No content yet.</p>";
-  return `<ul>${rows.map((row) => `<li><strong>${String(row.title ?? "")}</strong><p>${String(row.body ?? "")}</p></li>`).join("")}</ul>`;
-}
-
-export function legacyReviewBlocks(review: Record<string, unknown>, reviewTitle = "Monthly summary", languageMode = "EN", normalizeTitles = true): ReviewBlock[] {
-  const titles: Record<string, Record<string, string>> = {
-    drivers: { EN: "Key Drivers", ZH_HANS: "主要驱动因素", ZH_HANT: "主要驅動因素" },
-    monitor: { EN: "Key Areas to Monitor", ZH_HANS: "重点关注领域", ZH_HANT: "重點關注領域" },
-    outlook: { EN: "Outlook", ZH_HANS: "展望", ZH_HANT: "展望" },
-  };
-  const stored = Array.isArray(review.blocks) ? review.blocks as ReviewBlock[] : [];
-  if (stored.length) return stored.map((block) => ({
-    ...block,
-    title: normalizeTitles && block.block_id === "summary" && ["Monthly summary", "Monthly Review", "月度回顾", "月度回顧", review.title, review.display_title].includes(block.title)
-      ? reviewTitle
-      : normalizeTitles && Object.values(titles[block.block_id] ?? {}).includes(block.title) ? titles[block.block_id][languageMode] ?? block.title : block.title,
-    text_align: TEXT_ALIGNMENTS.some(({ value }) => value === block.text_align) ? block.text_align : "left",
-  }));
-  return [
-    { block_id: "summary", type: "rich_text", title: reviewTitle, content: `<p>${String(review.summary ?? "")}</p>`, x: 0, y: 0, w: 12, h: 4, text_align: "left" },
-    { block_id: "drivers", type: "key_drivers", title: languageMode === "ZH_HANS" ? "主要驱动因素" : languageMode === "ZH_HANT" ? "主要驅動因素" : "Key Drivers", content: listHtml(Array.isArray(review.drivers) ? review.drivers as Array<Record<string, unknown>> : [], languageMode), x: 0, y: 4, w: 6, h: 7, text_align: "left" },
-    { block_id: "monitor", type: "areas_to_monitor", title: languageMode === "ZH_HANS" ? "重点关注领域" : languageMode === "ZH_HANT" ? "重點關注領域" : "Key Areas to Monitor", content: listHtml(Array.isArray(review.monitor) ? review.monitor as Array<Record<string, unknown>> : [], languageMode), x: 6, y: 4, w: 6, h: 5, text_align: "left" },
-    { block_id: "outlook", type: "outlook", title: languageMode === "ZH_HANS" || languageMode === "ZH_HANT" ? "展望" : "Outlook", content: `<p>${String(review.outlook ?? "")}</p>`, x: 6, y: 9, w: 6, h: 4, text_align: "left" },
-  ];
-}
-
-export function pageOnePresentation(value: unknown, blocks: ReviewBlock[]): PageOnePresentation {
-  const lastReviewRow = Math.max(0, ...blocks.map((block) => block.y + block.h));
-  const defaults: PageOneElement[] = [
-    ...blocks.map((block) => ({ id: `review:${block.block_id}`, row: block.y, row_span: block.h, x: block.x, w: block.w, vertical_nudge_steps: 0 })),
-    { id: "historical_performance", row: lastReviewRow, row_span: 1, x: 0, w: GRID_COLUMNS, vertical_nudge_steps: 0, table_font_size_role: "history-10", table_line_height_role: "1.2" },
-    { id: "footnote:historical", row: lastReviewRow + 1, row_span: 1, x: 0, w: GRID_COLUMNS, vertical_nudge_steps: 0, bottom_nudge_steps: 0, paragraph_styles: [] },
-  ];
-  if (!isRecord(value) || value.schema_version !== 1 || !isRecord(value.page_one) || !Array.isArray(value.page_one.elements)) {
-    return { schema_version: 1, page_one: { elements: defaults } };
-  }
-  const stored = new Map(value.page_one.elements.filter(isRecord).map((element) => [String(element.id ?? ""), element]));
-  const hasStoredReviewGeometry = [...stored.keys()].some((id) => id.startsWith("review:"));
-  const elements = defaults.map((fallback) => {
-    const element = stored.get(fallback.id);
-    if (!element) return fallback;
-    const useStoredGeometry = hasStoredReviewGeometry || fallback.id.startsWith("review:");
-    const paragraphStyles = Array.isArray(element.paragraph_styles)
-      ? element.paragraph_styles.filter(isRecord).map((style, paragraphIndex) => ({
-        paragraph_index: integer(style.paragraph_index, paragraphIndex),
-        font_size_role: FOOTNOTE_FONT_SIZE_ROLES.includes(style.font_size_role as FootnoteFontSizeRole) ? style.font_size_role as FootnoteFontSizeRole : "footnote-8",
-        line_height_role: LINE_HEIGHT_ROLES.includes(style.line_height_role as LineHeightRole) ? style.line_height_role as LineHeightRole : "1.2",
-        text_align: TEXT_ALIGNMENTS.some(({ value: alignment }) => alignment === style.text_align) ? style.text_align as ReviewTextAlign : "left",
-      })) : fallback.paragraph_styles;
-    return {
-      ...fallback,
-      row: useStoredGeometry ? integer(element.row, fallback.row) : fallback.row,
-      row_span: useStoredGeometry ? integer(element.row_span, fallback.row_span) : fallback.row_span,
-      x: useStoredGeometry ? integer(element.x, fallback.x) : fallback.x,
-      w: useStoredGeometry ? integer(element.w, fallback.w) : fallback.w,
-      vertical_nudge_steps: integer(element.vertical_nudge_steps, fallback.vertical_nudge_steps),
-      ...(fallback.id === "historical_performance" ? {
-        table_font_size_role: HISTORICAL_TABLE_FONT_SIZE_ROLES.includes(element.table_font_size_role as HistoricalTableFontSizeRole) ? element.table_font_size_role as HistoricalTableFontSizeRole : "history-10",
-        table_line_height_role: LINE_HEIGHT_ROLES.includes(element.table_line_height_role as LineHeightRole) ? element.table_line_height_role as LineHeightRole : "1.2",
-      } : {}),
-      ...(fallback.id === "footnote:historical" ? { bottom_nudge_steps: integer(element.bottom_nudge_steps, fallback.bottom_nudge_steps ?? 0), paragraph_styles: paragraphStyles ?? [] } : {}),
-    };
-  });
-  return { schema_version: 1, page_one: { elements } };
-}
-
-export function historicalFootnoteParagraphs(value: string): string[] {
-  const paragraphs = value.split(/\r?\n\s*\r?\n/).filter((paragraph) => paragraph.trim());
-  return paragraphs.length ? paragraphs : [""];
-}
-
-export function retargetHistoricalFootnoteStyles(
-  presentation: PageOnePresentation,
-  footnote: string,
-): PageOnePresentation {
-  const paragraphCount = historicalFootnoteParagraphs(footnote).length;
-  return {
-    ...presentation,
-    page_one: {
-      ...presentation.page_one,
-      elements: presentation.page_one.elements.map((element) => (
-        element.id === "footnote:historical"
-          ? {
-            ...element,
-            paragraph_styles: (element.paragraph_styles ?? []).filter(
-              (style) => style.paragraph_index < paragraphCount,
-            ),
-          }
-          : element
-      )),
-    },
-  };
-}
-
-const ParagraphStyle = Extension.create({
-  name: "paragraphStyle",
-  addGlobalAttributes() {
-    return [{
-      types: ["paragraph", "listItem"],
-      attributes: {
-        fontSizeRole: { default: null, parseHTML: (element) => element.getAttribute("data-font-size-role"), renderHTML: (attributes) => attributes.fontSizeRole ? { "data-font-size-role": attributes.fontSizeRole } : {} },
-        lineHeightRole: { default: null, parseHTML: (element) => element.getAttribute("data-line-height-role"), renderHTML: (attributes) => attributes.lineHeightRole ? { "data-line-height-role": attributes.lineHeightRole } : {} },
-        textAlign: { default: null, parseHTML: (element) => element.getAttribute("data-text-align"), renderHTML: (attributes) => attributes.textAlign ? { "data-text-align": attributes.textAlign } : {} },
-      },
-    }];
-  },
-});
-
-function RichTextBlock({ block, disabled, selected, onSelect, onChange }: { block: ReviewBlock; disabled: boolean; selected: boolean; onSelect: () => void; onChange: (content: string) => void }) {
-  const { t } = useLocale();
-  const [, setSelectionRevision] = useState(0);
-  const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false } }), ParagraphStyle],
-    content: block.content,
-    editable: !disabled,
-    onSelectionUpdate: () => setSelectionRevision((revision) => revision + 1),
-    onUpdate: ({ editor: activeEditor }) => onChange(activeEditor.getHTML()),
-  });
-  useEffect(() => { editor?.setEditable(!disabled); }, [disabled, editor]);
-  useEffect(() => { if (editor && editor.getHTML() !== block.content) editor.commands.setContent(block.content); }, [block.content, editor]);
-  const activeNode = editor?.isActive("listItem") ? "listItem" : "paragraph";
-  const attributes = editor?.getAttributes(activeNode) ?? {};
-  const fontSizeRole = FONT_SIZE_ROLES.includes(attributes.fontSizeRole as ReviewFontSizeRole) ? attributes.fontSizeRole as ReviewFontSizeRole : "review-10";
-  const lineHeightRole = LINE_HEIGHT_ROLES.includes(attributes.lineHeightRole as LineHeightRole) ? attributes.lineHeightRole as LineHeightRole : "1.2";
-  const textAlign = TEXT_ALIGNMENTS.some(({ value }) => value === attributes.textAlign) ? attributes.textAlign as ReviewTextAlign : block.text_align;
-  const updateStyle = (attribute: "fontSizeRole" | "lineHeightRole" | "textAlign", value: string) => {
-    if (!editor) return;
-    editor.chain().focus().updateAttributes(activeNode, { [attribute]: value }).run();
-  };
-  const setAlignment = (alignment: ReviewTextAlign) => updateStyle("textAlign", alignment);
-  return <article className={`review-block${selected ? " selected" : ""}`} data-layout-id={`review:${block.block_id}`} onClick={onSelect}>
-    <header><strong>{block.title}</strong><span>{block.w}/12</span></header>
-    <div className="rich-toolbar" aria-label={t("textFormatting")}>
-      <button className="icon-button" title={t("bold")} disabled={disabled} onClick={() => editor?.chain().focus().toggleBold().run()}><Bold size={15} /></button>
-      <button className="icon-button" title={t("italic")} disabled={disabled} onClick={() => editor?.chain().focus().toggleItalic().run()}><Italic size={15} /></button>
-      <button className="icon-button" title={t("bulletList")} disabled={disabled} onClick={() => editor?.chain().focus().toggleBulletList().run()}><List size={15} /></button>
-      <button className="icon-button" title={t("addLink")} disabled={disabled} onClick={() => { const href = window.prompt(t("linkUrl")); if (href) editor?.chain().focus().setLink({ href }).run(); }}><Link2 size={15} /></button>
-      <span className="toolbar-separator" aria-hidden="true" />
-      <label className="compact-field"><span>{t("fontSize")}</span><select aria-label={`${block.title} ${t("fontSize")}`} disabled={disabled} value={fontSizeRole} onChange={(event) => updateStyle("fontSizeRole", event.target.value)}><option value="review-10">10 pt</option><option value="review-11">11 pt</option></select></label>
-      <label className="compact-field"><span>{t("lineHeight")}</span><select aria-label={`${block.title} ${t("lineHeight")}`} disabled={disabled} value={lineHeightRole} onChange={(event) => updateStyle("lineHeightRole", event.target.value)}>{LINE_HEIGHT_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}</select></label>
-      {TEXT_ALIGNMENTS.map(({ value, icon: Icon }) => <button key={value} className="icon-button" title={t(value === "left" ? "alignLeft" : value === "center" ? "alignCenter" : value === "right" ? "alignRight" : "justify")} aria-pressed={textAlign === value} disabled={disabled} onClick={() => setAlignment(value)}><Icon size={15} /></button>)}
-    </div>
-    <EditorContent editor={editor} className="review-rich-text" />
-  </article>;
-}
+const GRID_ROW_HEIGHT = 34;
+const GRID_GAP = 16;
+const LAYOUT_PT_STEP = 6;
 
 function overlaps(a: PageOneElement, b: PageOneElement): boolean {
   return a.row < b.row + b.row_span && b.row < a.row + a.row_span && a.x < b.x + b.w && b.x < a.x + a.w;
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+  return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, button, a, [contenteditable='true']"));
 }
 
 function elementLabel(id: string, blocks: ReviewBlock[], historicalTitle: string, footnoteLabel: string): string {
@@ -236,43 +100,277 @@ function elementLabel(id: string, blocks: ReviewBlock[], historicalTitle: string
   return blocks.find((candidate) => `review:${candidate.block_id}` === id)?.title ?? id;
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function DragHandle({ disabled, label }: { disabled: boolean; label: string }) {
+  return <span
+    className={`review-drag-handle${disabled ? " disabled" : ""}`}
+    aria-label={label}
+    aria-disabled={disabled}
+    title={label}
+    onClick={(event) => event.stopPropagation()}
+  ><GripVertical size={18} /></span>;
+}
+
+function ModuleHeader({
+  title,
+  width,
+  disabled,
+  expanded,
+  titleStyle,
+  onExpand,
+  trailing,
+}: {
+  title: string;
+  width: number;
+  disabled: boolean;
+  expanded: boolean;
+  titleStyle?: TextStyle;
+  onExpand: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  trailing?: ReactNode;
+}) {
+  const { t } = useLocale();
+  return <header>
+    <DragHandle disabled={disabled || expanded} label={`${t("dragBlock")}: ${title}`} />
+    <strong className="locked-module-title" style={titleStyle ? textStyleProperties(titleStyle) : undefined}>{title}</strong>
+    {trailing}
+    <span className="module-grid-width">{width}/{GRID_COLUMNS}</span>
+    <button
+      type="button"
+      className="icon-button module-expand-button"
+      aria-label={t(expanded ? "closeInspector" : "openInspector", { title })}
+      title={t(expanded ? "closeInspector" : "openInspector", { title })}
+      aria-expanded={expanded}
+      onClick={onExpand}
+    >{expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button>
+  </header>;
+}
+
+function ReviewBlockEditor({
+  block,
+  element,
+  disabled,
+  selected,
+  expanded,
+  onSelect,
+  onExpand,
+  onTitleChange,
+  onChange,
+  onElementChange,
+}: {
+  block: ReviewBlock;
+  element: PageOneElement;
+  disabled: boolean;
+  selected: boolean;
+  expanded: boolean;
+  onSelect: () => void;
+  onExpand: (trigger?: HTMLElement) => void;
+  onTitleChange: (title: string) => void;
+  onChange: (content: string) => void;
+  onElementChange: (change: Partial<PageOneElement>) => void;
+}) {
+  const { t } = useLocale();
+  const titleStyle = element.title_style ?? REVIEW_TITLE_STYLE;
+  const bodyStyle = element.body_style ?? REVIEW_BODY_STYLE;
+  return <article
+    className={`review-block page-one-module-shell${selected ? " selected" : ""}${expanded ? " is-expanded" : ""}`}
+    data-layout-id={element.id}
+    role={expanded ? "dialog" : undefined}
+    aria-modal={expanded ? true : undefined}
+    aria-label={expanded ? t("moduleInspector", { title: block.title }) : undefined}
+    tabIndex={0}
+    onClick={(event) => {
+      onSelect();
+      if (!expanded && !isEditableTarget(event.target)) onExpand(event.currentTarget);
+    }}
+  >
+    <ModuleHeader
+      title={block.title}
+      width={element.w}
+      disabled={disabled}
+      expanded={expanded}
+      titleStyle={titleStyle}
+      onExpand={(event) => { event.stopPropagation(); onExpand(event.currentTarget); }}
+    />
+    {expanded && <div className="module-title-style-controls" onClick={(event) => event.stopPropagation()}>
+      <h4>{t("moduleTitleStyle")}</h4>
+      <label className="review-title-field">
+        <span>{t("moduleTitle")}</span>
+        <input
+          className="review-block-title"
+          aria-label={t("blockTitle", { id: block.block_id })}
+          value={block.title}
+          maxLength={200}
+          disabled={disabled}
+          onChange={(event) => {
+            if (event.target.value.trim()) onTitleChange(event.target.value);
+          }}
+        />
+      </label>
+      <BoundedNumberInput
+        label={t("titleContentSpacing")}
+        value={titleStyle.space_after_pt}
+        {...TYPOGRAPHY_LIMITS.spacing}
+        disabled={disabled}
+        onCommit={(space_after_pt) => onElementChange({ title_style: { ...titleStyle, space_after_pt } })}
+      />
+      <BoundedNumberInput
+        label={`${t("moduleTitle")} ${t("indentLevel")}`}
+        value={titleStyle.indent_level ?? 0}
+        {...TYPOGRAPHY_LIMITS.indent}
+        disabled={disabled}
+        onCommit={(indent_level) => onElementChange({ title_style: { ...titleStyle, indent_level } })}
+      />
+    </div>}
+    <RichTypographyEditor
+      label={block.title}
+      value={block.content}
+      defaultStyle={bodyStyle}
+      disabled={disabled}
+      showAdvanced={expanded}
+      onChange={onChange}
+      onDefaultStyleChange={(change) => onElementChange({ body_style: { ...bodyStyle, ...change } })}
+    />
+  </article>;
+}
+
+function HistoricalEditor({ historicalTitle, element, disabled, selected, expanded, onSelect, onExpand, onChange }: {
+  historicalTitle: string;
+  element: PageOneElement;
+  disabled: boolean;
+  selected: boolean;
+  expanded: boolean;
+  onSelect: () => void;
+  onExpand: (trigger?: HTMLElement) => void;
+  onChange: (change: Partial<PageOneElement>) => void;
+}) {
+  const { t } = useLocale();
+  const titleStyle = element.title_style ?? HISTORY_TITLE_STYLE;
+  const headerStyle = element.header_style ?? HISTORY_HEADER_STYLE;
+  const bodyStyle = element.body_style ?? HISTORY_BODY_STYLE;
+  return <section
+    className={`page-one-fixed-module page-one-module-shell${selected ? " selected" : ""}${expanded ? " is-expanded" : ""}`}
+    data-layout-id="historical_performance"
+    role={expanded ? "dialog" : undefined}
+    aria-modal={expanded ? true : undefined}
+    aria-label={expanded ? t("moduleInspector", { title: historicalTitle }) : undefined}
+    tabIndex={0}
+    onFocusCapture={onSelect}
+    onClick={(event) => {
+      onSelect();
+      if (!expanded && !isEditableTarget(event.target)) onExpand(event.currentTarget);
+    }}
+  >
+    <ModuleHeader title={historicalTitle} width={element.w} disabled={disabled} expanded={expanded} titleStyle={titleStyle} onExpand={(event) => { event.stopPropagation(); onExpand(event.currentTarget); }} trailing={<span className="read-only-badge">{t("readOnlyValues")}</span>} />
+    <div className="historical-style-summary">{t("historyStyleSummary")}</div>
+    {expanded && <div className="historical-table-style-controls advanced-module-controls">
+      <section><h4>{t("historyTitleStyle")}</h4><BoundedNumberInput label={t("titleContentSpacing")} value={titleStyle.space_after_pt} {...TYPOGRAPHY_LIMITS.spacing} disabled={disabled} onCommit={(space_after_pt) => onChange({ title_style: { ...titleStyle, space_after_pt } })} /></section>
+      <section><h4>{t("historyHeaderStyle")}</h4><TextStyleControls idPrefix={t("historyHeaderStyle")} value={headerStyle} disabled={disabled} showParagraphSpacing={false} onChange={(change) => onChange({ header_style: { ...headerStyle, ...change } })} /></section>
+      <section><h4>{t("historyBodyStyle")}</h4><TextStyleControls idPrefix={t("historyBodyStyle")} value={bodyStyle} disabled={disabled} showParagraphSpacing={false} onChange={(change) => onChange({ body_style: { ...bodyStyle, ...change } })} /></section>
+      <section className="table-padding-control"><h4>{t("tableSpacing")}</h4><BoundedNumberInput label={t("cellPaddingY")} value={element.cell_padding_y_pt ?? 2} {...TYPOGRAPHY_LIMITS.spacing} disabled={disabled} onCommit={(cell_padding_y_pt) => onChange({ cell_padding_y_pt })} /></section>
+    </div>}
+  </section>;
+}
+
+function HistoricalFootnoteEditor({ element, disabled, selected, expanded, onSelect, onExpand, onChange, onTextChange }: {
+  element: PageOneElement;
+  disabled: boolean;
+  selected: boolean;
+  expanded: boolean;
+  onSelect: () => void;
+  onExpand: (trigger?: HTMLElement) => void;
+  onChange: (change: Partial<PageOneElement>) => void;
+  onTextChange: (value: string) => void;
+}) {
+  const { t } = useLocale();
+  const style = element.body_style ?? FOOTNOTE_BODY_STYLE;
+  return <section
+    className={`historical-footnote-editor page-one-module-shell${selected ? " selected" : ""}${expanded ? " is-expanded" : ""}`}
+    data-layout-id="footnote:historical"
+    role={expanded ? "dialog" : undefined}
+    aria-modal={expanded ? true : undefined}
+    aria-label={expanded ? t("moduleInspector", { title: t("historicalFootnote") }) : undefined}
+    tabIndex={0}
+    onClick={(event) => {
+      onSelect();
+      if (!expanded && !isEditableTarget(event.target)) onExpand(event.currentTarget);
+    }}
+  >
+    <ModuleHeader title={t("historicalFootnote")} width={element.w} disabled={disabled} expanded={expanded} onExpand={(event) => { event.stopPropagation(); onExpand(event.currentTarget); }} trailing={<span className="read-only-badge">{t("sharedWithFootnotes")}</span>} />
+    {expanded ? <RichTypographyEditor
+      label={t("historicalFootnote")}
+      value={element.content_html ?? "<p></p>"}
+      defaultStyle={style}
+      disabled={disabled}
+      showAdvanced
+      onChange={(content_html) => {
+        onChange({ content_html });
+        onTextChange(richHtmlToPlainText(content_html));
+      }}
+      onDefaultStyleChange={(change) => onChange({ body_style: { ...style, ...change } })}
+    /> : <MarkerTextarea
+      aria-label={t("historicalFootnote")}
+      value={richHtmlToPlainText(element.content_html ?? "")}
+      disabled={disabled}
+      onValueChange={(text) => {
+        onChange({ content_html: plainTextToRichHtml(text) });
+        onTextChange(text);
+      }}
+    />}
+  </section>;
+}
+
 const PREVIEW_OVERFLOW_TOLERANCE_PX = 0.5;
+const MINOR_OVERFLOW_MM = 3;
+const A4_HEIGHT_PT = (297 / 25.4) * 72;
 const PREVIEW_DOCUMENT_STYLE = `
   html, body {
-    width: 210mm !important;
-    min-width: 210mm !important;
-    max-width: 210mm !important;
-    height: 297mm !important;
-    min-height: 297mm !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    min-height: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
-    overflow: hidden !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    background: transparent !important;
   }
   .report-document {
     width: 210mm !important;
-    height: 297mm !important;
+    height: auto !important;
     margin: 0 !important;
+    zoom: var(--review-preview-scale, 1) !important;
   }
-  .report-page[data-page="1"] {
+  .report-page[data-section-key="month_in_review"],
+  .report-page[data-review-preview-fallback="true"] {
+    display: block !important;
     width: 210mm !important;
     min-width: 210mm !important;
     max-width: 210mm !important;
     height: 297mm !important;
     min-height: 297mm !important;
     max-height: 297mm !important;
-    margin: 0 !important;
+    margin: 0 0 8mm !important;
     overflow: hidden !important;
-    transform: scale(var(--review-preview-scale, 1)) !important;
-    transform-origin: top left !important;
   }
-  .report-page:not([data-page="1"]) { display: none !important; }
+  .report-page:not([data-section-key="month_in_review"]):not([data-review-preview-fallback="true"]) { display: none !important; }
 `;
 
-function preparePreviewDocument(document: Document): HTMLElement | null {
-  const page = document.querySelector<HTMLElement>('[data-page="1"]');
-  if (!page) return null;
+function reviewPreviewPages(document: Document): HTMLElement[] {
+  const tagged = [...document.querySelectorAll<HTMLElement>('.report-page[data-section-key="month_in_review"]')];
+  if (tagged.length) return tagged;
+  const fallback = document.querySelector<HTMLElement>('.report-page[data-page="1"]');
+  if (fallback) fallback.dataset.reviewPreviewFallback = "true";
+  return fallback ? [fallback] : [];
+}
+
+function preparePreviewDocument(document: Document): HTMLElement[] {
+  const pages = reviewPreviewPages(document);
+  const kept = new Set(pages);
   document.querySelectorAll<HTMLElement>(".report-page").forEach((candidate) => {
-    if (candidate !== page) candidate.remove();
+    if (!kept.has(candidate)) candidate.remove();
   });
   if (!document.querySelector("style[data-review-preview]")) {
     const style = document.createElement("style");
@@ -280,95 +378,113 @@ function preparePreviewDocument(document: Document): HTMLElement | null {
     style.textContent = PREVIEW_DOCUMENT_STYLE;
     document.head.append(style);
   }
-  return page;
+  return pages;
 }
 
-function pageOnePreviewHtml(html: string): string {
+export function pageOnePreviewHtml(html: string): string {
   if (!html) return "";
   const document = new DOMParser().parseFromString(html, "text/html");
   preparePreviewDocument(document);
   return `<!doctype html>${document.documentElement.outerHTML}`;
 }
 
-function fitPreviewPage(iframe: HTMLIFrameElement): void {
+function fitPreviewPages(iframe: HTMLIFrameElement): void {
   const document = iframe.contentDocument;
   if (!document) return;
-  const page = preparePreviewDocument(document);
-  if (!page) return;
-  page.style.setProperty("--review-preview-scale", "1");
-  const pageRect = page.getBoundingClientRect();
-  if (iframe.clientWidth <= 0 || pageRect.width <= 0 || pageRect.height <= 0) return;
-  const scale = iframe.clientWidth / pageRect.width;
-  page.style.setProperty("--review-preview-scale", String(scale));
-  iframe.style.height = `${pageRect.height * scale}px`;
+  const pages = preparePreviewDocument(document);
+  const firstPage = pages[0];
+  if (!firstPage) return;
+  document.documentElement.style.setProperty("--review-preview-scale", "1");
+  const pageRect = firstPage.getBoundingClientRect();
+  if (iframe.clientWidth <= 0 || pageRect.width <= 0) return;
+  document.documentElement.style.setProperty("--review-preview-scale", String(iframe.clientWidth / pageRect.width));
 }
 
 function hasHorizontalScrollOverflow(node: HTMLElement): boolean {
-  return [node, ...node.querySelectorAll<HTMLElement>("*")].some((candidate) => (
-    candidate.scrollWidth > candidate.clientWidth + PREVIEW_OVERFLOW_TOLERANCE_PX
-  ));
+  return [node, ...node.querySelectorAll<HTMLElement>("*")].some((candidate) => candidate.scrollWidth > candidate.clientWidth + PREVIEW_OVERFLOW_TOLERANCE_PX);
 }
 
 function physicallyOverlaps(left: DOMRect, right: DOMRect): boolean {
-  return (
-    left.right > right.left + PREVIEW_OVERFLOW_TOLERANCE_PX
+  return left.right > right.left + PREVIEW_OVERFLOW_TOLERANCE_PX
     && right.right > left.left + PREVIEW_OVERFLOW_TOLERANCE_PX
     && left.bottom > right.top + PREVIEW_OVERFLOW_TOLERANCE_PX
-    && right.bottom > left.top + PREVIEW_OVERFLOW_TOLERANCE_PX
-  );
+    && right.bottom > left.top + PREVIEW_OVERFLOW_TOLERANCE_PX;
 }
 
-/** Keep the editor warning in step with the export preflight, including clipped wide content. */
+/** Mirror server preflight visually: orange for <=3 mm vertical tolerance, red for blockers. */
 export function markPreviewOverflows(document: Document): void {
-  const page = document.querySelector<HTMLElement>('[data-page="1"]');
-  if (!page) return;
-  const footer = page.querySelector<HTMLElement>(".page-footer");
-  const footnote = page.querySelector<HTMLElement>('[data-layout-id="footnote:historical"]');
-  const pageBody = page.querySelector<HTMLElement>(".page-body");
-  const pageRect = page.getBoundingClientRect();
-  const bodyRect = pageBody?.getBoundingClientRect() ?? pageRect;
-  const footerTop = footer?.getBoundingClientRect().top ?? pageRect.bottom;
-  const footnoteTop = footnote?.getBoundingClientRect().top ?? footerTop;
-  const bodySafeBottom = Math.min(footerTop, footnoteTop);
+  reviewPreviewPages(document).forEach((page) => {
+    const footer = page.querySelector<HTMLElement>(".page-footer");
+    const footnote = page.querySelector<HTMLElement>('[data-layout-id="footnote:historical"]');
+    const pageBody = page.querySelector<HTMLElement>(".page-body");
+    const pageRect = page.getBoundingClientRect();
+    const bodyRect = pageBody?.getBoundingClientRect() ?? pageRect;
+    const footerTop = footer?.getBoundingClientRect().top ?? pageRect.bottom;
+    const footnoteTop = footnote?.getBoundingClientRect().top ?? footerTop;
+    const bodySafeBottom = Math.min(footerTop, footnoteTop);
+    const tolerancePx = (pageRect.height / 297) * MINOR_OVERFLOW_MM;
+    const layoutNodes = [...page.querySelectorAll<HTMLElement>("[data-layout-id]")];
+    const rects = new Map(layoutNodes.map((node) => [node, node.getBoundingClientRect()]));
 
-  const layoutNodes = [...page.querySelectorAll<HTMLElement>("[data-layout-id]")];
-  const rects = new Map(layoutNodes.map((node) => [node, node.getBoundingClientRect()]));
-  layoutNodes.forEach((node) => {
-    node.removeAttribute("data-layout-overflow");
-    const rect = rects.get(node)!;
-    const horizontalBoundary = node.closest(".page-body") ? bodyRect : pageRect;
-    const verticalBoundary = node === footnote ? footerTop : bodySafeBottom;
-    const outsideHorizontalSafeArea = (
-      rect.left < horizontalBoundary.left - PREVIEW_OVERFLOW_TOLERANCE_PX
-      || rect.right > horizontalBoundary.right + PREVIEW_OVERFLOW_TOLERANCE_PX
-    );
-    if (
-      rect.bottom > verticalBoundary + PREVIEW_OVERFLOW_TOLERANCE_PX
-      || outsideHorizontalSafeArea
-      || hasHorizontalScrollOverflow(node)
-    ) {
-      node.setAttribute("data-layout-overflow", "true");
-    }
-  });
-  layoutNodes.forEach((left, index) => {
-    layoutNodes.slice(index + 1).forEach((right) => {
-      if (physicallyOverlaps(rects.get(left)!, rects.get(right)!)) {
-        left.setAttribute("data-layout-overflow", "true");
-        right.setAttribute("data-layout-overflow", "true");
+    layoutNodes.forEach((node) => {
+      node.removeAttribute("data-layout-warning");
+      node.removeAttribute("data-layout-overflow");
+      const rect = rects.get(node)!;
+      const horizontalBoundary = node.closest(".page-body") ? bodyRect : pageRect;
+      const verticalBoundary = node === footnote ? footerTop : bodySafeBottom;
+      const horizontalOverflow = rect.left < horizontalBoundary.left - PREVIEW_OVERFLOW_TOLERANCE_PX
+        || rect.right > horizontalBoundary.right + PREVIEW_OVERFLOW_TOLERANCE_PX
+        || hasHorizontalScrollOverflow(node);
+      const verticalOverflow = rect.bottom - verticalBoundary;
+      if (horizontalOverflow || verticalOverflow > tolerancePx + PREVIEW_OVERFLOW_TOLERANCE_PX) {
+        node.setAttribute("data-layout-overflow", "true");
+      } else if (verticalOverflow > PREVIEW_OVERFLOW_TOLERANCE_PX) {
+        node.setAttribute("data-layout-warning", "true");
       }
+    });
+    layoutNodes.forEach((left, index) => {
+      layoutNodes.slice(index + 1).forEach((right) => {
+        if (physicallyOverlaps(rects.get(left)!, rects.get(right)!)) {
+          left.setAttribute("data-layout-overflow", "true");
+          right.setAttribute("data-layout-overflow", "true");
+          left.removeAttribute("data-layout-warning");
+          right.removeAttribute("data-layout-warning");
+        }
+      });
     });
   });
 }
 
-function PreviewPane({ html, busy, error, collapsed, onToggle, selectedId, onSelect, onArrow }: { html: string; busy: boolean; error: string; collapsed: boolean; onToggle: () => void; selectedId: string; onSelect: (id: string) => void; onArrow: (direction: "left" | "right" | "up" | "down") => void }) {
+export function historicalGroupDownRoomPt(document: Document): number | null {
+  const footnote = document.querySelector<HTMLElement>('[data-layout-id="footnote:historical"]');
+  const page = footnote?.closest<HTMLElement>(".report-page");
+  if (!footnote || !page) return null;
+  const pageHeightPx = page.getBoundingClientRect().height;
+  if (pageHeightPx <= 0) return null;
+  const footer = page.querySelector<HTMLElement>(".page-footer");
+  const safeBottom = footer?.getBoundingClientRect().top ?? page.getBoundingClientRect().bottom;
+  const pxPerPoint = pageHeightPx / A4_HEIGHT_PT;
+  return (safeBottom - footnote.getBoundingClientRect().bottom) / pxPerPoint;
+}
+
+function PreviewPane({ html, busy, error, collapsed, onToggle, selectedId, onSelect, onArrow, onGroupDownRoomChange }: {
+  html: string;
+  busy: boolean;
+  error: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  selectedId: string;
+  onSelect: (id: string) => void;
+  onArrow: (direction: "left" | "right" | "up" | "down") => void;
+  onGroupDownRoomChange: (roomPt: number | null) => void;
+}) {
   const { t } = useLocale();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const contentId = useId();
-  const pageOneHtml = useMemo(() => pageOnePreviewHtml(html), [html]);
+  const reviewHtml = useMemo(() => pageOnePreviewHtml(html), [html]);
   const resizePreview = useCallback(() => {
     const iframe = iframeRef.current;
-    if (!iframe) return;
-    fitPreviewPage(iframe);
+    if (iframe) fitPreviewPages(iframe);
   }, []);
   const bindPreview = useCallback(() => {
     const document = iframeRef.current?.contentDocument;
@@ -382,23 +498,20 @@ function PreviewPane({ html, busy, error, collapsed, onToggle, selectedId, onSel
     void (async () => {
       await (document.fonts?.ready ?? Promise.resolve());
       await Promise.all([...document.images].map((image) => {
-        if (!image.complete) {
-          return new Promise<void>((resolve) => {
-            image.addEventListener("load", () => resolve(), { once: true });
-            image.addEventListener("error", () => resolve(), { once: true });
-          });
-        }
+        if (!image.complete) return new Promise<void>((resolve) => {
+          image.addEventListener("load", () => resolve(), { once: true });
+          image.addEventListener("error", () => resolve(), { once: true });
+        });
         return typeof image.decode === "function" ? image.decode().catch(() => undefined) : Promise.resolve();
       }));
       if (iframeRef.current?.contentDocument === document) {
         resizePreview();
         markPreviewOverflows(document);
+        onGroupDownRoomChange(historicalGroupDownRoomPt(document));
       }
     })();
     document.onclick = (event) => {
-      const target = event.target && "closest" in event.target
-        ? (event.target as HTMLElement).closest<HTMLElement>("[data-layout-id]")
-        : null;
+      const target = event.target && "closest" in event.target ? (event.target as HTMLElement).closest<HTMLElement>("[data-layout-id]") : null;
       if (!target?.dataset.layoutId) return;
       event.preventDefault();
       onSelect(target.dataset.layoutId);
@@ -409,15 +522,18 @@ function PreviewPane({ html, busy, error, collapsed, onToggle, selectedId, onSel
       event.preventDefault();
       onArrow(direction);
     };
-  }, [onArrow, onSelect, resizePreview, selectedId]);
-  useEffect(bindPreview, [bindPreview, pageOneHtml]);
+  }, [onArrow, onGroupDownRoomChange, onSelect, resizePreview, selectedId]);
+  useEffect(bindPreview, [bindPreview, reviewHtml]);
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
     const handleResize = () => {
       resizePreview();
       const document = iframe.contentDocument;
-      if (document) markPreviewOverflows(document);
+      if (document) {
+        markPreviewOverflows(document);
+        onGroupDownRoomChange(historicalGroupDownRoomPt(document));
+      }
     };
     window.addEventListener("resize", handleResize);
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(handleResize);
@@ -426,51 +542,165 @@ function PreviewPane({ html, busy, error, collapsed, onToggle, selectedId, onSel
       window.removeEventListener("resize", handleResize);
       observer?.disconnect();
     };
-  }, [resizePreview]);
+  }, [onGroupDownRoomChange, resizePreview]);
   return <section className="review-preview-pane" aria-label={t("livePreview")}>
     <header><span><Eye size={16} /> {t("livePreview")}</span><div className="review-preview-header-actions">{busy && <small>{t("updatingPreview")}</small>}<button type="button" className="icon-button review-preview-toggle" aria-label={t(collapsed ? "expandPreview" : "collapsePreview")} title={t(collapsed ? "expandPreview" : "collapsePreview")} aria-expanded={!collapsed} aria-controls={contentId} onClick={onToggle}>{collapsed ? <ChevronLeft size={17} /> : <ChevronRight size={17} />}</button></div></header>
-    <div id={contentId} className="review-preview-content">{error ? <div className="review-preview-error" role="status">{error}</div> : pageOneHtml ? <iframe ref={iframeRef} title={t("livePreview")} sandbox="allow-same-origin" srcDoc={pageOneHtml} onLoad={bindPreview} /> : <div className="review-preview-placeholder">{t("updatingPreview")}</div>}</div>
+    <div id={contentId} className="review-preview-content">{error ? <div className="review-preview-error" role="status">{error}</div> : reviewHtml ? <iframe ref={iframeRef} title={t("livePreview")} sandbox="allow-same-origin" srcDoc={reviewHtml} onLoad={bindPreview} /> : <div className="review-preview-placeholder">{t("updatingPreview")}</div>}</div>
   </section>;
 }
 
-export function ReviewCanvas({ blocks, presentation, historicalFootnote, historicalTitle, disabled, previewHtml, previewBusy, previewError, onBlocksChange, onPresentationChange, onHistoricalFootnoteChange }: { blocks: ReviewBlock[]; presentation: PageOnePresentation; historicalFootnote: string; historicalTitle: string; disabled: boolean; previewHtml: string; previewBusy: boolean; previewError: string; onBlocksChange: (blocks: ReviewBlock[]) => void; onPresentationChange: (presentation: PageOnePresentation) => void; onHistoricalFootnoteChange: (value: string) => void }) {
+function changeElementStyle(presentation: PageOnePresentation, id: string, change: Partial<PageOneElement>): PageOnePresentation {
+  return updateElement(presentation, id, (element) => ({ ...element, ...change }));
+}
+
+export function ReviewCanvas({ blocks, presentation, historicalFootnote, historicalTitle, disabled, previewHtml, previewBusy, previewError, onBlocksChange, onPresentationChange, onHistoricalFootnoteChange }: {
+  blocks: ReviewBlock[];
+  presentation: PageOnePresentation;
+  historicalFootnote: string;
+  historicalTitle: string;
+  disabled: boolean;
+  previewHtml: string;
+  previewBusy: boolean;
+  previewError: string;
+  onBlocksChange: (blocks: ReviewBlock[]) => void;
+  onPresentationChange: (presentation: PageOnePresentation) => void;
+  onHistoricalFootnoteChange: (value: string) => void;
+}) {
   const { t } = useLocale();
   const [selectedId, setSelectedId] = useState(() => `review:${blocks[0]?.block_id ?? "summary"}`);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<"edit" | "preview">("edit");
   const [previewCollapsed, setPreviewCollapsed] = useState(false);
-  const [footnoteParagraph, setFootnoteParagraph] = useState(0);
+  const [groupDownRoomPt, setGroupDownRoomPt] = useState<number | null>(null);
+  const editorRoot = useRef<HTMLDivElement>(null);
+  const inspectorTrigger = useRef<HTMLElement | null>(null);
   const elements = presentation.page_one.elements;
   const selectedElement = elements.find((element) => element.id === selectedId) ?? elements[0];
   const reviewElements = elements.filter((element) => element.id.startsWith("review:"));
+  const historicalElement = elements.find((element) => element.id === "historical_performance");
+  const footnoteElement = elements.find((element) => element.id === "footnote:historical");
+  const historyPage = historicalElement?.page ?? 1;
+  const pageCount = Math.max(presentation.page_one.review_page_count, historyPage);
+
+  const closeInspector = useCallback(() => {
+    setExpandedId(null);
+    window.requestAnimationFrame(() => inspectorTrigger.current?.focus());
+  }, []);
+  const openInspector = useCallback((id: string, trigger?: HTMLElement) => {
+    inspectorTrigger.current = trigger ?? null;
+    setSelectedId(id);
+    setExpandedId((current) => current === id ? null : id);
+  }, []);
+  useEffect(() => {
+    if (!expandedId) return undefined;
+    const panel = editorRoot.current?.querySelector<HTMLElement>(".page-one-module-shell.is-expanded");
+    const focusable = () => panel ? [...panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+    )] : [];
+    focusable()[0]?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeInspector();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const candidates = focusable();
+      if (!candidates.length) return;
+      const first = candidates[0];
+      const last = candidates[candidates.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeInspector, expandedId]);
+  useEffect(() => {
+    if (!elements.some((element) => element.id === selectedId)) setSelectedId(elements[0]?.id ?? "");
+    if (expandedId && !elements.some((element) => element.id === expandedId)) setExpandedId(null);
+  }, [elements, expandedId, selectedId]);
+
   const canMoveHorizontal = useCallback((delta: -1 | 1): boolean => {
-    if (!selectedElement?.id.startsWith("review:")) return false;
+    if (!selectedElement) return false;
     const candidate = { ...selectedElement, x: selectedElement.x + delta };
     if (candidate.x < 0 || candidate.x + candidate.w > GRID_COLUMNS) return false;
+    if (!selectedElement.id.startsWith("review:")) return true;
     return !reviewElements.some((element) => element.id !== candidate.id && overlaps(candidate, element));
   }, [reviewElements, selectedElement]);
+
   const canMoveVertical = useCallback((delta: -1 | 1): boolean => {
     if (!selectedElement) return false;
-    if (selectedElement.id === "footnote:historical") {
-      const next = (selectedElement.bottom_nudge_steps ?? 0) - delta;
-      return next >= MIN_FOOTNOTE_NUDGE_STEPS && next <= MAX_FOOTNOTE_NUDGE_STEPS;
+    if (selectedElement.id.startsWith("review:")) {
+      const next = (selectedElement.vertical_nudge_steps ?? 0) + delta;
+      return next >= MIN_VERTICAL_NUDGE_STEPS && next <= MAX_VERTICAL_NUDGE_STEPS;
     }
-    const next = selectedElement.vertical_nudge_steps + delta;
-    return next >= MIN_VERTICAL_NUDGE_STEPS && next <= MAX_VERTICAL_NUDGE_STEPS;
-  }, [selectedElement]);
+    if (selectedElement.id === "historical_performance") {
+      const next = (historicalElement?.offset_y_pt ?? 0) + delta * LAYOUT_PT_STEP;
+      if (delta > 0 && groupDownRoomPt !== null && groupDownRoomPt < LAYOUT_PT_STEP) return historyPage < MAX_REVIEW_PAGES;
+      return (next >= MIN_OFFSET_Y_PT && next <= MAX_OFFSET_Y_PT) || (delta > 0 ? historyPage < MAX_REVIEW_PAGES : historyPage > 1);
+    }
+    const next = (footnoteElement?.gap_pt ?? 6) + delta * LAYOUT_PT_STEP;
+    if (delta > 0 && groupDownRoomPt !== null && groupDownRoomPt < LAYOUT_PT_STEP) return historyPage < MAX_REVIEW_PAGES;
+    return (next >= TYPOGRAPHY_LIMITS.spacing.min && next <= TYPOGRAPHY_LIMITS.spacing.max) || (delta > 0 ? historyPage < MAX_REVIEW_PAGES : historyPage > 1);
+  }, [footnoteElement?.gap_pt, groupDownRoomPt, historicalElement?.offset_y_pt, historyPage, selectedElement]);
+
+  const moveHistoryGroupToPage = useCallback((requested: number, resetSpacing = false) => {
+    const page = clamp(Math.round(requested), 1, MAX_REVIEW_PAGES);
+    const nextCount = Math.max(pageCount, page);
+    const moved = updateHistoricalGroup(presentation, (element) => ({
+      ...element,
+      page,
+      ...(resetSpacing && element.id === "historical_performance" ? { offset_y_pt: 0 } : {}),
+      ...(resetSpacing && element.id === "footnote:historical" ? { gap_pt: 6 } : {}),
+    }));
+    setGroupDownRoomPt(null);
+    onPresentationChange({ ...moved, page_one: { ...moved.page_one, review_page_count: nextCount } });
+  }, [onPresentationChange, pageCount, presentation]);
+
   const move = useCallback((direction: "left" | "right" | "up" | "down") => {
     if (disabled || !selectedElement) return;
     const horizontalDelta = direction === "left" ? -1 : direction === "right" ? 1 : 0;
     const verticalDelta = direction === "up" ? -1 : direction === "down" ? 1 : 0;
-    if (horizontalDelta && !canMoveHorizontal(horizontalDelta as -1 | 1)) return;
-    if (verticalDelta && !canMoveVertical(verticalDelta as -1 | 1)) return;
-    const nextElements = elements.map((element) => {
-      if (element.id !== selectedElement.id) return element;
-      if (horizontalDelta) return { ...element, x: element.x + horizontalDelta };
-      if (element.id === "footnote:historical") return { ...element, bottom_nudge_steps: (element.bottom_nudge_steps ?? 0) - verticalDelta };
-      return { ...element, vertical_nudge_steps: element.vertical_nudge_steps + verticalDelta };
-    });
-    onPresentationChange({ ...presentation, page_one: { elements: nextElements } });
-  }, [canMoveHorizontal, canMoveVertical, disabled, elements, onPresentationChange, presentation, selectedElement]);
+    if (horizontalDelta) {
+      if (!canMoveHorizontal(horizontalDelta as -1 | 1)) return;
+      if (selectedElement.id === "historical_performance" || selectedElement.id === "footnote:historical") {
+        onPresentationChange(updateHistoricalGroup(presentation, (element) => ({ ...element, x: element.x + horizontalDelta })));
+      } else {
+        onPresentationChange(updateElement(presentation, selectedElement.id, (element) => ({ ...element, x: element.x + horizontalDelta })));
+      }
+      return;
+    }
+    if (!verticalDelta || !canMoveVertical(verticalDelta as -1 | 1)) return;
+    if (selectedElement.id.startsWith("review:")) {
+      onPresentationChange(updateElement(presentation, selectedElement.id, (element) => ({ ...element, vertical_nudge_steps: (element.vertical_nudge_steps ?? 0) + verticalDelta })));
+      return;
+    }
+    if (selectedElement.id === "historical_performance") {
+      const offset = (historicalElement?.offset_y_pt ?? 0) + verticalDelta * LAYOUT_PT_STEP;
+      const crossesRenderedPageBottom = verticalDelta > 0 && groupDownRoomPt !== null && groupDownRoomPt < LAYOUT_PT_STEP;
+      if (!crossesRenderedPageBottom && offset >= MIN_OFFSET_Y_PT && offset <= MAX_OFFSET_Y_PT) {
+        onPresentationChange(updateElement(presentation, selectedElement.id, (element) => ({ ...element, offset_y_pt: offset })));
+        setGroupDownRoomPt((room) => room === null ? null : room - verticalDelta * LAYOUT_PT_STEP);
+      } else {
+        moveHistoryGroupToPage(historyPage + verticalDelta, true);
+      }
+      return;
+    }
+    const gap = (footnoteElement?.gap_pt ?? 6) + verticalDelta * LAYOUT_PT_STEP;
+    const crossesRenderedPageBottom = verticalDelta > 0 && groupDownRoomPt !== null && groupDownRoomPt < LAYOUT_PT_STEP;
+    if (!crossesRenderedPageBottom && gap >= TYPOGRAPHY_LIMITS.spacing.min && gap <= TYPOGRAPHY_LIMITS.spacing.max) {
+      onPresentationChange(updateElement(presentation, selectedElement.id, (element) => ({ ...element, gap_pt: gap })));
+      setGroupDownRoomPt((room) => room === null ? null : room - verticalDelta * LAYOUT_PT_STEP);
+    } else {
+      moveHistoryGroupToPage(historyPage + verticalDelta, true);
+    }
+  }, [canMoveHorizontal, canMoveVertical, disabled, footnoteElement?.gap_pt, groupDownRoomPt, historicalElement?.offset_y_pt, historyPage, moveHistoryGroupToPage, onPresentationChange, presentation, selectedElement]);
+
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (isEditableTarget(event.target)) return;
     const direction = ({ ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" } as const)[event.key as "ArrowLeft"];
@@ -478,89 +708,177 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
     event.preventDefault();
     move(direction);
   };
-  const layout: Layout[] = blocks.map((block) => {
+
+  const reviewLayout: Layout[] = blocks.map((block) => {
     const element = elements.find((candidate) => candidate.id === `review:${block.block_id}`);
-    return { i: block.block_id, x: element?.x ?? block.x, y: element?.row ?? block.y, w: element?.w ?? block.w, h: element?.row_span ?? block.h, static: true };
+    return { i: block.block_id, x: element?.x ?? block.x, y: element?.row ?? block.y, w: element?.w ?? block.w, h: element?.row_span ?? block.h, minW: 2, minH: 2 };
   });
-  const historicalElement = elements.find((element) => element.id === "historical_performance");
-  const updateHistoricalTableStyle = (change: Pick<PageOneElement, "table_font_size_role"> | Pick<PageOneElement, "table_line_height_role">) => {
-    if (!historicalElement) return;
-    onPresentationChange({
-      ...presentation,
-      page_one: {
-        elements: elements.map((element) => element.id === historicalElement.id ? { ...element, ...change } : element),
-      },
-    });
+  const commitReviewLayout = (_layout: Layout[], _oldItem: Layout, item: Layout) => {
+    const id = `review:${item.i}`;
+    onPresentationChange(updateElement(presentation, id, (element) => ({ ...element, x: item.x, row: item.y, w: item.w, row_span: item.h })));
   };
-  const footnoteElement = elements.find((element) => element.id === "footnote:historical");
-  const footnoteParagraphs = historicalFootnoteParagraphs(historicalFootnote);
-  const activeFootnoteParagraph = Math.min(footnoteParagraph, footnoteParagraphs.length - 1);
-  useEffect(() => {
-    setFootnoteParagraph((index) => Math.min(index, footnoteParagraphs.length - 1));
-  }, [footnoteParagraphs.length]);
-  useEffect(() => {
-    if (!elements.some((element) => element.id === selectedId)) {
-      setSelectedId(elements[0]?.id ?? "");
+
+  const historySpan = Math.max(2, historicalElement?.row_span ?? 3);
+  const footnoteSpan = Math.max(3, footnoteElement?.row_span ?? 4);
+  const gapRows = Math.max(1, Math.ceil((footnoteElement?.gap_pt ?? 6) / LAYOUT_PT_STEP));
+  const groupLayout: Layout[] = [
+    { i: "historical_performance", x: historicalElement?.x ?? 0, y: 0, w: historicalElement?.w ?? GRID_COLUMNS, h: historySpan, minW: 4, minH: 2 },
+    { i: "footnote:historical", x: historicalElement?.x ?? 0, y: historySpan + gapRows, w: historicalElement?.w ?? GRID_COLUMNS, h: footnoteSpan, minW: 4, minH: 3 },
+  ];
+  const commitGroupLayout = (_layout: Layout[], oldItem: Layout, item: Layout, resized: boolean) => {
+    if (!historicalElement || !footnoteElement) return;
+    const x = item.x;
+    const w = item.w;
+    let next = updateHistoricalGroup(presentation, (element) => ({ ...element, x, w }));
+    if (item.i === "historical_performance") {
+      const rowDelta = item.y - oldItem.y;
+      const nextHistoryRow = historicalElement.row + rowDelta;
+      const nextHistorySpan = resized ? item.h : historicalElement.row_span;
+      next = updateElement(next, "historical_performance", (element) => ({
+        ...element,
+        row: nextHistoryRow,
+        row_span: nextHistorySpan,
+        offset_y_pt: clamp((element.offset_y_pt ?? 0) + rowDelta * LAYOUT_PT_STEP, MIN_OFFSET_Y_PT, MAX_OFFSET_Y_PT),
+      }));
+      next = updateElement(next, "footnote:historical", (element) => ({
+        ...element,
+        row: nextHistoryRow + nextHistorySpan + gapRows,
+      }));
+    } else {
+      const gap = clamp((footnoteElement.gap_pt ?? 6) + (item.y - oldItem.y) * LAYOUT_PT_STEP, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max);
+      next = updateElement(next, "footnote:historical", (element) => ({
+        ...element,
+        row: historicalElement.row + historicalElement.row_span + Math.max(1, Math.ceil(gap / LAYOUT_PT_STEP)),
+        row_span: resized ? item.h : element.row_span,
+        gap_pt: gap,
+      }));
     }
-  }, [elements, selectedId]);
-  const activeFootnoteStyle = footnoteElement?.paragraph_styles?.find((style) => style.paragraph_index === activeFootnoteParagraph) ?? { paragraph_index: activeFootnoteParagraph, font_size_role: "footnote-8" as const, line_height_role: "1.2" as const, text_align: "left" as const };
-  const updateFootnoteStyle = (change: Partial<FootnoteParagraphStyle>) => {
-    if (!footnoteElement) return;
-    const styles = [...(footnoteElement.paragraph_styles ?? [])];
-    const index = styles.findIndex((style) => style.paragraph_index === activeFootnoteParagraph);
-    const next = { ...activeFootnoteStyle, ...change, paragraph_index: activeFootnoteParagraph };
-    if (index >= 0) styles[index] = next;
-    else styles.push(next);
-    onPresentationChange({ ...presentation, page_one: { elements: elements.map((element) => element.id === footnoteElement.id ? { ...element, paragraph_styles: styles.sort((left, right) => left.paragraph_index - right.paragraph_index) } : element) } });
+    setGroupDownRoomPt(null);
+    onPresentationChange(next);
   };
-  const updateFootnoteText = (value: string) => {
-    const paragraphCount = historicalFootnoteParagraphs(value).length;
-    if (footnoteElement?.paragraph_styles?.some((style) => style.paragraph_index >= paragraphCount)) {
-      onPresentationChange(retargetHistoricalFootnoteStyles(presentation, value));
-    }
-    setFootnoteParagraph((index) => Math.min(index, paragraphCount - 1));
-    onHistoricalFootnoteChange(value);
-  };
+
   const selectedLabel = selectedElement ? elementLabel(selectedElement.id, blocks, historicalTitle, t("historicalFootnote")) : "";
-  return <div className="page-one-editor" tabIndex={0} onKeyDown={handleKeyDown}>
+  const interactive = !disabled && !expandedId;
+  const expandedReviewBlock = expandedId?.startsWith("review:")
+    ? blocks.find((block) => `review:${block.block_id}` === expandedId)
+    : undefined;
+  const expandedElement = expandedId ? elements.find((element) => element.id === expandedId) : undefined;
+  let inspector: ReactNode = null;
+  if (expandedReviewBlock && expandedElement) {
+    inspector = <ReviewBlockEditor
+      block={expandedReviewBlock}
+      element={expandedElement}
+      disabled={disabled}
+      selected
+      expanded
+      onSelect={() => setSelectedId(expandedElement.id)}
+      onExpand={closeInspector}
+      onTitleChange={(title) => onBlocksChange(blocks.map((item) => item.block_id === expandedReviewBlock.block_id ? { ...item, title } : item))}
+      onChange={(content) => onBlocksChange(blocks.map((item) => item.block_id === expandedReviewBlock.block_id ? { ...item, content } : item))}
+      onElementChange={(change) => onPresentationChange(changeElementStyle(presentation, expandedElement.id, change))}
+    />;
+  } else if (expandedId === "historical_performance" && historicalElement) {
+    inspector = <HistoricalEditor historicalTitle={historicalTitle} element={historicalElement} disabled={disabled} selected expanded onSelect={() => setSelectedId("historical_performance")} onExpand={closeInspector} onChange={(change) => onPresentationChange(changeElementStyle(presentation, "historical_performance", change))} />;
+  } else if (expandedId === "footnote:historical" && footnoteElement) {
+    inspector = <HistoricalFootnoteEditor element={footnoteElement} disabled={disabled} selected expanded onSelect={() => setSelectedId("footnote:historical")} onExpand={closeInspector} onChange={(change) => onPresentationChange(changeElementStyle(presentation, "footnote:historical", change))} onTextChange={onHistoricalFootnoteChange} />;
+  }
+  return <div ref={editorRoot} className={`page-one-editor${expandedId ? " inspector-open" : ""}`} tabIndex={0} onKeyDown={handleKeyDown}>
+    {expandedId && <button type="button" className="module-inspector-backdrop" aria-label={t("closeInspector")} onClick={closeInspector} />}
+    {inspector}
     <div className="review-pane-switch" role="group" aria-label={t("reviewPane")}><button aria-pressed={mobilePane === "edit"} onClick={() => setMobilePane("edit")}><Pencil size={16} /> {t("edit")}</button><button aria-pressed={mobilePane === "preview"} onClick={() => setMobilePane("preview")}><Eye size={16} /> {t("preview")}</button></div>
-    <div className={`page-one-editor-grid mobile-${mobilePane}${previewCollapsed ? " preview-collapsed" : ""}`}>
+    <div aria-hidden={expandedId ? true : undefined} className={`page-one-editor-grid mobile-${mobilePane}${previewCollapsed ? " preview-collapsed" : ""}`}>
       <section className="page-one-edit-pane">
         <div className="layout-nudge-controls" aria-label={t("layoutControls")}>
           <span>{t("selectedModule")}: <strong>{selectedLabel}</strong></span>
           <div>
-            <button className="icon-button" aria-label={t("moveLeft")} title={t("moveLeft")} aria-keyshortcuts="ArrowLeft" disabled={disabled || !canMoveHorizontal(-1)} onClick={() => move("left")}><ArrowLeft size={17} /></button>
-            <button className="icon-button" aria-label={t("moveUp")} title={t("moveUp")} aria-keyshortcuts="ArrowUp" disabled={disabled || !canMoveVertical(-1)} onClick={() => move("up")}><ArrowUp size={17} /></button>
-            <button className="icon-button" aria-label={t("moveDown")} title={t("moveDown")} aria-keyshortcuts="ArrowDown" disabled={disabled || !canMoveVertical(1)} onClick={() => move("down")}><ArrowDown size={17} /></button>
-            <button className="icon-button" aria-label={t("moveRight")} title={t("moveRight")} aria-keyshortcuts="ArrowRight" disabled={disabled || !canMoveHorizontal(1)} onClick={() => move("right")}><ArrowRight size={17} /></button>
+            <button type="button" className="icon-button" aria-label={t("moveLeft")} title={t("moveLeft")} aria-keyshortcuts="ArrowLeft" disabled={disabled || !canMoveHorizontal(-1)} onClick={() => move("left")}><ArrowLeft size={17} /></button>
+            <button type="button" className="icon-button" aria-label={t("moveUp")} title={t("moveUp")} aria-keyshortcuts="ArrowUp" disabled={disabled || !canMoveVertical(-1)} onClick={() => move("up")}><ArrowUp size={17} /></button>
+            <button type="button" className="icon-button" aria-label={t("moveDown")} title={t("moveDown")} aria-keyshortcuts="ArrowDown" disabled={disabled || !canMoveVertical(1)} onClick={() => move("down")}><ArrowDown size={17} /></button>
+            <button type="button" className="icon-button" aria-label={t("moveRight")} title={t("moveRight")} aria-keyshortcuts="ArrowRight" disabled={disabled || !canMoveHorizontal(1)} onClick={() => move("right")}><ArrowRight size={17} /></button>
           </div>
           <small>{t("nudgeHelp")}</small>
         </div>
         <div className="review-builder">
           <div className="review-builder-tools"><span>{t("canvasHelp")}</span></div>
-          <TwelveColumnGrid className="review-grid" layout={layout} cols={GRID_COLUMNS} rowHeight={34} margin={[16, 16]} containerPadding={[0, 0]} compactType={null} preventCollision isDraggable={false} isResizable={false}>
-            {blocks.map((block) => <div key={block.block_id} onFocus={() => setSelectedId(`review:${block.block_id}`)}><RichTextBlock block={block} disabled={disabled} selected={selectedId === `review:${block.block_id}`} onSelect={() => setSelectedId(`review:${block.block_id}`)} onChange={(content) => onBlocksChange(blocks.map((item) => item.block_id === block.block_id ? { ...item, content } : item))} /></div>)}
+          <TwelveColumnGrid
+            className="review-grid"
+            layout={reviewLayout}
+            cols={GRID_COLUMNS}
+            rowHeight={GRID_ROW_HEIGHT}
+            margin={[GRID_GAP, GRID_GAP]}
+            containerPadding={[0, 0]}
+            compactType={null}
+            preventCollision
+            isDraggable={interactive}
+            isResizable={interactive}
+            draggableHandle=".review-drag-handle"
+            draggableCancel="button, input, textarea, select, a, [contenteditable='true']"
+            onDragStart={(_layout, _old, item) => setSelectedId(`review:${item.i}`)}
+            onDragStop={commitReviewLayout}
+            onResizeStop={commitReviewLayout}
+          >
+            {blocks.map((block) => {
+              const id = `review:${block.block_id}`;
+              const element = elements.find((candidate) => candidate.id === id) ?? {
+                id, row: block.y, row_span: block.h, x: block.x, w: block.w, vertical_nudge_steps: 0,
+                title_style: REVIEW_TITLE_STYLE, body_style: REVIEW_BODY_STYLE,
+              };
+              return <div key={block.block_id} onFocus={() => setSelectedId(id)}>
+                <ReviewBlockEditor
+                  block={block}
+                  element={element}
+                  disabled={disabled}
+                  selected={selectedId === id}
+                  expanded={false}
+                  onSelect={() => setSelectedId(id)}
+                  onExpand={(trigger) => openInspector(id, trigger)}
+                  onTitleChange={(title) => onBlocksChange(blocks.map((item) => item.block_id === block.block_id ? { ...item, title } : item))}
+                  onChange={(content) => onBlocksChange(blocks.map((item) => item.block_id === block.block_id ? { ...item, content } : item))}
+                  onElementChange={(change) => onPresentationChange(changeElementStyle(presentation, id, change))}
+                />
+              </div>;
+            })}
           </TwelveColumnGrid>
         </div>
-        <section className={`page-one-fixed-module${selectedId === "historical_performance" ? " selected" : ""}`} data-layout-id="historical_performance" onFocusCapture={() => setSelectedId("historical_performance")}>
-          <button type="button" className="page-one-fixed-module-select" onClick={() => setSelectedId("historical_performance")}><strong>{historicalTitle}</strong><span>{t("readOnlyValues")}</span></button>
-          <div className="historical-table-style-controls">
-            <label>{t("fontSize")}<select aria-label={t("historicalTableFontSize")} disabled={disabled} value={historicalElement?.table_font_size_role ?? "history-10"} onChange={(event) => updateHistoricalTableStyle({ table_font_size_role: event.target.value as HistoricalTableFontSizeRole })}>{HISTORICAL_TABLE_FONT_SIZE_ROLES.map((role) => <option key={role} value={role}>{role.replace("history-", "")} pt</option>)}</select></label>
-            <label>{t("lineHeight")}<select aria-label={t("historicalTableLineHeight")} disabled={disabled} value={historicalElement?.table_line_height_role ?? "1.2"} onChange={(event) => updateHistoricalTableStyle({ table_line_height_role: event.target.value as LineHeightRole })}>{LINE_HEIGHT_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}</select></label>
-          </div>
+
+        <section className="review-page-controls" aria-label={t("reviewPageControls")}>
+          <div><strong>{t("historyFootnotePage")}</strong><span>{t("pageOf", { page: historyPage, total: pageCount })}</span></div>
+          <label><span>{t("pageNumber")}</span><input aria-label={t("pageNumber")} type="number" min={1} max={MAX_REVIEW_PAGES} value={historyPage} disabled={disabled} onChange={(event) => { const value = Number(event.target.value); if (Number.isInteger(value) && value >= 1 && value <= MAX_REVIEW_PAGES) moveHistoryGroupToPage(value); }} /></label>
+          <button type="button" disabled={disabled || historyPage <= 1} onClick={() => moveHistoryGroupToPage(historyPage - 1)}><ArrowUp size={16} /> {t("previousPage")}</button>
+          <button type="button" disabled={disabled || historyPage >= MAX_REVIEW_PAGES} onClick={() => moveHistoryGroupToPage(historyPage + 1, true)}><ArrowDown size={16} /> {t("nextPage")}</button>
+          <button type="button" disabled={disabled || pageCount >= MAX_REVIEW_PAGES} onClick={() => onPresentationChange({ ...presentation, page_one: { ...presentation.page_one, review_page_count: pageCount + 1 } })}><Plus size={16} /> {t("addReviewPage")}</button>
         </section>
-        <section className={`historical-footnote-editor${selectedId === "footnote:historical" ? " selected" : ""}`} data-layout-id="footnote:historical" onClick={() => setSelectedId("footnote:historical")}>
-          <header><strong>{t("historicalFootnote")}</strong><span>{t("sharedWithFootnotes")}</span></header>
-          <textarea aria-label={t("historicalFootnote")} value={historicalFootnote} disabled={disabled} onChange={(event) => updateFootnoteText(event.target.value)} />
-          <div className="footnote-style-controls">
-            <label>{t("paragraph")}<select disabled={disabled} value={activeFootnoteParagraph} onChange={(event) => setFootnoteParagraph(Number(event.target.value))}>{footnoteParagraphs.map((paragraph, index) => <option key={`${index}-${paragraph.slice(0, 12)}`} value={index}>{index + 1}</option>)}</select></label>
-            <label>{t("fontSize")}<select disabled={disabled} value={activeFootnoteStyle.font_size_role} onChange={(event) => updateFootnoteStyle({ font_size_role: event.target.value as FootnoteFontSizeRole })}>{FOOTNOTE_FONT_SIZE_ROLES.map((role) => <option key={role} value={role}>{role.replace("footnote-", "")} pt</option>)}</select></label>
-            <label>{t("lineHeight")}<select disabled={disabled} value={activeFootnoteStyle.line_height_role} onChange={(event) => updateFootnoteStyle({ line_height_role: event.target.value as LineHeightRole })}>{LINE_HEIGHT_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}</select></label>
-            <label>{t("alignment")}<select disabled={disabled} value={activeFootnoteStyle.text_align} onChange={(event) => updateFootnoteStyle({ text_align: event.target.value as ReviewTextAlign })}>{TEXT_ALIGNMENTS.map(({ value }) => <option key={value} value={value}>{t(value === "left" ? "alignLeft" : value === "center" ? "alignCenter" : value === "right" ? "alignRight" : "justify")}</option>)}</select></label>
-          </div>
-        </section>
+
+        {historicalElement && footnoteElement && <div className="historical-group-builder">
+          <div className="review-builder-tools"><span>{t("openingPage", { page: historyPage })}</span><small>{t("historyGroupHelp")}</small></div>
+          <TwelveColumnGrid
+            className="review-grid historical-group-grid"
+            layout={groupLayout}
+            cols={GRID_COLUMNS}
+            rowHeight={GRID_ROW_HEIGHT}
+            margin={[GRID_GAP, GRID_GAP]}
+            containerPadding={[0, 0]}
+            compactType={null}
+            preventCollision={false}
+            allowOverlap
+            isDraggable={interactive}
+            isResizable={interactive}
+            draggableHandle=".review-drag-handle"
+            draggableCancel="button, input, textarea, select, a, [contenteditable='true']"
+            onDragStart={(_layout, _old, item) => setSelectedId(item.i)}
+            onDragStop={(layout, oldItem, item) => commitGroupLayout(layout, oldItem, item, false)}
+            onResizeStop={(layout, oldItem, item) => commitGroupLayout(layout, oldItem, item, true)}
+          >
+            <div key="historical_performance">
+              <HistoricalEditor historicalTitle={historicalTitle} element={historicalElement} disabled={disabled} selected={selectedId === "historical_performance"} expanded={false} onSelect={() => setSelectedId("historical_performance")} onExpand={(trigger) => openInspector("historical_performance", trigger)} onChange={(change) => onPresentationChange(changeElementStyle(presentation, "historical_performance", change))} />
+            </div>
+            <div key="footnote:historical">
+              <HistoricalFootnoteEditor element={footnoteElement} disabled={disabled} selected={selectedId === "footnote:historical"} expanded={false} onSelect={() => setSelectedId("footnote:historical")} onExpand={(trigger) => openInspector("footnote:historical", trigger)} onChange={(change) => onPresentationChange(changeElementStyle(presentation, "footnote:historical", change))} onTextChange={onHistoricalFootnoteChange} />
+            </div>
+          </TwelveColumnGrid>
+        </div>}
       </section>
-      <PreviewPane html={previewHtml} busy={previewBusy} error={previewError} collapsed={previewCollapsed} onToggle={() => setPreviewCollapsed((value) => !value)} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setMobilePane("edit"); }} onArrow={move} />
+      <PreviewPane html={previewHtml} busy={previewBusy} error={previewError} collapsed={previewCollapsed} onToggle={() => setPreviewCollapsed((value) => !value)} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setMobilePane("edit"); }} onArrow={move} onGroupDownRoomChange={setGroupDownRoomPt} />
     </div>
   </div>;
 }

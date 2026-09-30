@@ -70,7 +70,7 @@ The report title is an effective-dated fund selector backed by the API product c
 
 The workspace is organized around six report modules: Month in Review, Historical Performance, Company News, Constituent Performance, Final Analytics, and Footnotes & Disclosures. Snapshot loading, recalculation, assisted drafting, review, and finalization now live in their relevant module or report stage.
 
-The first module uses the `3033-v3` controlled page-one presentation model. Review copy and its allowlisted paragraph typography are editable beside a debounced paged preview; product/benchmark headings, module titles and bound financial tables remain fixed. Review blocks can move within a collision-checked 12-column topology, while all page-one modules and the historical footnote have bounded half-line spacing controls. The workspace navigation still maps the editable modules to report pages (`01`, `01`, `02`, `03`, `04`); the immutable professional-investor disclaimer is appended automatically as page `05` and is not an editor module.
+The first module uses the `3033-v4` paged presentation model. All six opening-page modules expose drag handles and a detailed side inspector. Module titles keep the approved reference-PDF typography and color as locked brand defaults, while body copy, Historical table cells, and footnotes retain validated typography controls; bound financial values remain locked. Editable text areas can insert a validated superscript marker before or after the current selection. Review blocks move within a collision-checked 12-column topology. Historical Performance and its aligned footnote move as one group onto explicitly created continuation pages, each with the same running chrome; later business pages and the final immutable disclaimer shift accordingly. Existing finalized v1-v3 documents keep their original rendering.
 
 Final Analytics takes its displayed month and fund ticker from the canonical report document. Changing the top report date navigates to the latest report for that fund and date, or opens the create-report state when none exists. Company News loads the report year's DA-Report catalog by default and exposes fixed All / Bullish / Neutral / Bearish sentiment controls.
 
@@ -85,4 +85,4 @@ npm run build
 ```
 
 The checked-in 3033 visual baseline is under `backend/tests/fixtures/3033_202606`.
-`scripts/verify_visual.py <downloaded.pdf>` checks an explicitly saved five-page download, compares the original four report pages, and independently verifies the fixed disclaimer page in `var/artifacts/visual/latest/manifest.json`.
+`scripts/verify_visual.py <downloaded.pdf>` checks an explicitly saved download, compares the original report pages, and independently verifies the final disclaimer page in `var/artifacts/visual/latest/manifest.json`. Legacy templates remain five pages; v4 expects the selected opening-page count plus four fixed pages.

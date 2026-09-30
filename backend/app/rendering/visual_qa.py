@@ -50,7 +50,21 @@ PAGE5_REQUIRED_TEXT = (
 POINTS_PER_MM = 72 / 25.4
 
 
-def verify_pdf(actual_pdf: Path, reference_pdf: Path, evidence_root: Path) -> dict:
+def verify_pdf(
+    actual_pdf: Path,
+    reference_pdf: Path,
+    evidence_root: Path,
+    *,
+    opening_page_count: int = 1,
+) -> dict:
+    """Verify a paged export, including v4's explicitly-created opening pages.
+
+    The approved reference has the four business pages and predates the appended disclaimer.
+    Additional v4 opening pages therefore shift reference pages 2-4 without changing them.
+    """
+
+    if not 1 <= opening_page_count <= 96:
+        raise ValueError("opening_page_count must be between 1 and 96")
     actual_document = pdfium.PdfDocument(str(actual_pdf))
     reference_document = pdfium.PdfDocument(str(reference_pdf))
     actual_sizes = [[round(page.get_width(), 2), round(page.get_height(), 2)] for page in actual_document]
@@ -58,28 +72,41 @@ def verify_pdf(actual_pdf: Path, reference_pdf: Path, evidence_root: Path) -> di
     actual_pages = _render(actual_pdf, evidence_root / "actual-pages")
     reference_pages = _render(reference_pdf, evidence_root / "reference-pages")
     (evidence_root / "diff-pages").mkdir(parents=True, exist_ok=True)
+    actual_reference_indexes = [0, opening_page_count, opening_page_count + 1, opening_page_count + 2]
     comparisons = [
-        {"page": index + 1, **_difference(reference, actual, evidence_root / "diff-pages" / f"page-{index + 1:02d}.png")}
-        for index, (reference, actual) in enumerate(zip(reference_pages, actual_pages))
+        {
+            "page": actual_index + 1,
+            "reference_page": reference_index + 1,
+            **_difference(
+                reference_pages[reference_index],
+                actual_pages[actual_index],
+                evidence_root / "diff-pages" / f"page-{actual_index + 1:02d}.png",
+            ),
+        }
+        for reference_index, actual_index in enumerate(actual_reference_indexes)
+        if reference_index < len(reference_pages) and actual_index < len(actual_pages)
     ]
+    expected_page_count = opening_page_count + 4
     structural = {
         "page_count": len(actual_document),
-        "expected_page_count": 5,
-        "page_count_passed": len(actual_document) == 5,
+        "expected_page_count": expected_page_count,
+        "opening_page_count": opening_page_count,
+        "page_count_passed": len(actual_document) == expected_page_count,
         "page_sizes": actual_sizes,
         "a4_sizes_passed": all(abs(width - 595.2) <= 1 and abs(height - 841.92) <= 1 for width, height in actual_sizes),
         # The approved visual reference predates the legal fifth page. Keep comparing its four
         # report pages exactly while validating the new page independently below.
-        "reference_sizes_match": len(reference_sizes) == 4 and len(actual_sizes) == 5 and all(
-            abs(actual[0] - reference[0]) <= 1 and abs(actual[1] - reference[1]) <= 1
-            for actual, reference in zip(actual_sizes[:4], reference_sizes)
+        "reference_sizes_match": len(reference_sizes) == 4 and len(actual_sizes) == expected_page_count and all(
+            abs(actual_sizes[actual_index][0] - reference_sizes[reference_index][0]) <= 1
+            and abs(actual_sizes[actual_index][1] - reference_sizes[reference_index][1]) <= 1
+            for reference_index, actual_index in enumerate(actual_reference_indexes)
         ),
     }
     visual_passed = len(comparisons) == len(reference_pages) == 4 and all(page["pixel_difference_ratio"] <= 0.005 for page in comparisons)
-    def _page4_content(document: pdfium.PdfDocument, image_path: Path) -> dict:
-        if len(document) < 4:
+    def _page4_content(document: pdfium.PdfDocument, image_path: Path, page_index: int) -> dict:
+        if len(document) <= page_index:
             return {"required_text_passed": False, "missing_text": list(PAGE4_REQUIRED_TEXT), "donut_passed": False}
-        text = document[3].get_textpage().get_text_bounded()
+        text = document[page_index].get_textpage().get_text_bounded()
         missing_text = [value for value in PAGE4_REQUIRED_TEXT if value not in text]
         image = Image.open(image_path).convert("RGB")
         width, height = image.size
@@ -119,8 +146,14 @@ def verify_pdf(actual_pdf: Path, reference_pdf: Path, evidence_root: Path) -> di
             "donut_dominant_color_count": dominant_colors,
             "donut_center_white_ratio": round(center_white_ratio, 6),
         }
-    page4_content = _page4_content(actual_document, actual_pages[3]) if len(actual_pages) >= 4 else _page4_content(actual_document, Path())
-    page5_text_page = actual_document[4].get_textpage() if len(actual_document) >= 5 else None
+    analytics_index = opening_page_count + 2
+    disclaimer_index = opening_page_count + 3
+    page4_content = (
+        _page4_content(actual_document, actual_pages[analytics_index], analytics_index)
+        if len(actual_pages) > analytics_index
+        else _page4_content(actual_document, Path(), analytics_index)
+    )
+    page5_text_page = actual_document[disclaimer_index].get_textpage() if len(actual_document) > disclaimer_index else None
     page5_text = page5_text_page.get_text_bounded() if page5_text_page is not None else ""
     disclaimer_start = page5_text.find("Disclaimer")
     disclaimer_end = page5_text.find(PAGE5_REQUIRED_TEXT[-1])
@@ -139,8 +172,8 @@ def verify_pdf(actual_pdf: Path, reference_pdf: Path, evidence_root: Path) -> di
         )
         rectangles = [page5_text_page.get_rect(index) for index in range(rectangle_count)]
         if rectangles:
-            page_width = actual_document[4].get_width()
-            page_height = actual_document[4].get_height()
+            page_width = actual_document[disclaimer_index].get_width()
+            page_height = actual_document[disclaimer_index].get_height()
             page5_bounds = {
                 "left": round(min(rectangle[0] for rectangle in rectangles), 2),
                 "bottom": round(min(rectangle[1] for rectangle in rectangles), 2),

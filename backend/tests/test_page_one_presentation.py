@@ -500,6 +500,48 @@ def test_docx_nested_list_item_keeps_its_allowlisted_paragraph_style_roles():
     assert all(run.font.size.pt == 10 for run in paragraph.runs)
 
 
+def test_docx_numbered_list_and_plain_paragraph_keep_controlled_indents():
+    document = Document()
+    _append_rich_text(
+        document,
+        '<ol><li data-indent-level="1"><p><strong>Key driver</strong><br>'
+        'Wrapped supporting copy.</p></li></ol>'
+        '<p data-indent-level="2">Indented paragraph.</p>',
+        font_name="Calibri",
+        size=11,
+        alignment=WD_ALIGN_PARAGRAPH.LEFT,
+    )
+
+    numbered, indented = document.paragraphs
+    assert numbered.text == "1. Key driver\nWrapped supporting copy."
+    assert numbered.paragraph_format.left_indent.pt == pytest.approx(34.7559, abs=0.01)
+    assert numbered.paragraph_format.first_line_indent.cm == pytest.approx(-0.35, abs=0.01)
+    assert indented.text == "Indented paragraph."
+    assert indented.paragraph_format.left_indent.pt == pytest.approx(44, abs=0.01)
+
+
+def test_docx_review_title_and_complete_body_use_independent_two_character_indents():
+    document = Document()
+    artifact_module._review_block(
+        document,
+        {
+            "title": "Editable subheading",
+            "rendered_content_html": "<p>Complete body.</p>",
+            "title_style": {"font_size_pt": 12, "indent_level": 1},
+            "body_style": {"font_size_pt": 10, "indent_level": 2},
+        },
+        font_name="Calibri",
+        font_size=10,
+        deep=artifact_module.RGBColor(34, 50, 127),
+    )
+
+    title, body = document.paragraphs
+    assert title.text == "Editable subheading"
+    assert title.paragraph_format.left_indent.pt == pytest.approx(24, abs=0.01)
+    assert body.text == "Complete body."
+    assert body.paragraph_format.left_indent.pt == pytest.approx(40, abs=0.01)
+
+
 @pytest.mark.parametrize("steps", range(-3, 5))
 def test_docx_footnote_nudge_keeps_every_allowed_position_distinct(steps: int):
     document = Document()
@@ -597,27 +639,26 @@ def test_unsaved_preview_is_canonical_but_does_not_create_a_version_or_audit(cli
     assert after_events == before_events
 
 
-def test_draft_preview_checks_version_and_first_save_upgrades_v2_atomically(client):
+def test_draft_preview_is_version_tolerant_and_first_save_upgrades_to_v4_atomically(client):
     report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     content = detail["latest_document"]["content"]
 
-    conflict = client.post(
+    preview = client.post(
         f"/api/v1/reports/{report['id']}/preview",
         json={"version": 999, "content": content},
     )
-    assert conflict.status_code == 409
-    assert conflict.json()["error_code"] == "VERSION_CONFLICT"
+    assert preview.status_code == 200, preview.text
 
     saved = client.patch(
         f"/api/v1/reports/{report['id']}/document",
         json={"version": detail["latest_document"]["version"], "content": content},
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["content"]["template_version"] == "3033-v3"
-    assert saved.json()["content"]["presentation"]["schema_version"] == 1
+    assert saved.json()["content"]["template_version"] == "3033-v4"
+    assert saved.json()["content"]["presentation"]["schema_version"] == 2
     refreshed = client.get(f"/api/v1/reports/{report['id']}").json()
-    assert refreshed["template_version"] == "3033-v3"
+    assert refreshed["template_version"] == "3033-v4"
 
 
 def test_v2_submission_without_presentation_reports_nested_shape_errors_as_422(client):
@@ -687,7 +728,7 @@ def test_v2_submission_without_presentation_reports_nested_shape_errors_as_422(c
             assert response.json()["field"] == expected_field
 
 
-def test_v3_rejects_title_changes_and_invalid_presentation_with_stable_error_code(client):
+def test_v3_accepts_review_title_changes_and_rejects_invalid_presentation(client):
     report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     saved = client.patch(
@@ -698,12 +739,17 @@ def test_v3_rejects_title_changes_and_invalid_presentation_with_stable_error_cod
 
     titled = deepcopy(saved.json()["content"])
     titled["sections"]["month_in_review"]["blocks"][0]["title"] = "Mutable title"
-    rejected_title = client.patch(
+    titled["sections"]["month_in_review"]["title"] = "Mutable title"
+    titled["sections"]["month_in_review"]["display_title"] = "Mutable title"
+    retitled = client.patch(
         f"/api/v1/reports/{report['id']}/document",
         json={"version": saved.json()["version"], "content": titled},
     )
-    assert rejected_title.status_code == 422
-    assert rejected_title.json()["error_code"] == "PAGE_ONE_PRESENTATION_INVALID"
+    assert retitled.status_code == 200, retitled.text
+    assert retitled.json()["content"]["sections"]["month_in_review"]["blocks"][0][
+        "title"
+    ] == "Mutable title"
+    saved = retitled
 
     for field, value in (
         ("product_name", "Mutable product heading"),
@@ -733,7 +779,7 @@ def test_v3_rejects_title_changes_and_invalid_presentation_with_stable_error_cod
     malformed_page_one = deepcopy(saved.json()["content"])
     malformed_page_one["presentation"]["page_one"] = []
     malformed_payloads.append((malformed_page_one, "presentation.page_one"))
-    for invalid_schema_version in (True, 1.0):
+    for invalid_schema_version in (True, 1.0, 1):
         malformed_schema = deepcopy(saved.json()["content"])
         malformed_schema["presentation"]["schema_version"] = invalid_schema_version
         malformed_payloads.append((malformed_schema, "presentation.schema_version"))

@@ -398,7 +398,7 @@ describe("report module data responsibilities", () => {
     expect(screen.getByText("12,882 million")).toBeTruthy();
   });
 
-  it("uses the selected month as the summary title and saves paragraph alignment without changing the block fallback", async () => {
+  it("saves Review paragraph alignment and title-to-content spacing without changing the block fallback", async () => {
     const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
     vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
 
@@ -408,6 +408,10 @@ describe("report module data responsibilities", () => {
     expect(screen.queryByLabelText("Title for summary block")).toBeNull();
     expect(screen.getAllByText("June in Review").length).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByTitle("Align center")[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Open June in Review editor" }));
+    const inspector = screen.getByRole("dialog", { name: "June in Review detailed editor" });
+    fireEvent.change(within(inspector).getByLabelText("Title-to-content spacing (pt)"), { target: { value: "6.5" } });
+    fireEvent.click(within(inspector).getByRole("button", { name: "Close expanded editor" }));
     fireEvent.click(screen.getByRole("button", { name: "Save layout" }));
 
     await waitFor(() => expect(saveDocument).toHaveBeenCalledWith(
@@ -421,13 +425,80 @@ describe("report module data responsibilities", () => {
             blocks: expect.arrayContaining([expect.objectContaining({
               block_id: "summary",
               text_align: "left",
-              content: expect.stringContaining('data-text-align="center"'),
             })]),
           }),
         }),
-        presentation: expect.objectContaining({ schema_version: 1 }),
+        presentation: expect.objectContaining({
+          schema_version: 2,
+          page_one: expect.objectContaining({
+            elements: expect.arrayContaining([expect.objectContaining({
+              id: "review:summary",
+              title_style: expect.objectContaining({ space_after_pt: 6.5 }),
+              body_style: expect.objectContaining({ text_align: "center" }),
+            })]),
+          }),
+        }),
       }),
     ));
+  });
+
+  it("keeps migrated v3 footnote paragraph styles and nudges in the Review save payload", async () => {
+    const legacyReport = structuredClone(report);
+    const content = legacyReport.latest_document!.content as Record<string, unknown>;
+    const sections = content.sections as Record<string, Record<string, unknown>>;
+    sections.footnotes.historical = "First paragraph.\n\nSecond paragraph.";
+    content.presentation = {
+      schema_version: 1,
+      page_one: {
+        elements: [
+          {
+            id: "historical_performance",
+            row: 0,
+            row_span: 1,
+            x: 0,
+            w: 12,
+            vertical_nudge_steps: 3,
+          },
+          {
+            id: "footnote:historical",
+            row: 1,
+            row_span: 1,
+            x: 0,
+            w: 12,
+            vertical_nudge_steps: 0,
+            bottom_nudge_steps: 2,
+            paragraph_styles: [
+              { paragraph_index: 0, font_size_role: "footnote-8", line_height_role: "1.0", text_align: "left" },
+              { paragraph_index: 1, font_size_role: "footnote-10", line_height_role: "1.4", text_align: "justify" },
+            ],
+          },
+        ],
+      },
+    };
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
+
+    render(<ReportModule report={legacyReport} active="review" busy={false} run={run} />);
+    fireEvent.click(screen.getAllByTitle("Align center")[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Save layout" }));
+
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledOnce());
+    const saved = saveDocument.mock.calls[0][2] as Record<string, unknown>;
+    const presentation = saved.presentation as {
+      schema_version: number;
+      page_one: { elements: Array<Record<string, unknown>> };
+    };
+    const history = presentation.page_one.elements.find((element) => element.id === "historical_performance");
+    const footnote = presentation.page_one.elements.find((element) => element.id === "footnote:historical");
+
+    expect(presentation.schema_version).toBe(2);
+    expect(history).toMatchObject({ offset_y_pt: 15 });
+    expect(footnote).toMatchObject({
+      gap_pt: 8,
+      content_html: '<p data-line-height="1" data-text-align="left"><span data-font-size-pt="8">First paragraph.</span></p><p data-line-height="1.4" data-text-align="justify"><span data-font-size-pt="10">Second paragraph.</span></p>',
+    });
+    expect((saved.sections as Record<string, Record<string, unknown>>).footnotes.historical)
+      .toBe("First paragraph.\n\nSecond paragraph.");
   });
 
   it("keeps product and benchmark headings fixed in the Chinese Review editor", () => {
@@ -459,7 +530,7 @@ describe("report module data responsibilities", () => {
       sections: expect.objectContaining({
         footnotes: expect.objectContaining({ historical: "Unsaved footnote draft." }),
       }),
-      presentation: expect.objectContaining({ schema_version: 1 }),
+      presentation: expect.objectContaining({ schema_version: 2 }),
     }));
 
     pending[1].resolve('<html><body data-preview="new"></body></html>');
@@ -492,7 +563,8 @@ describe("report module data responsibilities", () => {
     render(<ReportModule report={report} active="footnotes" busy={false} run={run} />);
 
     expect(screen.getByText("Page 06 · Free layout")).toBeTruthy();
-    expect(screen.getAllByRole("textbox")).toHaveLength(3);
+    expect(screen.getAllByRole("textbox").filter((node) => node.tagName === "TEXTAREA")).toHaveLength(3);
+    expect(screen.getAllByRole("group", { name: "Superscript footnote marker" })).toHaveLength(3);
     expect(screen.getByDisplayValue("Historical disclosure from this report.")).toBeTruthy();
     expect(screen.getByText(/Bound to Historical Performance/)).toBeTruthy();
     expect(screen.getByText(/Bound to Constituent Performance/)).toBeTruthy();
@@ -512,26 +584,36 @@ describe("report module data responsibilities", () => {
     });
   });
 
-  it("trims stale Review paragraph styles when Footnotes removes a paragraph", async () => {
+  it("synchronizes the controlled rich footnote when Footnotes replaces its text", async () => {
     const styledReport = structuredClone(report);
     const content = styledReport.latest_document!.content as Record<string, unknown>;
     const sections = content.sections as Record<string, Record<string, unknown>>;
     sections.footnotes.historical = "First paragraph.\n\nSecond paragraph.";
     content.presentation = {
-      schema_version: 1,
+      schema_version: 2,
       page_one: {
+        review_page_count: 1,
         elements: [{
           id: "footnote:historical",
           row: 2,
-          row_span: 1,
+          row_span: 4,
           x: 0,
           w: 12,
-          vertical_nudge_steps: 0,
-          bottom_nudge_steps: 0,
-          paragraph_styles: [
-            { paragraph_index: 0, font_size_role: "footnote-9", line_height_role: "1.2", text_align: "left" },
-            { paragraph_index: 1, font_size_role: "footnote-10", line_height_role: "1.4", text_align: "right" },
-          ],
+          page: 1,
+          gap_pt: 6,
+          content_html: "<p>First paragraph.</p><p>Second paragraph.</p>",
+          body_style: {
+            font_family: "Carlito",
+            font_size_pt: 8,
+            color: "#000000",
+            bold: false,
+            italic: false,
+            underline: false,
+            line_height: 1.2,
+            space_before_pt: 0,
+            space_after_pt: 0,
+            text_align: "left",
+          },
         }],
       },
     };
@@ -546,11 +628,12 @@ describe("report module data responsibilities", () => {
     await waitFor(() => expect(saveDocument).toHaveBeenCalledOnce());
     const savedContent = saveDocument.mock.calls[0][2] as Record<string, unknown>;
     const presentation = savedContent.presentation as {
-      page_one: { elements: Array<{ id: string; paragraph_styles?: unknown[] }> };
+      page_one: { elements: Array<{ id: string; content_html?: string; body_style?: { font_size_pt: number } }> };
     };
-    expect(presentation.page_one.elements[0].paragraph_styles).toEqual([
-      { paragraph_index: 0, font_size_role: "footnote-9", line_height_role: "1.2", text_align: "left" },
-    ]);
+    expect(presentation.page_one.elements[0]).toMatchObject({
+      content_html: "<p>Only one paragraph.</p>",
+      body_style: { font_size_pt: 8 },
+    });
   });
 
   it("leaves missing disclosures empty for another product instead of inventing content", () => {

@@ -12,7 +12,7 @@ from app.core import download_signing
 from app.domain.service.audit import audit
 from app.domain.service.exports import export_source
 from app.domain.page_one_presentation import PageOneLayoutOverflowError
-from app.rendering.artifacts import generate_export, renderer_version_for
+from app.rendering.artifacts import LAYOUT_POLICY_VERSION, generate_export, renderer_version_for
 from app.rendering.disclaimer import DisclaimerResourceError, disclaimer_audit_fields
 from app.rendering.download_response import ExportResponse
 from .deps import Db, RequestId
@@ -48,6 +48,7 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
                "template_version": document.template_version,
                "design_token_version": document.content.get("design_token_version"),
                "renderer_version": renderer_version_for(format_name),
+               "layout_policy_version": LAYOUT_POLICY_VERSION,
                "lane": document.content.get("lane", report.lane),
                "language_mode": document.content.get("language_mode", report.language_mode),
                **disclaimer_audit_fields()}
@@ -60,6 +61,10 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
             content_manifest=export.content_manifest,
             disclaimer_version=export.disclaimer_version,
             disclaimer_checksum=export.disclaimer_checksum,
+            layout_warning_findings=[
+                dict(item) for item in export.layout_findings
+                if item.get("severity") == "WARNING"
+            ],
         )
         # This proves generation, not that the browser received or saved the file.
         audit(db, "export.generated", "report", report_id, x_request_id, details)
@@ -80,7 +85,15 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
         )
         # Renderer exceptions can contain private file paths or URLs; log only safe diagnostics.
         logger.error("Report export failed: %s (%s)", code, type(error).__name__)
-        audit(db, "export.failed", "report", report_id, x_request_id, {**details, "error_code": code})
+        audit(db, "export.failed", "report", report_id, x_request_id, {
+            **details,
+            "error_code": code,
+            **(
+                {"layout_findings": [dict(item) for item in error.findings]}
+                if isinstance(error, PageOneLayoutOverflowError)
+                else {}
+            ),
+        })
         db.commit()
         raise HTTPException(422 if code in {"PDF_LAYOUT_OVERFLOW", "PAGE_ONE_LAYOUT_OVERFLOW"} else 503, detail={
             "error_code": code,

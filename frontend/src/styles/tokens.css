@@ -152,9 +152,16 @@
 	--layout-review-preview-min-height: 520px;
 	--layout-review-footnote-height: 132px;
 	--layout-review-grid-height: 560px;
+	--layout-review-inspector-width: min(680px, 92vw);
+	--layout-review-group-min-height: 360px;
+	--layout-review-control-min: 132px;
+	--layout-review-indent-step: 2em;
+	--layout-marker-input-width: 72px;
 	--text-review-10pt: .8333rem;
 	--text-review-11pt: .9167rem;
 	--opacity-chart-hover: .82;
+	--opacity-disabled: .48;
+	--opacity-modal-backdrop: .72;
 
 	/* ===== Elevation — glass + soft shadow + edge highlight, never multi-level hard shadows ===== */
 	--shadow-1: 0 2px 6px rgba(35, 97, 173, .10);
@@ -177,6 +184,7 @@
 	--z-content: 2;
 	--z-dropdown: 1000;
 	--z-modal: 2000;
+	--z-modal-panel: 2001;
 	--z-message: 3000;
 
 	/* ===== Motion vocabulary — do not invent new values ===== */

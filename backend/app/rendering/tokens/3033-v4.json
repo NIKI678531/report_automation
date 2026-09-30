@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "id": "3033-v4",
+  "extends": "3033-v3",
+  "change": "Manual opening-page continuation, precise typography and graded layout findings",
+  "review": {
+    "maxOpeningPages": 96,
+    "maxReportPages": 100,
+    "minorOverflowToleranceMm": 3,
+    "fontSizeMinPt": 5,
+    "fontSizeMaxPt": 36,
+    "lineHeightMin": 0.8,
+    "lineHeightMax": 3,
+    "spacingMinPt": 0,
+    "spacingMaxPt": 72,
+    "bundledFonts": [
+      "Carlito",
+      "Noto Sans CJK SC",
+      "Noto Sans CJK TC"
+    ],
+    "pdfFontAliases": {
+      "Calibri": "Carlito"
+    }
+  },
+  "rules": {
+    "pages": "review_page_count + 4",
+    "maxPages": 100
+  }
+}

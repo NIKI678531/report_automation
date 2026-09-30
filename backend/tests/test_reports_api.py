@@ -785,7 +785,7 @@ def test_language_variant_from_finalized_v2_keeps_source_render_identity_after_c
         }
 
 
-def test_language_variant_retargets_copied_footnote_styles_to_blank_editorial(client):
+def test_language_variant_retargets_v4_footnote_content_to_blank_editorial(client):
     source = create_report(client)
     detail = client.get(f"/api/v1/reports/{source['id']}").json()
     content = detail["latest_document"]["content"]
@@ -795,20 +795,12 @@ def test_language_variant_retargets_copied_footnote_styles_to_blank_editorial(cl
         for element in content["presentation"]["page_one"]["elements"]
         if element["id"] == "footnote:historical"
     )
-    footnote["paragraph_styles"] = [
-        {
-            "paragraph_index": 0,
-            "font_size_role": "footnote-9",
-            "line_height_role": "1.2",
-            "text_align": "left",
-        },
-        {
-            "paragraph_index": 1,
-            "font_size_role": "footnote-10",
-            "line_height_role": "1.4",
-            "text_align": "right",
-        },
-    ]
+    footnote["content_html"] = "<p>First paragraph.</p><p>Second paragraph.</p>"
+    footnote["body_style"].update({
+        "font_size_pt": 10.0,
+        "line_height": 1.4,
+        "text_align": "right",
+    })
     saved = client.patch(
         f"/api/v1/reports/{source['id']}/document",
         json={"version": detail["latest_document"]["version"], "content": content},
@@ -829,12 +821,10 @@ def test_language_variant_retargets_copied_footnote_styles_to_blank_editorial(cl
     )
 
     assert target_content["sections"]["footnotes"].get("historical", "") == ""
-    assert target_footnote["paragraph_styles"] == [{
-        "paragraph_index": 0,
-        "font_size_role": "footnote-9",
-        "line_height_role": "1.2",
-        "text_align": "left",
-    }]
+    assert target_footnote["content_html"] == "<p></p>"
+    assert target_footnote["body_style"]["font_size_pt"] == 10.0
+    assert target_footnote["body_style"]["line_height"] == 1.4
+    assert target_footnote["body_style"]["text_align"] == "right"
     preview = client.post(f"/api/v1/reports/{target['id']}/preview")
     assert preview.status_code == 200, preview.text
 

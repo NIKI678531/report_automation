@@ -11,12 +11,18 @@ from app.rendering.visual_qa import verify_pdf
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare a downloaded PDF with the approved visual baseline.")
     parser.add_argument("pdf", type=Path, help="PDF saved by an on-demand download")
+    parser.add_argument(
+        "--opening-pages",
+        type=int,
+        default=1,
+        help="Number of manually-created Review/History pages (3033-v4; default: 1)",
+    )
     args = parser.parse_args()
     actual = args.pdf
     if not actual.is_file():
         parser.error("The downloaded PDF does not exist.")
     reference = ROOT / "backend" / "tests" / "fixtures" / "3033_202606" / "reference.pdf"
     evidence = ROOT / "var" / "artifacts" / "visual" / "latest"
-    result = verify_pdf(actual, reference, evidence)
+    result = verify_pdf(actual, reference, evidence, opening_page_count=args.opening_pages)
     print(f"Visual QA passed={result['passed']}; evidence={evidence / 'manifest.json'}")
     raise SystemExit(0 if result["passed"] else 2)

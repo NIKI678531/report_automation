@@ -3,10 +3,11 @@ import { Calculator, Database, RefreshCw, Save, Sparkles } from "lucide-react";
 import { api, type DatasetSlot, type Report } from "../api";
 import { SectorDonut, sectorSlices, type SectorChartSnapshot } from "../features/analytics/SectorDonut";
 import { CompanyNewsWorkbench } from "../features/news/CompanyNewsWorkbench";
-import { legacyReviewBlocks, pageOnePresentation, retargetHistoricalFootnoteStyles, ReviewCanvas, type PageOnePresentation, type ReviewBlock } from "../features/review/ReviewCanvas";
+import { legacyReviewBlocks, pageOnePresentation, retargetHistoricalFootnoteStyles, richHtmlToPlainText, ReviewCanvas, type PageOnePresentation, type ReviewBlock } from "../features/review/ReviewCanvas";
 import { FOOTNOTE_SECTIONS, isReportReadOnly, reportConstituentsTitle, reportMonthName, reportProductTicker, reviewLegacyText, type FootnoteSectionKey, type ModuleId } from "../reportModules";
 import type { RegisterPendingSave } from "../pendingSave";
 import { CsvDatasetUpload } from "./CsvDatasetUpload";
+import { MarkerTextarea } from "./SuperscriptMarkerControl";
 import { reportLocale, useLocale } from "../i18n";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
@@ -117,8 +118,8 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
   const defaultReviewTitle = reviewTitleOf(report, review);
   const initialTerminology = useMemo(() => (content?.terminology_overrides as JsonRecord | undefined) ?? {}, [report.id, version]);
   const initialBlocks = useMemo(() => legacyReviewBlocks(review, defaultReviewTitle, report.language_mode ?? "EN", !isReportReadOnly(report)), [report.id, version]);
-  const initialPresentation = useMemo(() => pageOnePresentation(content?.presentation, initialBlocks), [report.id, version]);
   const initialHistoricalFootnote = useMemo(() => String(((sectionsOf(report).footnotes as JsonRecord | undefined) ?? {}).historical ?? ""), [report.id, version]);
+  const initialPresentation = useMemo(() => pageOnePresentation(content?.presentation, initialBlocks, initialHistoricalFootnote), [report.id, version, initialBlocks, initialHistoricalFootnote]);
   const [blocks, setBlocks] = useState<ReviewBlock[]>(initialBlocks);
   const [presentation, setPresentation] = useState<PageOnePresentation>(initialPresentation);
   const [historicalFootnote, setHistoricalFootnote] = useState(initialHistoricalFootnote);
@@ -143,7 +144,7 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
     const normalizedTitle = summaryBlock?.title.trim() || defaultReviewTitle;
     section.title = normalizedTitle;
     section.display_title = normalizedTitle;
-    section.layout_schema_version = 2;
+    section.layout_schema_version = 3;
     section.blocks = blocks.map((block) => {
       const element = presentation.page_one.elements.find((candidate) => candidate.id === `review:${block.block_id}`);
       return element ? { ...block, x: element.x, y: element.row, w: element.w, h: element.row_span } : block;
@@ -152,7 +153,9 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
     section.summary = legacyText.summary;
     section.outlook = legacyText.outlook;
     const footnotes = (nextSections.footnotes as JsonRecord | undefined) ?? {};
-    nextSections.footnotes = { ...footnotes, historical: historicalFootnote };
+    const historicalRichText = presentation.page_one.elements.find((element) => element.id === "footnote:historical")?.content_html;
+    const synchronizedHistoricalFootnote = typeof historicalRichText === "string" ? richHtmlToPlainText(historicalRichText) : historicalFootnote;
+    nextSections.footnotes = { ...footnotes, historical: synchronizedHistoricalFootnote };
     next.presentation = presentation;
     next.terminology_overrides = terminology;
     return next;
@@ -376,7 +379,7 @@ function FootnotesModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
     const stored = (sections.footnotes as JsonRecord | undefined) ?? {};
     sections.footnotes = { ...stored, ...footnotes };
     const presentation = next.presentation as PageOnePresentation | undefined;
-    if (presentation?.schema_version === 1) {
+    if (presentation?.schema_version === 2) {
       next.presentation = retargetHistoricalFootnoteStyles(
         presentation,
         footnotes.historical,
@@ -394,7 +397,7 @@ function FootnotesModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
     <section className="footnote-list">
       {FOOTNOTE_SECTIONS.map(({ key }) => { const localizedLabel = t(key === "historical" ? "historical" : key === "constituents" ? "constituents" : "analytics"); const localizedBound = key === "historical" ? t("historicalPerformance") : key === "constituents" ? t("constituentPerformance") : t("finalAnalytics"); return <article key={key}>
         <span>{localizedLabel}</span>
-        <textarea aria-label={t("footnoteLabel", { label: localizedLabel })} value={footnotes[key]} maxLength={10_000} rows={4} disabled={frozen} onChange={(event) => setFootnotes((current) => ({ ...current, [key]: event.target.value }))} />
+        <MarkerTextarea aria-label={t("footnoteLabel", { label: localizedLabel })} value={footnotes[key]} maxLength={10_000} rows={4} disabled={frozen} onValueChange={(value) => setFootnotes((current) => ({ ...current, [key]: value }))} />
         <div>{t("boundTo", { module: localizedBound, version })}</div>
       </article>; })}
     </section>

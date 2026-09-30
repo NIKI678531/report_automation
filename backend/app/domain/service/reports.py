@@ -658,7 +658,7 @@ def create_language_variant(
         content["snapshot_id"] = cloned_snapshot.id
 
     content = page_one_presentation.retarget_footnote_styles(content)
-    if content.get("template_version") == "3033-v3":
+    if content.get("template_version") in {"3033-v3", "3033-v4"}:
         content = validate_document_content(content)
 
     document = ReportDocument(
@@ -1121,7 +1121,7 @@ def release_gate_checks(db: Session, report: Report, document: ReportDocument) -
 
 def finalize(db: Session, report: Report, expected_version: int, request_id: str) -> Report:
     from .documents import lock_report
-    from app.rendering.artifacts import assert_page_one_layout_fits
+    from app.rendering.artifacts import LAYOUT_POLICY_VERSION, assert_page_one_layout_fits
     from app.rendering.disclaimer import DisclaimerResourceError
 
     lock_report(db, report)
@@ -1136,7 +1136,7 @@ def finalize(db: Session, report: Report, expected_version: int, request_id: str
         if item.get("severity") == "BLOCKING" and item.get("status") != "PASSED"
     ]
     try:
-        assert_page_one_layout_fits(report, document.content)
+        layout_findings = assert_page_one_layout_fits(report, document.content) or ()
     except DisclaimerResourceError as error:
         raise HTTPException(status_code=503, detail={
             "error_code": "DISCLAIMER_RESOURCE_INVALID",
@@ -1145,6 +1145,16 @@ def finalize(db: Session, report: Report, expected_version: int, request_id: str
             "fix_hint": "Restore the approved versioned disclaimer resource before finalizing.",
         }) from error
     except PageOneLayoutOverflowError as error:
+        audit(db, "report.finalize_failed", "report", report.id, request_id, {
+            "document_version": document.version,
+            "document_checksum": document.checksum,
+            "template_version": document.template_version,
+            "design_token_version": document.content.get("design_token_version"),
+            "layout_policy_version": LAYOUT_POLICY_VERSION,
+            "error_code": error.error_code,
+            "layout_findings": [dict(item) for item in error.findings],
+        })
+        db.commit()
         raise HTTPException(status_code=422, detail={
             "error_code": error.error_code,
             "message": str(error),
@@ -1159,7 +1169,14 @@ def finalize(db: Session, report: Report, expected_version: int, request_id: str
     report.version += 1
     audit(db, "report.finalized", "report", report.id, request_id, {
         "document_version": document.version,
+        "document_checksum": document.checksum,
+        "template_version": document.template_version,
+        "design_token_version": document.content.get("design_token_version"),
+        "layout_policy_version": LAYOUT_POLICY_VERSION,
         "advisory_check_ids": [str(item.get("check_id") or "QUALITY_CHECK") for item in advisory_failures],
+        "layout_warning_findings": [
+            dict(item) for item in layout_findings if item.get("severity") == "WARNING"
+        ],
     })
     db.commit()
     db.refresh(report)

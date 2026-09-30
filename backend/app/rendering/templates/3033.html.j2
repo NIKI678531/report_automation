@@ -35,6 +35,9 @@
     .review-layout-content p { margin:0 0 .8mm; }
     .review-layout-content ul,.review-layout-content ol { margin:0; padding-left:5mm; }
     .review-layout-content li { margin-bottom:.5mm; }
+{%- if page_one and page_one.get('schema_version') == 2 %}
+    .review-layout-content :is(p,li,h2,h3,blockquote) { margin-top:var(--paragraph-space-before,0pt); margin-bottom:var(--paragraph-space-after,.8mm); }
+{%- endif %}
     .review-layout-block.align-left { text-align:left; }
     .review-layout-block.align-center { text-align:center; }
     .review-layout-block.align-right { text-align:right; }
@@ -52,6 +55,9 @@
     .review-layout-content [data-text-align="justify"] { text-align:justify; }
     [data-layout-id] { outline:1.2pt solid transparent; outline-offset:1mm; }
     [data-layout-selected="true"] { outline-color:var(--blue); background:rgba(38,96,173,.06); }
+{%- if page_one.get('schema_version') == 2 %}
+    [data-layout-warning="true"] { outline-color:#d48806; background:rgba(212,136,6,.08); }
+{%- endif %}
     [data-layout-overflow="true"] { outline-color:#f5222d; background:rgba(245,34,45,.08); }
 {%- endif %}
     ol { margin:0; padding-left:6mm; } li { padding-left:1mm; margin-bottom:1mm; }
@@ -61,6 +67,14 @@
     td { padding:1.5mm 2mm; }
     .history td { text-align:center; } .history td:first-child { text-align:left; }
     .footnote { position:absolute; left:13mm; right:13mm; bottom:20mm; font-size:8pt; line-height:1.2; }
+{%- if page_one and page_one.get('schema_version') == 2 %}
+    .opening-page-body { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); column-gap:0; align-content:start; }
+    .opening-page-body > h1,.opening-page-body > .review-layout { grid-column:1 / -1; }
+    .history-footnote-group { min-width:0; }
+    .history-footnote-group .history { margin-top:0; }
+    .history-footnote-group > .footnote { position:static; left:auto; right:auto; bottom:auto; margin-left:0; margin-right:0; }
+    .history-footnote-group > .footnote :is(p,li,h2,h3,blockquote) { margin-top:var(--paragraph-space-before,0pt); margin-bottom:var(--paragraph-space-after,0pt); }
+{%- endif %}
     .news-list { margin:0; padding-left:4mm; }
     .news-list li { margin:0 0 3mm; padding-left:2mm; }
     .news-title { color:var(--blue); font-weight:700; margin-bottom:1mm; }
@@ -144,7 +158,7 @@
 
 {% macro review_node(node) -%}
   {%- if node.kind == 'block' %}
-  {% set block = node.block %}<section class="review-layout-block align-{{ block.text_align|default('left', true) }}" data-block-id="{{ block.block_id }}"{% if page_one %} data-layout-id="{{ block.layout_id }}" style="margin-top:{{ block.vertical_nudge_pt }}pt"{% endif %}><h3>{{ block.title }}</h3><div class="review-layout-content">{{ block.content|safe }}</div></section>
+  {% set block = node.block %}{% set is_v4_block = page_one and page_one.get('schema_version') == 2 %}<section class="review-layout-block align-{{ block.text_align|default('left', true) }}" data-block-id="{{ block.block_id }}"{% if page_one %} data-layout-id="{{ block.layout_id }}" style="margin-top:{{ block.vertical_nudge_pt }}pt"{% endif %}><h3{% if is_v4_block %} style="font-family:{{ block.title_style.pdf_font_family }};font-size:{{ block.title_style.font_size_pt }}pt;color:{{ block.title_style.color }};font-weight:{{ '700' if block.title_style.bold else '400' }};font-style:{{ 'italic' if block.title_style.italic else 'normal' }};text-decoration:{{ 'underline' if block.title_style.underline else 'none' }};line-height:{{ block.title_style.line_height }};margin-top:{{ block.title_style.space_before_pt }}pt;margin-bottom:{{ block.title_style.space_after_pt }}pt;margin-left:{{ block.title_style.indent_em }}em;text-align:{{ block.title_style.text_align }}"{% endif %}>{{ block.title }}</h3><div class="review-layout-content"{% if is_v4_block %} style="font-family:{{ block.body_style.pdf_font_family }};font-size:{{ block.body_style.font_size_pt }}pt;color:{{ block.body_style.color }};font-weight:{{ '700' if block.body_style.bold else '400' }};font-style:{{ 'italic' if block.body_style.italic else 'normal' }};text-decoration:{{ 'underline' if block.body_style.underline else 'none' }};line-height:{{ block.body_style.line_height }};margin-left:{{ block.body_style.indent_em }}em;text-align:{{ block.body_style.text_align }};--paragraph-space-before:{{ block.body_style.space_before_pt }}pt;--paragraph-space-after:{{ block.body_style.space_after_pt }}pt"{% endif %}>{{ (block.rendered_content_html if is_v4_block else block.content)|safe }}</div></section>
   {%- elif node.kind == 'columns' %}
   <div class="review-flow-columns" data-review-flow="columns" style="grid-template-columns:repeat({{ node.w }},minmax(0,1fr))">{% for child in node.children %}<div class="review-flow-cell" style="grid-column:{{ child.x - node.x + 1 }} / span {{ child.w }}">{{ review_node(child) }}</div>{% endfor %}</div>
   {%- else %}
@@ -152,7 +166,47 @@
   {%- endif %}
 {%- endmacro %}
 
+{% macro historical_group(opening_page) -%}
+  {% set v4 = page_one and page_one.get('schema_version') == 2 %}
+  {% set historical = page_one.historical if page_one else {} %}
+  {% set footnote = page_one.footnote if page_one else {} %}
+  {% if v4 %}<div class="history-footnote-group" data-opening-page="{{ opening_page }}" style="grid-column:{{ historical.x + 1 }} / span {{ historical.w }};margin-top:{{ historical.offset_y_pt }}pt">{% endif %}
+    <section class="historical-module"{% if page_one %} data-layout-id="historical_performance"{% if not v4 %} style="margin-top:{{ historical.vertical_nudge_pt }}pt"{% endif %}{% endif %}><h2 class="center"{% if v4 %} style="font-family:{{ historical.title_style.pdf_font_family }};font-size:{{ historical.title_style.font_size_pt }}pt;color:{{ historical.title_style.color }};font-weight:{{ '700' if historical.title_style.bold else '400' }};font-style:{{ 'italic' if historical.title_style.italic else 'normal' }};text-decoration:{{ 'underline' if historical.title_style.underline else 'none' }};line-height:{{ historical.title_style.line_height }};margin-top:{{ historical.title_style.space_before_pt }}pt;margin-bottom:{{ historical.title_style.space_after_pt }}pt;text-align:{{ historical.title_style.text_align }}"{% endif %}>{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}</h2>
+    <div class="table-scroll" role="region" aria-label="{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}"><table class="history"{% if page_one and not v4 %} style="font-size:{{ historical.table_font_size_pt }}pt;line-height:{{ historical.table_line_height }}"{% endif %}><thead><tr>{% for label in ['', t('return_1m'), t('return_3m'), t('return_6m'), t('return_ytd')] %}<th{% if v4 %} style="font-family:{{ historical.header_style.pdf_font_family }};font-size:{{ historical.header_style.font_size_pt }}pt;color:{{ historical.header_style.color }};font-weight:{{ '700' if historical.header_style.bold else '400' }};font-style:{{ 'italic' if historical.header_style.italic else 'normal' }};text-decoration:{{ 'underline' if historical.header_style.underline else 'none' }};line-height:{{ historical.header_style.line_height }};padding-top:{{ historical.cell_padding_y_pt }}pt;padding-bottom:{{ historical.cell_padding_y_pt }}pt;text-align:{{ historical.header_style.text_align }}"{% endif %}>{{ label }}</th>{% endfor %}</tr></thead><tbody>{% for row in sections.historical_performance.get('rows', []) %}<tr>{% for value in [row.get('name', ''), row.get('return_1m')|pct(language_mode), row.get('return_3m')|pct(language_mode), row.get('return_6m')|pct(language_mode), row.get('return_ytd')|pct(language_mode)] %}<td{% if v4 %} style="font-family:{{ historical.body_style.pdf_font_family }};font-size:{{ historical.body_style.font_size_pt }}pt;color:{{ historical.body_style.color }};font-weight:{{ '700' if historical.body_style.bold else '400' }};font-style:{{ 'italic' if historical.body_style.italic else 'normal' }};text-decoration:{{ 'underline' if historical.body_style.underline else 'none' }};line-height:{{ historical.body_style.line_height }};padding-top:{{ historical.cell_padding_y_pt }}pt;padding-bottom:{{ historical.cell_padding_y_pt }}pt;text-align:{{ historical.body_style.text_align }}"{% endif %}>{{ value }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div></section>
+    {% if v4 %}<div class="footnote" data-layout-id="footnote:historical" style="margin-top:{{ footnote.gap_pt }}pt;font-family:{{ footnote.body_style.pdf_font_family }};font-size:{{ footnote.body_style.font_size_pt }}pt;color:{{ footnote.body_style.color }};font-weight:{{ '700' if footnote.body_style.bold else '400' }};font-style:{{ 'italic' if footnote.body_style.italic else 'normal' }};text-decoration:{{ 'underline' if footnote.body_style.underline else 'none' }};line-height:{{ footnote.body_style.line_height }};text-align:{{ footnote.body_style.text_align }};--paragraph-space-before:{{ footnote.body_style.space_before_pt }}pt;--paragraph-space-after:{{ footnote.body_style.space_after_pt }}pt">{{ footnote.rendered_content_html|safe }}</div>{% endif %}
+  {% if v4 %}</div>{% endif %}
+{%- endmacro %}
+
 <article class="report-document" data-layout-mode="{{ layout_mode }}" data-language="{{ language_mode }}">
+{% set v4 = page_one and page_one.get('schema_version') == 2 %}
+{% set historical_page = page_one.historical.page if v4 else 1 %}
+{% if v4 %}
+{% for opening_page in range(1, review_page_count + 1) %}
+{% if layout_mode == 'paged' or opening_page == 1 or opening_page == historical_page %}
+<section class="report-page" data-page="{{ opening_page }}" data-section-key="month_in_review" data-review-page-index="{{ opening_page - 1 }}">
+  {{ chrome(opening_page) }}
+  <main class="page-body{% if v4 %} opening-page-body{% endif %}" data-layout-safe-area="true">
+    {% if opening_page == 1 %}
+      <h1>{{ product_display_name }}</h1>
+      {% if enable_review_layout and sections.month_in_review.get('blocks') %}
+      <div class="review-layout">
+        <div class="review-flow-cell" style="grid-column:{{ review_layout.x + 1 }} / span {{ review_layout.w }}">{{ review_node(review_layout) }}</div>
+      </div>
+      {% else %}
+        <h2>{{ review_title }}</h2>
+        <p>{{ sections.month_in_review.get('summary', '') }}</p>
+        <div class="columns-2">
+          <section><h2>{{ t('key_drivers') }}</h2><ol>{% for item in sections.month_in_review.get('drivers', []) %}<li><strong>{{ item.get('title', '') }}</strong><br>{{ item.get('body', '') }}</li>{% endfor %}</ol></section>
+          <section><h2>{{ t('areas_to_monitor') }}</h2><ol>{% for item in sections.month_in_review.get('monitor', []) %}<li><strong>{{ item.get('title', '') }}</strong><br>{{ item.get('body', '') }}</li>{% endfor %}</ol><h2>{{ t('outlook') }}</h2><p>{{ sections.month_in_review.get('outlook', '') }}</p></section>
+        </div>
+      {% endif %}
+    {% endif %}
+    {% if opening_page == historical_page %}{{ historical_group(opening_page) }}{% endif %}
+  </main>
+</section>
+{% endif %}
+{% endfor %}
+{% else %}
 <section class="report-page" data-page="1" data-section-key="month_in_review">
   {{ chrome(1) }}
   <main class="page-body">
@@ -173,24 +227,30 @@
     <div class="table-scroll" role="region" aria-label="{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}"><table class="history"{% if page_one %} style="font-size:{{ page_one.historical.table_font_size_pt }}pt;line-height:{{ page_one.historical.table_line_height }}"{% endif %}><thead><tr><th></th><th>{{ t('return_1m') }}</th><th>{{ t('return_3m') }}</th><th>{{ t('return_6m') }}</th><th>{{ t('return_ytd') }}</th></tr></thead><tbody>{% for row in sections.historical_performance.get('rows', []) %}<tr><td>{{ row.get('name', '') }}</td><td>{{ row.get('return_1m')|pct(language_mode) }}</td><td>{{ row.get('return_3m')|pct(language_mode) }}</td><td>{{ row.get('return_6m')|pct(language_mode) }}</td><td>{{ row.get('return_ytd')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></div></section>
   </main><div class="footnote"{% if page_one %} data-layout-id="footnote:historical" style="bottom:{{ page_one.footnote.bottom_mm }}mm"{% endif %}>{% if page_one %}{% for paragraph in page_one.footnote.paragraphs %}<p data-paragraph-index="{{ paragraph.paragraph_index }}" style="font-size:{{ paragraph.font_size_pt }}pt;line-height:{{ paragraph.line_height }};text-align:{{ paragraph.text_align }}">{{ paragraph.text }}</p>{% endfor %}{% else %}{{ sections.footnotes.historical|default('') }}{% endif %}</div>
 </section>
+{% endif %}
 
-<section class="report-page" data-page="2" data-section-key="company_news">
-  {{ chrome(2) }}<main class="page-body"><h2>{{ t('company_news') }}</h2><ul class="news-list">{% for item in sections.company_news %}{% set source = item.get('source_name', '') %}{% if item.get('title') or item.get('summary') or source %}<li><div class="news-title">{{ item.get('title', '') }}</div>{% if source %}<div class="news-meta">{{ source }}</div>{% endif %}<div>{{ item.get('summary', '') }}</div></li>{% endif %}{% endfor %}</ul></main>
+{% set company_page = review_page_count + 1 if v4 else 2 %}
+{% set constituent_page = review_page_count + 2 if v4 else 3 %}
+{% set analytics_page = review_page_count + 3 if v4 else 4 %}
+{% set disclaimer_page = review_page_count + 4 if v4 else 5 %}
+
+<section class="report-page" data-page="{{ company_page }}" data-section-key="company_news">
+  {{ chrome(company_page) }}<main class="page-body"><h2>{{ t('company_news') }}</h2><ul class="news-list">{% for item in sections.company_news %}{% set source = item.get('source_name', '') %}{% if item.get('title') or item.get('summary') or source %}<li><div class="news-title">{{ item.get('title', '') }}</div>{% if source %}<div class="news-meta">{{ source }}</div>{% endif %}<div>{{ item.get('summary', '') }}</div></li>{% endif %}{% endfor %}</ul></main>
 </section>
 
-<section class="report-page" data-page="3" data-section-key="constituents">
-  {{ chrome(3) }}<main class="page-body"><h2 class="center constituent-title">{{ t('constituent_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</h2><p class="center">({{ t('next_rebalancing_date', date=doc.next_rebalancing_date|rebalancing_date(language_mode)) }})</p>
+<section class="report-page" data-page="{{ constituent_page }}" data-section-key="constituents">
+  {{ chrome(constituent_page) }}<main class="page-body"><h2 class="center constituent-title">{{ t('constituent_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</h2><p class="center">({{ t('next_rebalancing_date', date=doc.next_rebalancing_date|rebalancing_date(language_mode)) }})</p>
   <div class="table-scroll" role="region" aria-label="{{ t('constituent_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}"><table class="constituents"><colgroup><col style="width:6%"><col style="width:17%"><col style="width:12%"><col style="width:12%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:14%"></colgroup><thead><tr><th>{{ t('stock_code') }}</th><th>{{ t('stock_name') }}</th><th>{{ t('closing_price_hkd') }}</th><th>{{ t('weighting_pct') }}</th><th>{{ t('return_1m') }}</th><th>{{ t('return_3m') }}</th><th>{{ t('return_6m') }}</th><th>{{ t('return_ytd') }}</th></tr></thead><tbody>{% for row in sections.constituents %}<tr><td class="code">{{ row.get('security_code', '') }}</td><td class="name">{{ row.get('display_name', '') }}</td><td>{{ row.get('close_price')|price(language_mode) }}</td><td>{{ row.get('weight')|pct(language_mode) }}</td><td>{{ row.get('return_1m')|pct(language_mode) }}</td><td>{{ row.get('return_3m')|pct(language_mode) }}</td><td>{{ row.get('return_6m')|pct(language_mode) }}</td><td>{{ row.get('return_ytd')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></div></main><div class="footnote">{{ sections.footnotes.constituents|default('') }}</div>
 </section>
 
-<section class="report-page" data-page="4" data-section-key="analytics">
-  {{ chrome(4) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title title-split"><span>{{ t('top10', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</span><span>(%)</span></div><table class="top10">{% for row in sections.analytics.get('top10', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('weight')|pct(language_mode) }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">{{ t('sector_breakdown', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</div>{% if sector_chart.has_data %}<svg class="donut" role="img" aria-label="{{ sector_chart.alt_text }}" style="width:{{ sector_chart.box_mm }}mm;height:{{ sector_chart.box_mm }}mm" viewBox="0 0 {{ sector_chart.view_box }} {{ sector_chart.view_box }}"><title>{{ t('sector_breakdown', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</title><desc>{{ sector_chart.alt_text }}</desc>{% for row in sector_chart.rows %}<path class="donut-slice" data-sector-slice="{{ row.sector }}" d="{{ row.path }}" fill="{{ row.color }}" />{% endfor %}{% for row in sector_chart.rows %}{% if not row.inside %}<polyline class="donut-leader" points="{{ row.leader }}" />{% endif %}{% endfor %}{% for row in sector_chart.rows %}<text class="{{ 'donut-label' if row.inside else 'donut-label-outside' }}" data-sector-label="{{ row.sector }}" x="{{ row.label_x }}" y="{{ row.label_y }}" text-anchor="{{ row.label_anchor }}" dominant-baseline="middle">{{ row.display_value }}</text>{% endfor %}</svg><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}</span>{% endfor %}</div>{% else %}<div class="sector-empty" aria-hidden="true"></div>{% endif %}</section></div>
+<section class="report-page" data-page="{{ analytics_page }}" data-section-key="analytics">
+  {{ chrome(analytics_page) }}<main class="page-body"><div class="analytics-grid"><section><div class="blue-title title-split"><span>{{ t('top10', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</span><span>(%)</span></div><table class="top10">{% for row in sections.analytics.get('top10', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('weight')|pct(language_mode) }}</td></tr>{% endfor %}</table></section><section><div class="blue-title">{{ t('sector_breakdown', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</div>{% if sector_chart.has_data %}<svg class="donut" role="img" aria-label="{{ sector_chart.alt_text }}" style="width:{{ sector_chart.box_mm }}mm;height:{{ sector_chart.box_mm }}mm" viewBox="0 0 {{ sector_chart.view_box }} {{ sector_chart.view_box }}"><title>{{ t('sector_breakdown', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</title><desc>{{ sector_chart.alt_text }}</desc>{% for row in sector_chart.rows %}<path class="donut-slice" data-sector-slice="{{ row.sector }}" d="{{ row.path }}" fill="{{ row.color }}" />{% endfor %}{% for row in sector_chart.rows %}{% if not row.inside %}<polyline class="donut-leader" points="{{ row.leader }}" />{% endif %}{% endfor %}{% for row in sector_chart.rows %}<text class="{{ 'donut-label' if row.inside else 'donut-label-outside' }}" data-sector-label="{{ row.sector }}" x="{{ row.label_x }}" y="{{ row.label_y }}" text-anchor="{{ row.label_anchor }}" dominant-baseline="middle">{{ row.display_value }}</text>{% endfor %}</svg><div class="legend">{% for row in sector_chart.rows %}<span><i class="swatch" style="background:{{ row.color }}"></i>{{ row.sector }}</span>{% endfor %}</div>{% else %}<div class="sector-empty" aria-hidden="true"></div>{% endif %}</section></div>
   <div class="analytics-grid performers"><section><h2>{{ t('top_performers', month=doc.month_name) }}</h2><table class="simple"><thead><tr><th>{{ t('issuer') }}</th><th>{{ doc.month_name }} {{ t('return') }}</th></tr></thead><tbody>{% for row in sections.analytics.get('top', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('return')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></section><section><h2>{{ t('bottom_performers', month=doc.month_name) }}</h2><table class="simple"><thead><tr><th>{{ t('issuer') }}</th><th>{{ doc.month_name }} {{ t('return') }}</th></tr></thead><tbody>{% for row in sections.analytics.get('bottom', []) %}<tr><td>{{ row.get('display_issuer', '') }}</td><td>{{ row.get('return')|pct(language_mode) }}</td></tr>{% endfor %}</tbody></table></section></div>
   <section class="portfolio"><h2>{{ t('portfolio_analysis', product=doc.product_ticker|default(report.product_code ~ '.HK', true)) }}</h2><table>{% for row in portfolio_analysis %}<tr data-metric-code="{{ row.get('metric_code', '') }}"><td>{{ row.get('label', '') }}</td><td>{{ row.get('display_value', t('no_data')) }}</td></tr>{% endfor %}</table></section></main><div class="footnote">{{ sections.footnotes.analytics|default('') }}</div>
 </section>
 
-<section class="report-page disclaimer-page" data-page="5" data-section-key="disclaimer" data-disclaimer-version="{{ disclaimer.version }}" aria-labelledby="disclaimer-title">
-  {{ chrome(5, 'Monthly Commentary | ' ~ disclaimer_report_date_long) }}
+<section class="report-page disclaimer-page" data-page="{{ disclaimer_page }}" data-section-key="disclaimer" data-disclaimer-version="{{ disclaimer.version }}" aria-labelledby="disclaimer-title">
+  {{ chrome(disclaimer_page, 'Monthly Commentary | ' ~ disclaimer_report_date_long) }}
   <main class="page-body"><h2 id="disclaimer-title">{{ disclaimer.title }}</h2><div class="disclaimer-copy">{% for paragraph in disclaimer.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}<p class="disclaimer-issuer">{{ disclaimer.issuer }}</p></div></main>
 </section>
 </article>

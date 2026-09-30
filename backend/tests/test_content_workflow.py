@@ -1,4 +1,5 @@
 from conftest import download_report
+from copy import deepcopy
 import io
 from datetime import datetime, timezone
 
@@ -250,6 +251,86 @@ def test_review_layout_is_sanitized_versioned_and_rejects_overlap(client):
     assert rejected.json()["error_code"] == "PAGE_ONE_PRESENTATION_INVALID"
 
 
+def test_draft_preview_accepts_a_stale_version_without_persisting_it(client):
+    report = client.post(
+        "/api/v1/reports",
+        json={"product_code": "3033", "report_date": "2026-06-30"},
+    ).json()
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    stale_version = detail["latest_document"]["version"]
+    stale_content = deepcopy(detail["latest_document"]["content"])
+    stale_content["sections"]["month_in_review"]["blocks"][0]["content"] = (
+        "<p>Unsaved stale draft remains previewable.</p>"
+    )
+
+    concurrent_content = deepcopy(detail["latest_document"]["content"])
+    concurrent_content["sections"]["month_in_review"]["blocks"][0]["content"] = (
+        "<p>Concurrent saved edit.</p>"
+    )
+    saved = client.patch(
+        f"/api/v1/reports/{report['id']}/document",
+        json={"version": stale_version, "content": concurrent_content},
+    )
+    assert saved.status_code == 200, saved.text
+
+    preview = client.post(
+        f"/api/v1/reports/{report['id']}/preview",
+        json={"version": stale_version, "content": stale_content},
+    )
+
+    assert preview.status_code == 200, preview.text
+    assert "Unsaved stale draft remains previewable." in preview.text
+    assert client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"][
+        "version"
+    ] == saved.json()["version"]
+
+
+def test_review_title_content_spacing_is_saved_reloaded_and_previewed(client):
+    report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    content = detail["latest_document"]["content"]
+    expected_gaps = {
+        "review:summary": 0.0,
+        "review:drivers": 1.5,
+        "review:monitor": 3.0,
+        "review:outlook": 4.5,
+        "historical_performance": 6.0,
+    }
+    elements = content["presentation"]["page_one"]["elements"]
+    for element in elements:
+        if element["id"] in expected_gaps:
+            element["title_style"]["space_after_pt"] = expected_gaps[element["id"]]
+    next(element for element in elements if element["id"] == "review:summary")[
+        "title_style"
+    ]["font_size_pt"] = 5
+
+    saved = client.patch(
+        f"/api/v1/reports/{report['id']}/document",
+        json={"version": detail["latest_document"]["version"], "content": content},
+    )
+
+    assert saved.status_code == 200, saved.text
+    persisted = client.get(f"/api/v1/reports/{report['id']}").json()[
+        "latest_document"
+    ]["content"]
+    persisted_elements = {
+        element["id"]: element
+        for element in persisted["presentation"]["page_one"]["elements"]
+    }
+    for element_id, expected_gap in expected_gaps.items():
+        assert persisted_elements[element_id]["title_style"]["space_after_pt"] == expected_gap
+    assert persisted_elements["review:summary"]["title_style"]["font_size_pt"] == 14.04
+
+    preview = client.post(f"/api/v1/reports/{report['id']}/preview")
+    assert preview.status_code == 200, preview.text
+    for element_id, expected_gap in expected_gaps.items():
+        closing_tag = "</h3>" if element_id.startswith("review:") else "</h2>"
+        heading = preview.text.split(f'data-layout-id="{element_id}"', 1)[1].split(
+            closing_tag, 1
+        )[0]
+        assert f"margin-bottom:{expected_gap}pt" in heading
+
+
 def _review_layout_measurements(markup: str) -> dict:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -458,22 +539,63 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
 
     rebound = client.post(f"/api/v1/reports/{report['id']}/snapshots", json={"source_policy": "GOLDEN_FIXTURE"})
     assert rebound.status_code == 201, rebound.text
-    refreshed = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]["content"]
+    refreshed_detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    refreshed = refreshed_detail["latest_document"]["content"]
     assert refreshed["sections"]["month_in_review"]["display_title"] == "Editable Monthly Perspective"
     assert ">Editable Monthly Perspective</h3>" in client.post(f"/api/v1/reports/{report['id']}/preview").text
 
-    refreshed["sections"]["month_in_review"]["display_title"] = "   "
+    refreshed["sections"]["month_in_review"]["blocks"][0]["title"] = "   "
     rejected = client.patch(
         f"/api/v1/reports/{report['id']}/document",
-        json={"version": 3, "content": refreshed},
+        json={"version": refreshed_detail["latest_document"]["version"], "content": refreshed},
     )
     assert rejected.status_code == 422
-    assert rejected.json() == {
-        "error_code": "PAGE_ONE_PRESENTATION_INVALID",
-        "field": "sections.month_in_review.display_title",
-        "entity_id": "review:summary",
-        "message": "The Review module title is fixed for this template.",
-        "severity": "BLOCKING",
-        "fix_hint": "Keep page-one elements in the 12-column flow, use supported style roles, and do not overlap layout rectangles.",
-        "request_id": None,
-    }
+    assert rejected.json()["error_code"] == "REVIEW_BLOCK_TITLE_INVALID"
+    assert rejected.json()["field"] == "sections.month_in_review.blocks.0.title"
+
+
+def test_review_subtitle_and_title_body_indents_are_saved_and_previewed(client):
+    report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    first_save = client.patch(
+        f"/api/v1/reports/{report['id']}/document",
+        json={
+            "version": detail["latest_document"]["version"],
+            "content": detail["latest_document"]["content"],
+        },
+    )
+    assert first_save.status_code == 200, first_save.text
+    content = deepcopy(first_save.json()["content"])
+    summary = content["sections"]["month_in_review"]["blocks"][0]
+    summary["title"] = "Editable market subheading"
+    content["sections"]["month_in_review"]["title"] = summary["title"]
+    content["sections"]["month_in_review"]["display_title"] = summary["title"]
+    summary_element = next(
+        element
+        for element in content["presentation"]["page_one"]["elements"]
+        if element["id"] == "review:summary"
+    )
+    summary_element["title_style"]["indent_level"] = 1
+    summary_element["body_style"]["indent_level"] = 2
+
+    saved = client.patch(
+        f"/api/v1/reports/{report['id']}/document",
+        json={"version": first_save.json()["version"], "content": content},
+    )
+
+    assert saved.status_code == 200, saved.text
+    persisted = saved.json()["content"]
+    persisted_summary = persisted["sections"]["month_in_review"]["blocks"][0]
+    persisted_element = next(
+        element
+        for element in persisted["presentation"]["page_one"]["elements"]
+        if element["id"] == "review:summary"
+    )
+    assert persisted_summary["title"] == "Editable market subheading"
+    assert persisted_element["title_style"]["indent_level"] == 1
+    assert persisted_element["body_style"]["indent_level"] == 2
+    preview = client.post(f"/api/v1/reports/{report['id']}/preview")
+    assert preview.status_code == 200, preview.text
+    assert ">Editable market subheading</h3>" in preview.text
+    assert "margin-left:2em" in preview.text
+    assert "margin-left:4em" in preview.text

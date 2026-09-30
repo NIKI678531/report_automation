@@ -396,7 +396,7 @@ def render_html(
     tokens = _render_tokens(design_token_version)
     page_one = (
         page_one_presentation.resolve_for_render(document, tokens)
-        if template_version == "3033-v3"
+        if template_version in {"3033-v3", "3033-v4"}
         else None
     )
     if page_one is not None:
@@ -417,7 +417,8 @@ def render_html(
                 row["display_value"] = term("no_data", language_mode)
             else:
                 row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
-    return env.get_template("3033.html.j2").render(
+    template_name = "3033-v4.html.j2" if template_version == "3033-v4" else "3033.html.j2"
+    return env.get_template(template_name).render(
         report=report,
         doc=document,
         sections=sections,
@@ -435,6 +436,11 @@ def render_html(
         review_title=review_display_title(document),
         enable_review_layout=enable_review_layout,
         page_one=page_one,
+        review_page_count=(
+            int(page_one.get("review_page_count") or 1)
+            if page_one is not None
+            else 1
+        ),
         review_layout=(
             page_one["review_layout"]
             if page_one is not None

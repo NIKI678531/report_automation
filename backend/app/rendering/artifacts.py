@@ -4,11 +4,12 @@ import hashlib
 import math
 import re
 from dataclasses import dataclass
+from html import unescape
 from io import BytesIO
 from html.parser import HTMLParser
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Mapping
 
 from docx import Document
 from docx.enum.section import WD_SECTION
@@ -31,7 +32,8 @@ from app.domain.localization import (
 )
 from app.domain.metrics.final_analytics import normalize_portfolio_rows
 from app.domain.models import Report, ReportDocument
-from app.domain.page_one_presentation import page_one_presentation
+from app.domain.page_one_presentation import PageOneLayoutOverflowError, page_one_presentation
+from app.domain.rich_text import PARAGRAPH_INDENT_STEP_EM
 from .disclaimer import disclaimer_audit_fields, load_disclaimer
 from .html import (
     _render_tokens,
@@ -47,6 +49,8 @@ from .html import (
 
 
 MIME = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+MINOR_LAYOUT_OVERFLOW_TOLERANCE_MM = 3.0
+LAYOUT_POLICY_VERSION = "paged-layout-v2"
 
 
 def renderer_version_for(format_name: str) -> str:
@@ -247,6 +251,30 @@ def _set_run_vertical_position(run, points: float) -> None:
     properties.append(position)
 
 
+def _add_page_number_field(paragraph, fallback: int, font_name: str) -> None:
+    """Add an updateable Word PAGE field with a deterministic cached value."""
+
+    begin = paragraph.add_run()
+    begin_node = OxmlElement("w:fldChar")
+    begin_node.set(qn("w:fldCharType"), "begin")
+    begin._r.append(begin_node)
+    instruction = paragraph.add_run()
+    instruction_node = OxmlElement("w:instrText")
+    instruction_node.set(qn("xml:space"), "preserve")
+    instruction_node.text = " PAGE "
+    instruction._r.append(instruction_node)
+    separate = paragraph.add_run()
+    separate_node = OxmlElement("w:fldChar")
+    separate_node.set(qn("w:fldCharType"), "separate")
+    separate._r.append(separate_node)
+    cached = paragraph.add_run(str(fallback))
+    _set_run_font(cached, font_name, size=8, color=RGBColor(119, 119, 119))
+    end = paragraph.add_run()
+    end_node = OxmlElement("w:fldChar")
+    end_node.set(qn("w:fldCharType"), "end")
+    end._r.append(end_node)
+
+
 def _footer_table(
     section,
     page_number: int,
@@ -255,6 +283,8 @@ def _footer_table(
     *,
     footnote_paragraphs: list[dict[str, Any]] | None = None,
     footnote_bottom_nudge_pt: float = 0,
+    dynamic_page_number: bool = False,
+    profile_page_number: int | None = None,
 ) -> None:
     footer = section.footer
     footer.is_linked_to_previous = False
@@ -262,8 +292,9 @@ def _footer_table(
         table._element.getparent().remove(table._element)
     anchor = footer.paragraphs[0]
     _clear_paragraph(anchor)
-    footnote_spacing_after = {1: 5.25, 3: 3.5, 4: 3.6}.get(page_number, 2.5)
-    footnote_line_spacing = Pt(13.7) if page_number == 3 and footnote else 1.0
+    profile_page_number = profile_page_number or page_number
+    footnote_spacing_after = {1: 5.25, 3: 3.5, 4: 3.6}.get(profile_page_number, 2.5)
+    footnote_line_spacing = Pt(13.7) if profile_page_number == 3 and footnote else 1.0
     if footnote_paragraphs is not None and footnote:
         for index, item in enumerate(footnote_paragraphs):
             paragraph = anchor if index == 0 else footer.add_paragraph()
@@ -335,7 +366,10 @@ def _footer_table(
     number_paragraph = number_row.cells[0].paragraphs[0]
     _clear_paragraph(number_paragraph)
     _format_paragraph(number_paragraph, alignment=WD_ALIGN_PARAGRAPH.RIGHT, after=0, line_spacing=Pt(8.5))
-    _set_run_font(number_paragraph.add_run(str(page_number)), font_name, size=8, color=RGBColor(119, 119, 119))
+    if dynamic_page_number:
+        _add_page_number_field(number_paragraph, page_number, font_name)
+    else:
+        _set_run_font(number_paragraph.add_run(str(page_number)), font_name, size=8, color=RGBColor(119, 119, 119))
 
 
 def _page_setup(
@@ -349,13 +383,16 @@ def _page_setup(
     footnote_paragraphs: list[dict[str, Any]] | None = None,
     footnote_bottom_nudge_pt: float = 0,
     banner: dict | None = None,
+    dynamic_page_number: bool = False,
+    profile_page_number: int | None = None,
 ) -> None:
     page = tokens["page"]
     deep = str(tokens["color"]["brandDeep"]).lstrip("#").upper()
     font_name = _font_name(tokens, language_mode)
     section.page_width, section.page_height = Cm(21), Cm(29.7)
+    profile_page_number = profile_page_number or page_number
     reference_top_margin_mm = {1: 9.88, 2: 12.87, 3: 14.38, 4: 15.25}.get(
-        page_number, float(page["marginTopMm"])
+        profile_page_number, float(page["marginTopMm"])
     )
     section.top_margin = Cm(reference_top_margin_mm / 10)
     section.right_margin = Cm(float(page["marginRightMm"]) / 10)
@@ -395,6 +432,8 @@ def _page_setup(
         font_name,
         footnote_paragraphs=footnote_paragraphs,
         footnote_bottom_nudge_pt=footnote_bottom_nudge_pt,
+        dynamic_page_number=dynamic_page_number,
+        profile_page_number=profile_page_number,
     )
 
 
@@ -424,6 +463,9 @@ def _table(
     header_height_cm: float | None = None,
     row_height_cm: float | None = None,
     line_height: float | None = None,
+    header_style: dict[str, Any] | None = None,
+    body_style: dict[str, Any] | None = None,
+    cell_padding_y_pt: float | None = None,
 ):
     table = parent.add_table(rows=1 if headers is not None else 0, cols=len(widths))
     _set_table_geometry(table, widths)
@@ -440,24 +482,43 @@ def _table(
             cell.text = text
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
             _shade(cell, blue)
-            _set_cell_margins(cell, top=75, right=55, bottom=75, left=55)
+            header_padding = (
+                int(round(float(cell_padding_y_pt) * 20))
+                if cell_padding_y_pt is not None else 75
+            )
+            _set_cell_margins(cell, top=header_padding, right=55, bottom=header_padding, left=55)
             _set_cell_borders(cell, color="FFFFFF", size=5)
             paragraph = cell.paragraphs[0]
-            resolved_header_size = header_font_size or font_size
+            resolved_header_size = float(
+                (header_style or {}).get("font_size_pt") or header_font_size or font_size
+            )
+            resolved_header_line_height = float(
+                (header_style or {}).get("line_height") or line_height or 1.0
+            )
+            resolved_header_alignment = {
+                "left": WD_ALIGN_PARAGRAPH.LEFT,
+                "right": WD_ALIGN_PARAGRAPH.RIGHT,
+                "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+            }.get(str((header_style or {}).get("text_align") or "center"), WD_ALIGN_PARAGRAPH.CENTER)
             _format_paragraph(
                 paragraph,
-                alignment=WD_ALIGN_PARAGRAPH.CENTER,
-                line_spacing=Pt(resolved_header_size * line_height)
-                if line_height is not None else 1.0,
+                alignment=resolved_header_alignment,
+                line_spacing=Pt(resolved_header_size * resolved_header_line_height)
+                if header_style is not None or line_height is not None else 1.0,
             )
             for run in paragraph.runs:
                 _set_run_font(
                     run,
-                    font_name,
+                    str((header_style or {}).get("font_family") or font_name),
                     size=resolved_header_size,
-                    bold=True,
-                    color=RGBColor(255, 255, 255),
+                    bold=bool(header_style.get("bold", True)) if header_style else True,
+                    color=RGBColor.from_string(
+                        str((header_style or {}).get("color") or "#FFFFFF").lstrip("#").upper()
+                    ),
                 )
+                if header_style:
+                    run.italic = bool(header_style.get("italic", False))
+                    run.underline = bool(header_style.get("underline", False))
     for values in rows:
         row = table.add_row()
         _prevent_row_split(row)
@@ -468,7 +529,11 @@ def _table(
             cell = row.cells[index]
             cell.text = text
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-            _set_cell_margins(cell, top=35, right=55, bottom=35, left=55)
+            body_padding = (
+                int(round(float(cell_padding_y_pt) * 20))
+                if cell_padding_y_pt is not None else 35
+            )
+            _set_cell_margins(cell, top=body_padding, right=55, bottom=body_padding, left=55)
             if body_borders:
                 _set_cell_borders(cell, color="595959", size=3)
             else:
@@ -480,14 +545,37 @@ def _table(
                 color = RGBColor(255, 255, 255)
             paragraph = cell.paragraphs[0]
             alignment = alignments[index] if alignments else WD_ALIGN_PARAGRAPH.LEFT
+            if body_style:
+                alignment = {
+                    "center": WD_ALIGN_PARAGRAPH.CENTER,
+                    "right": WD_ALIGN_PARAGRAPH.RIGHT,
+                    "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+                }.get(str(body_style.get("text_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT)
+            resolved_body_size = float((body_style or {}).get("font_size_pt") or font_size)
+            resolved_body_line_height = float(
+                (body_style or {}).get("line_height") or line_height or 1.0
+            )
             _format_paragraph(
                 paragraph,
                 alignment=alignment,
-                line_spacing=Pt(font_size * line_height)
-                if line_height is not None else 1.0,
+                line_spacing=Pt(resolved_body_size * resolved_body_line_height)
+                if body_style is not None or line_height is not None else 1.0,
             )
             for run in paragraph.runs:
-                _set_run_font(run, font_name, size=font_size, color=color)
+                if body_style and not (blue_first and index == 0):
+                    color = RGBColor.from_string(
+                        str(body_style.get("color") or "#000000").lstrip("#").upper()
+                    )
+                _set_run_font(
+                    run,
+                    str((body_style or {}).get("font_family") or font_name),
+                    size=resolved_body_size,
+                    bold=bool(body_style.get("bold", False)) if body_style else None,
+                    color=color,
+                )
+                if body_style:
+                    run.italic = bool(body_style.get("italic", False))
+                    run.underline = bool(body_style.get("underline", False))
     # Rows appended after the initial grid need their tcW values materialized as well.
     _set_table_geometry(table, widths)
     return table
@@ -545,15 +633,17 @@ class _RichTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.blocks: list[
-            tuple[list[tuple[str, bool, bool]], dict[str, str], str | None]
+            tuple[list[tuple[str, bool, bool, bool, dict[str, str]]], dict[str, str], str | None]
         ] = []
-        self.current: list[tuple[str, bool, bool]] = []
+        self.current: list[tuple[str, bool, bool, bool, dict[str, str]]] = []
         self.current_style: dict[str, str] = {}
         self.current_marker: str | None = None
         self.list_stack: list[dict[str, int | str]] = []
         self.list_item_depth = 0
         self.bold_depth = 0
         self.italic_depth = 0
+        self.underline_depth = 0
+        self.inline_style_stack: list[dict[str, str]] = []
 
     def _flush(self) -> None:
         while self.current and not self.current[-1][0]:
@@ -580,7 +670,10 @@ class _RichTextExtractor(HTMLParser):
         elif tag in {"p", "h2", "h3", "blockquote"}:
             if self.list_item_depth:
                 if self.current and self.current[-1][0] != "\n":
-                    self.current.append(("\n", self.bold_depth > 0, self.italic_depth > 0))
+                    self.current.append((
+                        "\n", self.bold_depth > 0, self.italic_depth > 0,
+                        self.underline_depth > 0, self._inline_style(),
+                    ))
                 if attrs and not self.current_style:
                     self.current_style = {str(key): str(value or "") for key, value in attrs}
             else:
@@ -590,19 +683,40 @@ class _RichTextExtractor(HTMLParser):
             self.bold_depth += 1
         elif tag in {"em", "i"}:
             self.italic_depth += 1
+        elif tag == "u":
+            self.underline_depth += 1
+        elif tag == "span":
+            self.inline_style_stack.append({str(key): str(value or "") for key, value in attrs})
         elif tag == "br":
-            self.current.append(("\n", self.bold_depth > 0, self.italic_depth > 0))
+            self.current.append((
+                "\n", self.bold_depth > 0, self.italic_depth > 0,
+                self.underline_depth > 0, self._inline_style(),
+            ))
+
+    def _inline_style(self) -> dict[str, str]:
+        merged: dict[str, str] = {}
+        for item in self.inline_style_stack:
+            merged.update(item)
+        return merged
 
     def handle_data(self, data: str) -> None:
         text = data.replace("\xa0", " ")
         if text:
-            self.current.append((text, self.bold_depth > 0, self.italic_depth > 0))
+            self.current.append((
+                text, self.bold_depth > 0, self.italic_depth > 0,
+                self.underline_depth > 0, self._inline_style(),
+            ))
 
     def handle_endtag(self, tag: str) -> None:
         if tag in {"strong", "b"}:
             self.bold_depth = max(0, self.bold_depth - 1)
         elif tag in {"em", "i"}:
             self.italic_depth = max(0, self.italic_depth - 1)
+        elif tag == "u":
+            self.underline_depth = max(0, self.underline_depth - 1)
+        elif tag == "span":
+            if self.inline_style_stack:
+                self.inline_style_stack.pop()
         elif tag == "li":
             self._flush()
             self.list_item_depth = max(0, self.list_item_depth - 1)
@@ -626,41 +740,94 @@ def _append_rich_text(
     size: float,
     alignment,
     style_roles: dict[str, Any] | None = None,
+    default_style: dict[str, Any] | None = None,
 ) -> None:
     parser = _RichTextExtractor()
     parser.feed(value)
     parser.close()
     defaults = ((style_roles or {}).get("defaults") or {})
+    default_style = default_style or {}
+
+    def declarations(attributes: dict[str, str]) -> dict[str, str]:
+        values = dict(attributes)
+        for declaration in attributes.get("style", "").split(";"):
+            key, separator, value = declaration.partition(":")
+            if separator:
+                values[key.strip().lower()] = value.strip()
+        return values
+
+    def numeric(values: dict[str, str], *keys: str, fallback: float) -> float:
+        for key in keys:
+            raw = values.get(key)
+            if raw is None:
+                continue
+            match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*(?:pt)?\s*", raw)
+            if match:
+                return float(match.group(1))
+        return fallback
+
     for segments, attributes, marker in parser.blocks:
+        block_values = declarations(attributes)
         paragraph = parent.add_paragraph()
         resolved_alignment = {
             "left": WD_ALIGN_PARAGRAPH.LEFT,
             "center": WD_ALIGN_PARAGRAPH.CENTER,
             "right": WD_ALIGN_PARAGRAPH.RIGHT,
             "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
-        }.get(attributes.get("data-text-align", ""), alignment)
+        }.get(
+            block_values.get("data-text-align") or block_values.get("text-align")
+            or str(default_style.get("text_align") or ""),
+            alignment,
+        )
         resolved_line_height = float(
             ((style_roles or {}).get("line_height") or {}).get(
-                attributes.get("data-line-height-role"),
+                block_values.get("data-line-height-role"),
                 defaults.get("review_line_height", 1.0),
             )
         )
+        resolved_line_height = numeric(
+            block_values,
+            "data-line-height",
+            "line-height",
+            fallback=float(default_style.get("line_height") or resolved_line_height),
+        )
         resolved_size = float(
             ((style_roles or {}).get("font_size_pt") or {}).get(
-                attributes.get("data-font-size-role"), size
+                block_values.get("data-font-size-role"), size
             )
+        )
+        resolved_size = numeric(
+            block_values,
+            "data-font-size-pt",
+            "font-size",
+            fallback=float(default_style.get("font_size_pt") or resolved_size),
         )
         _format_paragraph(
             paragraph,
             alignment=resolved_alignment,
-            after=1.5,
+            before=numeric(
+                block_values, "data-space-before-pt", "margin-top",
+                fallback=float(default_style.get("space_before_pt") or 0),
+            ),
+            after=numeric(
+                block_values, "data-space-after-pt", "margin-bottom",
+                fallback=float(default_style.get("space_after_pt") or 1.5),
+            ),
             # Word interprets a numeric value as a multiple of its font-dependent "single"
             # line height, which is taller than CSS font-size * line-height. Use exact points so
             # the DOCX pagination follows the same 1.0/1.2/1.4 contract as HTML/PDF.
             line_spacing=Pt(resolved_size * resolved_line_height),
         )
+        indent_level = (
+            int(default_style.get("indent_level") or 0)
+            + int(block_values.get("data-indent-level") or 0)
+        )
+        base_indent_pt = Cm(0.45).pt if marker else 0.0
+        if indent_level or marker:
+            paragraph.paragraph_format.left_indent = Pt(
+                base_indent_pt + indent_level * PARAGRAPH_INDENT_STEP_EM * resolved_size
+            )
         if marker:
-            paragraph.paragraph_format.left_indent = Cm(0.45)
             paragraph.paragraph_format.first_line_indent = Cm(-0.35)
             _set_run_font(
                 paragraph.add_run(marker),
@@ -668,16 +835,42 @@ def _append_rich_text(
                 size=resolved_size,
                 color=RGBColor(0, 0, 0),
             )
-        for text, bold, italic in segments:
+        for text, bold, italic, underline, inline_attributes in segments:
+            inline_values = declarations(inline_attributes)
+            run_size = numeric(
+                inline_values,
+                "data-font-size-pt",
+                "font-size",
+                fallback=resolved_size,
+            )
+            run_font = str(
+                inline_values.get("data-requested-font")
+                or inline_values.get("data-font-family")
+                or inline_values.get("font-family")
+                or default_style.get("font_family")
+                or font_name
+            ).strip().strip('"').strip("'")
+            run_color = str(
+                inline_values.get("data-color")
+                or inline_values.get("color")
+                or default_style.get("color")
+                or "#000000"
+            ).lstrip("#").upper()
             run = paragraph.add_run(text)
             _set_run_font(
                 run,
-                font_name,
-                size=resolved_size,
-                bold=bold,
-                color=RGBColor(0, 0, 0),
+                run_font,
+                size=run_size,
+                bold=bold or bool(default_style.get("bold", False)),
+                color=RGBColor.from_string(run_color),
             )
-            run.italic = italic
+            run.italic = italic or bool(default_style.get("italic", False))
+            run.underline = (
+                underline
+                or inline_values.get("data-underline") == "true"
+                or "underline" in inline_values.get("text-decoration", "").casefold()
+                or bool(default_style.get("underline", False))
+            )
 
 
 def _remove_initial_empty_paragraph(cell) -> None:
@@ -694,6 +887,8 @@ def _review_block(
     deep: RGBColor,
     style_roles: dict[str, Any] | None = None,
 ) -> None:
+    title_style = block.get("title_style") if isinstance(block.get("title_style"), dict) else {}
+    body_style = block.get("body_style") if isinstance(block.get("body_style"), dict) else {}
     heading = next(
         (paragraph for paragraph in reversed(parent.paragraphs) if not paragraph.text),
         None,
@@ -706,26 +901,63 @@ def _review_block(
         # Word does not accept negative paragraph spacing. Negative nudges are fully represented
         # by the canonical HTML/PDF preview and its collision preflight; DOCX consumes as much of
         # the preceding gap as its flow model can express without producing an invalid document.
-        before=max(0.0, 2 + float(block.get("vertical_nudge_pt") or 0)),
-        after=3,
-        line_spacing=1.0,
+        before=max(
+            0.0,
+            float(title_style.get("space_before_pt") or 2)
+            + float(block.get("vertical_nudge_pt") or 0),
+        ),
+        after=float(
+            title_style["space_after_pt"]
+            if title_style.get("space_after_pt") is not None
+            else 3
+        ),
+        line_spacing=Pt(
+            float(title_style.get("font_size_pt") or 14)
+            * float(title_style.get("line_height") or 1.0)
+        ) if title_style else 1.0,
         keep_with_next=True,
     )
     heading_run = heading.add_run(str(block.get("title") or ""))
-    _set_run_font(heading_run, font_name, size=14, bold=True, color=deep)
+    _set_run_font(
+        heading_run,
+        str(title_style.get("font_family") or font_name),
+        size=float(title_style.get("font_size_pt") or 14),
+        bold=bool(title_style.get("bold", True)),
+        color=RGBColor.from_string(
+            str(title_style.get("color") or f"#{deep}").lstrip("#").upper()
+        ),
+    )
+    if title_style:
+        heading_run.italic = bool(title_style.get("italic", False))
+        heading_run.underline = bool(title_style.get("underline", False))
     alignment = {
         "center": WD_ALIGN_PARAGRAPH.CENTER,
         "right": WD_ALIGN_PARAGRAPH.RIGHT,
         "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
-    }.get(str(block.get("text_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT)
+    }.get(
+        str(title_style.get("text_align") or block.get("text_align") or "left"),
+        WD_ALIGN_PARAGRAPH.LEFT,
+    )
     heading.alignment = alignment
+    title_indent_level = int(title_style.get("indent_level") or 0)
+    if title_indent_level:
+        heading.paragraph_format.left_indent = Pt(
+            title_indent_level
+            * PARAGRAPH_INDENT_STEP_EM
+            * float(title_style.get("font_size_pt") or 14)
+        )
     _append_rich_text(
         parent,
-        str(block.get("content") or ""),
-        font_name=font_name,
-        size=font_size,
-        alignment=alignment,
+        str(block.get("rendered_content_html") or block.get("content") or ""),
+        font_name=str(body_style.get("font_family") or font_name),
+        size=float(body_style.get("font_size_pt") or font_size),
+        alignment={
+            "center": WD_ALIGN_PARAGRAPH.CENTER,
+            "right": WD_ALIGN_PARAGRAPH.RIGHT,
+            "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+        }.get(str(body_style.get("text_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT),
         style_roles=style_roles,
+        default_style=body_style,
     )
 
 
@@ -999,13 +1231,148 @@ def _simple_rule_table(parent, headers: list[str], rows: list[list[str]], *, wid
             _set_run_font(p.add_run(text), font_name, size=10)
 
 
+def _render_historical_docx(
+    document: Document,
+    *,
+    content: dict[str, Any],
+    page_one: dict[str, Any] | None,
+    language_mode: str,
+    benchmark_name: str,
+    usable_width: int,
+    font_name: str,
+    blue_hex: str,
+    deep: RGBColor,
+) -> None:
+    """Render the indivisible History/footnote group on its assigned opening page."""
+
+    is_v4 = bool(page_one and page_one.get("schema_version") == 2)
+    historical = page_one["historical"] if page_one else {}
+    content_parent = document
+    content_width = usable_width
+    if is_v4:
+        group_x = int(historical.get("x") or 0)
+        group_w = int(historical.get("w") or 12)
+        if group_x != 0 or group_w != 12:
+            column_widths = [usable_width // 12] * 12
+            column_widths[-1] += usable_width - sum(column_widths)
+            wrapper = document.add_table(rows=1, cols=12)
+            _set_table_geometry(wrapper, column_widths)
+            _prevent_row_split(wrapper.rows[0])
+            for cell in wrapper.rows[0].cells:
+                _set_cell_margins(cell, top=0, right=0, bottom=0, left=0)
+            content_parent = wrapper.rows[0].cells[group_x].merge(
+                wrapper.rows[0].cells[group_x + group_w - 1]
+            )
+            content_width = sum(column_widths[group_x:group_x + group_w])
+    title_style = historical.get("title_style") if is_v4 else {}
+    heading_text = term(
+        "historical_performance",
+        language_mode,
+        product=content["product_ticker"],
+        benchmark=benchmark_name,
+    )
+    if content_parent is document:
+        history_heading = document.add_paragraph(style="Heading 1")
+    else:
+        history_heading = content_parent.paragraphs[0]
+        _clear_paragraph(history_heading)
+        history_heading.style = "Heading 1"
+    history_heading.add_run(heading_text)
+    title_size = float(title_style.get("font_size_pt") or 14)
+    _format_paragraph(
+        history_heading,
+        alignment={
+            "left": WD_ALIGN_PARAGRAPH.LEFT,
+            "right": WD_ALIGN_PARAGRAPH.RIGHT,
+            "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+        }.get(str(title_style.get("text_align") or "center"), WD_ALIGN_PARAGRAPH.CENTER),
+        before=max(
+            0.0,
+            float(title_style.get("space_before_pt") or 4)
+            + float(historical.get("offset_y_pt") or historical.get("vertical_nudge_pt") or 0),
+        ),
+        after=float(
+            title_style["space_after_pt"]
+            if title_style.get("space_after_pt") is not None
+            else 4
+        ),
+        line_spacing=Pt(title_size * float(title_style.get("line_height") or 1.0))
+        if is_v4 else 1.0,
+        keep_with_next=True,
+    )
+    if is_v4:
+        for run in history_heading.runs:
+            _set_run_font(
+                run,
+                str(title_style.get("font_family") or font_name),
+                size=title_size,
+                bold=bool(title_style.get("bold", True)),
+                color=RGBColor.from_string(
+                    str(title_style.get("color") or f"#{deep}").lstrip("#").upper()
+                ),
+            )
+            run.italic = bool(title_style.get("italic", False))
+            run.underline = bool(title_style.get("underline", False))
+
+    history = content["sections"]["historical_performance"]["rows"]
+    history_font_size = float(historical.get("table_font_size_pt") or 10)
+    history_line_height = float(historical.get("table_line_height") or 1.2)
+    history_height_scale = history_font_size * history_line_height / (10.0 * 1.2)
+    _table(
+        content_parent,
+        [
+            "",
+            term("return_1m", language_mode),
+            term("return_3m", language_mode),
+            term("return_6m", language_mode),
+            term("return_ytd", language_mode),
+        ],
+        [[
+            row["name"],
+            pct(row["return_1m"], language_mode),
+            pct(row["return_3m"], language_mode),
+            pct(row["return_6m"], language_mode),
+            pct(row["return_ytd"], language_mode),
+        ] for row in history],
+        widths=[int(content_width * ratio) for ratio in (0.20, 0.20, 0.20, 0.20)]
+        + [content_width - int(content_width * 0.80)],
+        font_name=font_name,
+        blue=blue_hex,
+        font_size=history_font_size,
+        header_font_size=history_font_size,
+        alignments=[WD_ALIGN_PARAGRAPH.LEFT] + [WD_ALIGN_PARAGRAPH.CENTER] * 4,
+        header_height_cm=None if is_v4 else 0.78 * history_height_scale,
+        row_height_cm=None if is_v4 else 0.62 * history_height_scale,
+        line_height=history_line_height if page_one else None,
+        header_style=historical.get("header_style") if is_v4 else None,
+        body_style=historical.get("body_style") if is_v4 else None,
+        cell_padding_y_pt=float(historical.get("cell_padding_y_pt") or 0)
+        if is_v4 else None,
+    )
+    if is_v4:
+        footnote = page_one["footnote"]
+        footnote_style = dict(footnote["body_style"])
+        footnote_style["space_before_pt"] = (
+            float(footnote_style.get("space_before_pt") or 0)
+            + float(footnote.get("gap_pt") or 0)
+        )
+        _append_rich_text(
+            content_parent,
+            str(footnote.get("rendered_content_html") or footnote.get("content_html") or ""),
+            font_name=str(footnote_style.get("font_family") or font_name),
+            size=float(footnote_style.get("font_size_pt") or 8),
+            alignment=WD_ALIGN_PARAGRAPH.LEFT,
+            default_style=footnote_style,
+        )
+
+
 def render_docx(report: Report, content: dict, destination: Path) -> None:
     language_mode = str(content.get("language_mode") or report.language_mode or "EN")
     content = localized_document(content, language_mode)
     tokens = _render_tokens(str(content.get("design_token_version") or "3033-v1"))
     page_one = (
         page_one_presentation.resolve_for_render(content, tokens)
-        if content.get("template_version") == "3033-v3"
+        if content.get("template_version") in {"3033-v3", "3033-v4"}
         else None
     )
     if page_one is not None:
@@ -1023,12 +1390,23 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _configure_styles(document, tokens, language_mode)
     review = sections["month_in_review"]
     footnotes = sections.get("footnotes") or {}
+    is_v4 = bool(page_one and page_one.get("schema_version") == 2)
+    review_page_count = int(page_one.get("review_page_count") or 1) if is_v4 else 1
+    historical_page = int(page_one["historical"].get("page") or 1) if is_v4 else 1
+    if is_v4:
+        update_fields = document.settings.element.find(qn("w:updateFields"))
+        if update_fields is None:
+            update_fields = OxmlElement("w:updateFields")
+            document.settings.element.append(update_fields)
+        update_fields.set(qn("w:val"), "true")
     _page_setup(
         document.sections[0], 1, report, language_mode, tokens,
-        footnote=str(footnotes.get("historical") or ""),
-        footnote_paragraphs=page_one["footnote"]["paragraphs"] if page_one else None,
-        footnote_bottom_nudge_pt=page_one["footnote"]["bottom_nudge_pt"] if page_one else 0,
+        footnote="" if is_v4 else str(footnotes.get("historical") or ""),
+        footnote_paragraphs=(page_one["footnote"]["paragraphs"] if page_one and not is_v4 else None),
+        footnote_bottom_nudge_pt=(page_one["footnote"]["bottom_nudge_pt"] if page_one and not is_v4 else 0),
         banner=banner,
+        dynamic_page_number=is_v4,
+        profile_page_number=1,
     )
     usable_width = _usable_width_twips(document.sections[0])
     title = document.add_heading((content.get("terminology_overrides") or {}).get("product_name") or report.product_name, 0)
@@ -1060,44 +1438,50 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     else:
         _legacy_review(document, content, language_mode, usable_width, font_name, deep)
     benchmark_name = (content.get("terminology_overrides") or {}).get("benchmark_name") or content["benchmark_name"]
-    history_heading = document.add_heading(term("historical_performance", language_mode, product=content["product_ticker"], benchmark=benchmark_name), 1)
-    _format_paragraph(
-        history_heading,
-        alignment=WD_ALIGN_PARAGRAPH.CENTER,
-        before=max(
-            0.0,
-            4 + (float(page_one["historical"]["vertical_nudge_pt"]) if page_one else 0),
-        ),
-        after=4,
-        keep_with_next=True,
-    )
-    history = sections["historical_performance"]["rows"]
-    history_font_size = (
-        float(page_one["historical"]["table_font_size_pt"])
-        if page_one else 10.0
-    )
-    history_line_height = (
-        float(page_one["historical"]["table_line_height"])
-        if page_one else 1.2
-    )
-    history_height_scale = history_font_size * history_line_height / (10.0 * 1.2)
-    _table(
-        document,
-        ["", term("return_1m", language_mode), term("return_3m", language_mode), term("return_6m", language_mode), term("return_ytd", language_mode)],
-        [[x["name"], pct(x["return_1m"], language_mode), pct(x["return_3m"], language_mode), pct(x["return_6m"], language_mode), pct(x["return_ytd"], language_mode)] for x in history],
-        widths=[int(usable_width * ratio) for ratio in (0.20, 0.20, 0.20, 0.20)] + [usable_width - int(usable_width * 0.80)],
-        font_name=font_name,
-        blue=blue_hex,
-        font_size=history_font_size,
-        header_font_size=history_font_size,
-        alignments=[WD_ALIGN_PARAGRAPH.LEFT] + [WD_ALIGN_PARAGRAPH.CENTER] * 4,
-        header_height_cm=0.78 * history_height_scale,
-        row_height_cm=0.62 * history_height_scale,
-        line_height=history_line_height if page_one else None,
-    )
+    if historical_page == 1:
+        _render_historical_docx(
+            document,
+            content=content,
+            page_one=page_one,
+            language_mode=language_mode,
+            benchmark_name=benchmark_name,
+            usable_width=usable_width,
+            font_name=font_name,
+            blue_hex=blue_hex,
+            deep=deep,
+        )
+    if is_v4:
+        for opening_page in range(2, review_page_count + 1):
+            continuation = document.add_section(WD_SECTION.NEW_PAGE)
+            _page_setup(
+                continuation,
+                opening_page,
+                report,
+                language_mode,
+                tokens,
+                banner=banner,
+                dynamic_page_number=True,
+                profile_page_number=2,
+            )
+            if opening_page == historical_page:
+                _render_historical_docx(
+                    document,
+                    content=content,
+                    page_one=page_one,
+                    language_mode=language_mode,
+                    benchmark_name=benchmark_name,
+                    usable_width=_usable_width_twips(continuation),
+                    font_name=font_name,
+                    blue_hex=blue_hex,
+                    deep=deep,
+                )
 
+    company_page_number = review_page_count + 1
     page2 = document.add_section(WD_SECTION.NEW_PAGE)
-    _page_setup(page2, 2, report, language_mode, tokens, banner=banner)
+    _page_setup(
+        page2, company_page_number, report, language_mode, tokens, banner=banner,
+        dynamic_page_number=is_v4, profile_page_number=2,
+    )
     news_heading = document.add_heading(term("company_news", language_mode), 1)
     _format_paragraph(news_heading, before=3, after=5, keep_with_next=True)
     for item in sections["company_news"]:
@@ -1114,10 +1498,12 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
             _set_run_font(paragraph.add_run("\n" + source_name), font_name, size=9)
         _set_run_font(paragraph.add_run("\n" + item["summary"]), font_name, size=10)
 
+    constituent_page_number = review_page_count + 2
     page3 = document.add_section(WD_SECTION.NEW_PAGE)
     _page_setup(
-        page3, 3, report, language_mode, tokens,
+        page3, constituent_page_number, report, language_mode, tokens,
         footnote=str(footnotes.get("constituents") or ""), banner=banner,
+        dynamic_page_number=is_v4, profile_page_number=3,
     )
     heading = document.add_heading(term("constituent_performance", language_mode, product=content["product_ticker"]), 1)
     _format_paragraph(heading, alignment=WD_ALIGN_PARAGRAPH.CENTER, before=8, after=3, keep_with_next=True)
@@ -1146,10 +1532,12 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         row_height_cm=0.53,
     )
 
+    analytics_page_number = review_page_count + 3
     page4 = document.add_section(WD_SECTION.NEW_PAGE)
     _page_setup(
-        page4, 4, report, language_mode, tokens,
+        page4, analytics_page_number, report, language_mode, tokens,
         footnote=str(footnotes.get("analytics") or ""), banner=banner,
+        dynamic_page_number=is_v4, profile_page_number=4,
     )
     analytics = sections["analytics"]
     outer = document.add_table(rows=1, cols=2)
@@ -1247,8 +1635,12 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     # The legal copy is an immutable render resource rather than report content. It is appended
     # at generation time so finalized and archived documents created before this page existed get
     # the same current approved disclaimer without mutating their stored document checksum.
+    disclaimer_page_number = review_page_count + 4
     page5 = document.add_section(WD_SECTION.NEW_PAGE)
-    _page_setup(page5, 5, report, "EN", tokens, banner=banner)
+    _page_setup(
+        page5, disclaimer_page_number, report, "EN", tokens, banner=banner,
+        dynamic_page_number=is_v4, profile_page_number=5,
+    )
     disclaimer_font = _font_name(tokens, "EN")
     disclaimer_heading = document.add_heading(disclaimer.title, 1)
     _format_paragraph(
@@ -1283,17 +1675,17 @@ class GeneratedExport:
     content_manifest: dict
     disclaimer_version: str
     disclaimer_checksum: str
+    layout_findings: tuple[dict[str, Any], ...] = ()
 
     def cleanup(self) -> None:
         self.directory.cleanup()
 
 
-def assert_page_one_layout_fits(report: Report, content: dict[str, Any]) -> None:
-    """Measure page one in Chromium and reject content entering either safe area.
-
-    This preflight is shared by finalization and every export format. Draft preview deliberately
-    skips the exception so the browser can mark the offending element and let an editor fix it.
-    """
+def _inspect_legacy_page_one_layout(
+    report: Report,
+    content: dict[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    """Preserve the v1-v3 page-one-only, zero-tolerance measurement contract."""
 
     from playwright.sync_api import sync_playwright
 
@@ -1397,7 +1789,252 @@ def assert_page_one_layout_fits(report: Report, content: dict[str, Any]) -> None
                 }""")
             finally:
                 browser.close()
-    page_one_presentation.assert_no_overflow(findings)
+    return tuple(findings)
+
+
+def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Measure every paged sheet and return normalized warning/blocking findings.
+
+    The final 3 mm above the footer is an intentional tolerance band.  Entering that band is
+    visible and audited, but does not prevent finalization or export.  Crossing the physical
+    footer boundary, clipping horizontally, hiding content, or overlapping another module is
+    always blocking.  Draft preview deliberately skips this Chromium pass because the browser
+    editor provides its own immediate markers.
+    """
+
+    if content.get("template_version") != "3033-v4":
+        return _inspect_legacy_page_one_layout(report, content)
+
+    from playwright.sync_api import sync_playwright
+
+    html = render_html(report, content, layout_mode="paged")
+    with TemporaryDirectory(prefix="commentary-layout-check-") as temp:
+        source = Path(temp) / "report.html"
+        source.write_text(html, encoding="utf-8")
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(source.as_uri(), wait_until="networkidle")
+                page.evaluate("""async () => {
+                    await document.fonts.ready;
+                    await Promise.all(Array.from(document.images).map((image) =>
+                        image.complete ? image.decode().catch(() => undefined) : new Promise((resolve) => {
+                            image.addEventListener('load', resolve, { once: true });
+                            image.addEventListener('error', resolve, { once: true });
+                        })
+                    ));
+                }""")
+                findings = page.evaluate("""(minorToleranceMm) => {
+                    const pixelTolerance = 0.5;
+                    const pxPerMm = 96 / 25.4;
+                    const round = (value) => Math.round(value * 1000) / 1000;
+                    const toMm = (value) => round(Math.max(0, value) / pxPerMm);
+                    const finding = (code, severity, pageNumber, elementId, axis, overflowMm, message, extra = {}) => ({
+                        code,
+                        severity,
+                        page: pageNumber,
+                        element_id: elementId,
+                        // Kept during the v3-to-v4 transition for older API consumers.
+                        layout_id: elementId,
+                        axis,
+                        overflow_mm: round(overflowMm),
+                        message,
+                        ...extra,
+                    });
+                    const horizontalOverflowCandidate = (node, bounds) =>
+                        [node, ...node.querySelectorAll('*')].find((candidate) => {
+                            const style = getComputedStyle(candidate);
+                            const candidateRect = candidate.getBoundingClientRect();
+                            const clipsOwnContent = ['hidden', 'clip', 'auto', 'scroll'].includes(
+                                style.overflowX
+                            ) && candidate.scrollWidth > candidate.clientWidth + pixelTolerance;
+                            const crossesSafeBoundary = candidate.getClientRects().length > 0
+                                && (candidateRect.left < bounds.left - pixelTolerance
+                                    || candidateRect.right > bounds.right + pixelTolerance);
+                            return clipsOwnContent || crossesSafeBoundary;
+                        });
+                    const hasHiddenVerticalContent = (node) =>
+                        [node, ...node.querySelectorAll('*')].some((candidate) => {
+                            const style = getComputedStyle(candidate);
+                            return ['hidden', 'clip'].includes(style.overflowY)
+                                && candidate.scrollHeight > candidate.clientHeight + pixelTolerance;
+                        });
+                    const findings = [];
+                    for (const reportPage of document.querySelectorAll('.report-page')) {
+                        const footer = reportPage.querySelector('.page-footer');
+                        const pageBody = reportPage.querySelector('.page-body');
+                        if (!footer || !pageBody) continue;
+                        const pageNumber = Number(reportPage.dataset.page || 0);
+                        const pageRect = reportPage.getBoundingClientRect();
+                        const bodyRect = pageBody.getBoundingClientRect();
+                        const footerTop = footer.getBoundingClientRect().top;
+                        const softBottom = footerTop - minorToleranceMm * pxPerMm;
+                        const layoutNodes = Array.from(reportPage.querySelectorAll('[data-layout-id]'));
+                        const measuredNodes = layoutNodes.length ? layoutNodes : [pageBody];
+                        for (const node of measuredNodes) {
+                            const elementId = node.dataset.layoutId || `page:${pageNumber}`;
+                            const rect = node.getBoundingClientRect();
+                            const horizontalBounds = node.closest('.page-body') ? bodyRect : pageRect;
+                            const leftOverflow = horizontalBounds.left - rect.left;
+                            const rightOverflow = rect.right - horizontalBounds.right;
+                            const horizontalOverflowPx = Math.max(leftOverflow, rightOverflow, 0);
+                            const horizontalCandidate = horizontalOverflowCandidate(
+                                node, horizontalBounds
+                            );
+                            if (horizontalOverflowPx > pixelTolerance || horizontalCandidate) {
+                                findings.push(finding(
+                                    'PAGE_LAYOUT_HORIZONTAL_OVERFLOW', 'BLOCKING', pageNumber,
+                                    elementId, 'horizontal', toMm(horizontalOverflowPx),
+                                    'Content is clipped outside the horizontal page boundary.'
+                                ));
+                            }
+                            if (hasHiddenVerticalContent(node)) {
+                                findings.push(finding(
+                                    'PAGE_LAYOUT_HIDDEN_CONTENT', 'BLOCKING', pageNumber,
+                                    elementId, 'vertical', toMm(node.scrollHeight - node.clientHeight),
+                                    'Content is hidden by a fixed-height or clipped container.'
+                                ));
+                            }
+                            if (rect.top < bodyRect.top - pixelTolerance) {
+                                findings.push(finding(
+                                    'PAGE_LAYOUT_CHROME_COLLISION', 'BLOCKING', pageNumber,
+                                    elementId, 'vertical', toMm(bodyRect.top - rect.top),
+                                    'Content touches the page header or reserved top area.'
+                                ));
+                            }
+                            if (rect.bottom > softBottom + pixelTolerance) {
+                                const overflowMm = toMm(rect.bottom - softBottom);
+                                const withinTolerance = overflowMm <= minorToleranceMm + 0.001
+                                    && rect.bottom <= footerTop + pixelTolerance;
+                                findings.push(finding(
+                                    withinTolerance ? 'PAGE_LAYOUT_TOLERANCE_USED' : 'PAGE_LAYOUT_VERTICAL_OVERFLOW',
+                                    withinTolerance ? 'WARNING' : 'BLOCKING',
+                                    pageNumber,
+                                    elementId,
+                                    'vertical',
+                                    overflowMm,
+                                    withinTolerance
+                                        ? `Content uses ${overflowMm.toFixed(3)} mm of the 3 mm footer tolerance.`
+                                        : 'Content exceeds the 3 mm tolerance or touches the page footer.'
+                                ));
+                            }
+                        }
+                        for (let leftIndex = 0; leftIndex < layoutNodes.length; leftIndex += 1) {
+                            const leftNode = layoutNodes[leftIndex];
+                            const leftRect = leftNode.getBoundingClientRect();
+                            for (let rightIndex = leftIndex + 1; rightIndex < layoutNodes.length; rightIndex += 1) {
+                                const rightNode = layoutNodes[rightIndex];
+                                if (leftNode.contains(rightNode) || rightNode.contains(leftNode)) continue;
+                                const rightRect = rightNode.getBoundingClientRect();
+                                const overlapWidth = Math.min(leftRect.right, rightRect.right)
+                                    - Math.max(leftRect.left, rightRect.left);
+                                const overlapHeight = Math.min(leftRect.bottom, rightRect.bottom)
+                                    - Math.max(leftRect.top, rightRect.top);
+                                if (overlapWidth <= pixelTolerance || overlapHeight <= pixelTolerance) continue;
+                                const elementId = leftNode.dataset.layoutId;
+                                findings.push(finding(
+                                    'PAGE_LAYOUT_ELEMENT_OVERLAP', 'BLOCKING', pageNumber,
+                                    elementId, 'overlap', toMm(Math.min(overlapWidth, overlapHeight)),
+                                    `Content overlaps ${rightNode.dataset.layoutId}.`,
+                                    {
+                                        overlaps_with: rightNode.dataset.layoutId,
+                                        overlap_width_mm: toMm(overlapWidth),
+                                        overlap_height_mm: toMm(overlapHeight),
+                                    }
+                                ));
+                            }
+                        }
+                    }
+                    return findings;
+                }""", MINOR_LAYOUT_OVERFLOW_TOLERANCE_MM)
+            finally:
+                browser.close()
+    if content.get("template_version") == "3033-v4" and isinstance(
+        content.get("presentation"), Mapping
+    ):
+        resolved = page_one_presentation.resolve_for_render(
+            content,
+            _render_tokens(str(content.get("design_token_version") or "3033-v4")),
+        )
+        style_owners: list[tuple[int, str, Mapping[str, Any]]] = []
+        for block in resolved.get("review_blocks") or []:
+            for style_name in ("title_style", "body_style"):
+                style_owners.append((1, str(block["layout_id"]), block[style_name]))
+        historical = resolved["historical"]
+        for style_name in ("title_style", "header_style", "body_style"):
+            style_owners.append((int(historical["page"]), "historical_performance", historical[style_name]))
+        footnote = resolved["footnote"]
+        style_owners.append((int(footnote["page"]), "footnote:historical", footnote["body_style"]))
+        inline_font_owners: list[tuple[int, str, str]] = []
+        for block in resolved.get("review_blocks") or []:
+            rendered = str(block.get("rendered_content_html") or "")
+            inline_font_owners.extend(
+                (1, str(block["layout_id"]), unescape(requested))
+                for requested in re.findall(r'data-requested-font="([^"]+)"', rendered)
+            )
+        rendered_footnote = str(footnote.get("rendered_content_html") or "")
+        inline_font_owners.extend(
+            (int(footnote["page"]), "footnote:historical", unescape(requested))
+            for requested in re.findall(r'data-requested-font="([^"]+)"', rendered_footnote)
+        )
+        seen: set[tuple[int, str, str, str]] = set()
+        font_resolutions = [
+            (
+                page_number,
+                element_id,
+                str(style.get("font_family") or ""),
+                str(style.get("pdf_font_family") or style.get("font_family") or ""),
+            )
+            for page_number, element_id, style in style_owners
+        ]
+        bundled_fonts = {
+            "carlito", "calibri", "noto sans cjk sc", "noto sans cjk tc",
+            "noto sans cjk hk", "noto serif cjk sc", "noto serif cjk tc",
+            "noto serif cjk hk",
+        }
+        font_resolutions.extend(
+            (
+                page_number,
+                element_id,
+                requested,
+                "Carlito" if requested.casefold() not in bundled_fonts or requested.casefold() == "calibri" else requested,
+            )
+            for page_number, element_id, requested in inline_font_owners
+        )
+        for page_number, element_id, requested, fallback in font_resolutions:
+            # Calibri -> Carlito is the supported compatibility mapping and is not presented as
+            # a missing-font warning. Other substitutions must be explicit in the audit trail.
+            key = (page_number, element_id, requested, fallback)
+            if requested and requested.casefold() != "calibri" and requested != fallback and key not in seen:
+                seen.add(key)
+                findings.append({
+                    "code": "FONT_FALLBACK_USED",
+                    "severity": "WARNING",
+                    "page": page_number,
+                    "element_id": element_id,
+                    "layout_id": element_id,
+                    "axis": "typography",
+                    "overflow_mm": 0.0,
+                    "message": f"PDF font {requested!r} is unavailable; {fallback!r} is used.",
+                    "requested_font": requested,
+                    "fallback_font": fallback,
+                })
+    return tuple(findings)
+
+
+def assert_page_one_layout_fits(report: Report, content: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Return advisory findings and raise only when the shared preflight finds blockers."""
+
+    findings = inspect_page_layout(report, content)
+    blocking = (
+        tuple(item for item in findings if item.get("severity") == "BLOCKING")
+        if content.get("template_version") == "3033-v4"
+        else findings
+    )
+    if blocking:
+        raise PageOneLayoutOverflowError(findings)
+    return findings
 
 
 def generate_export(report: Report, document: ReportDocument, format_name: str) -> GeneratedExport:
@@ -1412,7 +2049,7 @@ def generate_export(report: Report, document: ReportDocument, format_name: str) 
     product = re.sub(r"[^A-Za-z0-9._-]", "_", report.product_code)
     filename = f"{lane_prefix}{product}_{report.report_date.isoformat()}_{language_tag}_v{document.version}.{format_name}"
     try:
-        assert_page_one_layout_fits(report, document.content)
+        layout_findings = assert_page_one_layout_fits(report, document.content)
         _render_file(report, document, format_name, destination)
         disclaimer_fields = disclaimer_audit_fields()
         content_manifest = {
@@ -1430,6 +2067,7 @@ def generate_export(report: Report, document: ReportDocument, format_name: str) 
             size_bytes=destination.stat().st_size,
             checksum=sha256(destination),
             content_manifest=content_manifest,
+            layout_findings=tuple(layout_findings or ()),
             **disclaimer_fields,
         )
     except BaseException:
@@ -1464,18 +2102,26 @@ def _render_file(report: Report, document: ReportDocument, format_name: str, des
                         });
                     }));
                 }""")
-                overflow = page.evaluate("""() => Array.from(document.querySelectorAll('.report-page')).flatMap((reportPage) => {
-                    const body = reportPage.querySelector('.page-body');
-                    const footer = reportPage.querySelector('.page-footer');
-                    if (!body || !footer) return [];
-                    const bodyBottom = body.getBoundingClientRect().bottom;
-                    const footerTop = footer.getBoundingClientRect().top;
-                    return bodyBottom > footerTop
-                        ? [{ page: reportPage.dataset.page, bodyBottom, footerTop }]
-                        : [];
-                })""")
-                if overflow:
-                    browser.close()
-                    raise ValueError(f"PDF_LAYOUT_OVERFLOW: report content enters the footer safe area: {overflow}")
+                if document.content.get("template_version") != "3033-v4":
+                    # Preserve the v1-v3 PDF guard exactly. Their immutable rendering contract
+                    # predates the v4 advisory band and checks every fixed business page.
+                    overflow = page.evaluate("""() => Array.from(document.querySelectorAll('.report-page')).flatMap((reportPage) => {
+                        const body = reportPage.querySelector('.page-body');
+                        const footer = reportPage.querySelector('.page-footer');
+                        if (!body || !footer) return [];
+                        const bodyBottom = body.getBoundingClientRect().bottom;
+                        const footerTop = footer.getBoundingClientRect().top;
+                        return bodyBottom > footerTop
+                            ? [{ page: reportPage.dataset.page, bodyBottom, footerTop }]
+                            : [];
+                    })""")
+                    if overflow:
+                        browser.close()
+                        raise ValueError(
+                            "PDF_LAYOUT_OVERFLOW: report content enters the footer safe area: "
+                            f"{overflow}"
+                        )
+                # v4 was already measured by `assert_page_one_layout_fits`; applying the legacy
+                # zero-tolerance pass would incorrectly veto its audited 3 mm advisory band.
                 page.pdf(path=str(destination), format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}, prefer_css_page_size=True)
                 browser.close()

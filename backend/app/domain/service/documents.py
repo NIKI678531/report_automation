@@ -44,7 +44,7 @@ def lock_report(db: Session, report: Report) -> None:
 
 
 def document_content_for_read(report: Report, document: ReportDocument) -> dict[str, Any]:
-    """Return an in-memory v3 adapter for editable v2 documents.
+    """Return an in-memory v4 adapter for editable legacy documents.
 
     Finalized and archived documents keep their exact locked layout.  No ORM JSON value is
     mutated: callers receive a deep copy even when no adaptation is needed.
@@ -52,11 +52,17 @@ def document_content_for_read(report: Report, document: ReportDocument) -> dict[
 
     content = deepcopy(document.content)
     if (
-        document.template_version == "3033-v2"
+        document.template_version in {"3033-v1", "3033-v2", "3033-v3"}
         and report.status not in {ReportStatus.FINALIZED, ReportStatus.ARCHIVED}
     ):
-        return page_one_presentation.adapt_document(content)
-    return content
+        # v1 has no presentation-aware renderer, so never expose the invalid hybrid
+        # ``template_version=v1`` + ``presentation.schema_version=2``.  This is still an
+        # in-memory read adapter; persistence and the report identity change on first save.
+        return page_one_presentation.upgrade_document_to_v4(
+            content,
+            stamp_template=document.template_version == "3033-v1",
+        )
+    return page_one_presentation.adapt_document(content) if document.template_version == "3033-v4" else content
 
 
 def canonicalize_document_content(
@@ -69,12 +75,14 @@ def canonicalize_document_content(
     """Purely restamp, reconcile and validate submitted document content.
 
     Persistence and audit stay with :func:`update_document`; draft preview calls this same seam
-    without creating a version.  A v2 editable report is upgraded to v3 in the returned value,
+    without creating a version. Editable v1-v3 reports are upgraded to v4 in the returned value,
     allowing the caller to persist report/document/template identities atomically afterwards.
     """
 
     target_template_version = (
-        "3033-v3" if report.template_version == "3033-v2" else report.template_version
+        "3033-v4"
+        if report.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}
+        else report.template_version
     )
     canonical = page_one_presentation.reconcile_submission(
         deepcopy(content), deepcopy(current_content) if current_content is not None else None
@@ -87,9 +95,7 @@ def canonicalize_document_content(
         "benchmark_name": product.benchmark_instrument_name or product.benchmark_instrument_code,
         "template_version": target_template_version,
         "design_token_version": (
-            "3033-v3"
-            if target_template_version == "3033-v3" and product.design_token_version == "3033-v2"
-            else product.design_token_version
+            "3033-v4" if target_template_version == "3033-v4" else product.design_token_version
         ),
         "language_mode": report.language_mode,
         "snapshot_id": report.active_snapshot_id,
@@ -140,13 +146,11 @@ def preview_document_content(
     if content is None:
         return document_content_for_read(report, current)
     ensure_report_editable(report)
-    if expected_version != current.version:
-        raise HTTPException(status_code=409, detail={
-            "error_code": "VERSION_CONFLICT",
-            "message": "Document was changed by another editor.",
-            "current_version": current.version,
-            "current_checksum": current.checksum,
-        })
+    # Preview does not mutate the append-only document. The supplied version identifies the
+    # editor's base for compatibility with the save payload, but a newer saved version must not
+    # prevent the user from rendering and recovering their unsaved draft. update_document keeps
+    # the optimistic-lock check for the actual write boundary.
+    _ = expected_version
     product = resolve_product(db, report.product_code, report.report_date)
     try:
         return canonicalize_document_content(
@@ -240,7 +244,7 @@ def ai_assisted_draft(db: Session, report: Report, expected_version: int, user_p
         outlook = user_prompt or "Complete the outlook using approved investment commentary."
     review = content["sections"]["month_in_review"]
     replace_placeholder_blocks = (
-        content.get("template_version") == "3033-v3"
+        content.get("template_version") in {"3033-v3", "3033-v4"}
         and not has_substantive_review_blocks(review)
     )
     review["summary"] = summary
