@@ -1037,6 +1037,10 @@ tbody tr:last-child th, tbody tr:last-child td { box-shadow: none; }
 
 .performer-columns { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); padding: var(--space-md); }
 .performer-columns h4 { margin: 0 0 var(--space-sm); }
+.performer-title-row { display: flex; align-items: center; gap: var(--space-sm); margin: 0 0 var(--space-sm); }
+.performer-title-row h4 { margin: 0; }
+.performer-title-row .icon-button { flex: 0 0 auto; margin-inline-start: auto; }
+.performer-title-editor { margin: 0 0 var(--space-sm); padding: var(--space-sm); box-shadow: inset 0 0 0 1px var(--color-border); }
 .performer-columns article {
 	display: grid;
 	grid-template-columns: 22px 1fr auto;

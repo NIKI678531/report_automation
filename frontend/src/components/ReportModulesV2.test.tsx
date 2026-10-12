@@ -162,7 +162,7 @@ describe("report module data responsibilities", () => {
     await waitFor(() => expect(calculate).toHaveBeenCalledWith(report.id));
   });
 
-  it("edits and saves all four Final Analytics section titles with publication markers", async () => {
+  it("edits and saves all Final Analytics titles and performer subtitles with publication markers", async () => {
     vi.spyOn(api, "listDatasets").mockResolvedValue([]);
     const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
     const registerPendingSave = vi.fn<(save: (() => Promise<void>) | null) => void>();
@@ -182,6 +182,13 @@ describe("report module data responsibilities", () => {
       fireEvent.click(screen.getByRole("button", { name: "Done" }));
     }
 
+    fireEvent.click(screen.getByRole("button", { name: "Edit Top performers title" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Top performers title" }), { target: { value: "June leaders^" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Done" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Bottom performers title" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Bottom performers title" }), { target: { value: "June laggards" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Done" })[0]);
+
     expect(screen.getByRole("button", { name: "Refresh analytics" })).toHaveProperty("disabled", true);
     await registerPendingSave.mock.lastCall![0]!();
     expect(saveDocument).toHaveBeenCalledWith(report.id, 4, expect.objectContaining({
@@ -189,6 +196,8 @@ describe("report module data responsibilities", () => {
         top10: "Largest 3033.HK positions*",
         sector_breakdown: "3033.HK industry allocation*",
         performers: "June movers**",
+        top_performers: "June leaders^",
+        bottom_performers: "June laggards",
         portfolio_analysis: "3033.HK fund profile^",
       },
     }));

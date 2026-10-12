@@ -429,16 +429,20 @@ function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
   const top10Default = defaultTitle("top10", t("top10", { product: productTicker }));
   const sectorDefault = defaultTitle("sector_breakdown", t("sectorBreakdown", { product: productTicker }));
   const performersDefault = defaultTitle("performers", `${t("performersIn", { month: monthName })}**`);
+  const topPerformersDefault = defaultTitle("top_performers", t("topPerformersIn", { month: monthName }));
+  const bottomPerformersDefault = defaultTitle("bottom_performers", t("bottomPerformersIn", { month: monthName }));
   const portfolioDefault = defaultTitle("portfolio_analysis", t("portfolioAnalysis", { product: productTicker }));
   const top10Title = title("top10", top10Default);
   const sectorTitle = title("sector_breakdown", sectorDefault);
   const performersTitle = title("performers", performersDefault);
+  const topPerformersTitle = title("top_performers", topPerformersDefault);
+  const bottomPerformersTitle = title("bottom_performers", bottomPerformersDefault);
   const portfolioTitle = title("portfolio_analysis", portfolioDefault);
   const editableTitle = (index: string, key: string, value: string, fallback: string) => <EditableSectionTitle
     index={index} value={value} defaultValue={fallback} overridden={titleOverrides[key] !== undefined}
     disabled={busy || frozen} onChange={(next) => setTitle(key, next)} onReset={() => resetTitle(key)}
   />;
-  return <><ModuleHeading eyebrow={t("pageDetail", { page: "05", detail: t("calculatedOutputs") })} title={t("finalAnalytics")} description={t("analyticsDescription")} actions={<><button disabled={busy || frozen || !dirty || !titlesValid} onClick={() => run(persist)}><Save size={16} /> {t("saveAnalyticsTitles")}</button><button className="primary" disabled={busy || isReportReadOnly(report) || !report.active_snapshot_id || titleDirty} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> {t("refreshAnalytics")}</button></>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section">{editableTitle("01", "top10", top10Title, top10Default)}<table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{shownName(row)}</th><td>{percent(row.weight, numberLocale, t("noData"))}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section">{editableTitle("02", "sector_breakdown", sectorTitle, sectorDefault)}{sectorSeries.length ? <SectorDonut chart={sectorChart} title={sectorTitle} /> : <EmptyData />}</section><section className="analytics-section">{editableTitle("03", "performers", performersTitle, performersDefault)}<div className="performer-columns"><PerformerList title={reportTitle(report, "top_performers", t("top"))} data={top} /><PerformerList title={reportTitle(report, "bottom_performers", t("bottom"))} data={bottom} /></div></section><section className="analytics-section">{editableTitle("04", "portfolio_analysis", portfolioTitle, portfolioDefault)}<dl className="portfolio-list">{displayPortfolio.map((row) => {
+  return <><ModuleHeading eyebrow={t("pageDetail", { page: "05", detail: t("calculatedOutputs") })} title={t("finalAnalytics")} description={t("analyticsDescription")} actions={<><button disabled={busy || frozen || !dirty || !titlesValid} onClick={() => run(persist)}><Save size={16} /> {t("saveAnalyticsTitles")}</button><button className="primary" disabled={busy || isReportReadOnly(report) || !report.active_snapshot_id || titleDirty} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> {t("refreshAnalytics")}</button></>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section">{editableTitle("01", "top10", top10Title, top10Default)}<table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{shownName(row)}</th><td>{percent(row.weight, numberLocale, t("noData"))}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section">{editableTitle("02", "sector_breakdown", sectorTitle, sectorDefault)}{sectorSeries.length ? <SectorDonut chart={sectorChart} title={sectorTitle} /> : <EmptyData />}</section><section className="analytics-section">{editableTitle("03", "performers", performersTitle, performersDefault)}<div className="performer-columns"><PerformerList side={t("top")} title={topPerformersTitle} defaultTitle={topPerformersDefault} overridden={titleOverrides.top_performers !== undefined} disabled={busy || frozen} onTitleChange={(value) => setTitle("top_performers", value)} onReset={() => resetTitle("top_performers")} data={top} /><PerformerList side={t("bottom")} title={bottomPerformersTitle} defaultTitle={bottomPerformersDefault} overridden={titleOverrides.bottom_performers !== undefined} disabled={busy || frozen} onTitleChange={(value) => setTitle("bottom_performers", value)} onReset={() => resetTitle("bottom_performers")} data={bottom} /></div></section><section className="analytics-section">{editableTitle("04", "portfolio_analysis", portfolioTitle, portfolioDefault)}<dl className="portfolio-list">{displayPortfolio.map((row) => {
     const editableTurnover = turnoverEnabled && row.metric_code === "AVERAGE_DAILY_TURNOVER";
     return <div key={String(row.metric_code)} className={editableTurnover ? "portfolio-turnover-row" : undefined}><dt>{String(row.label)}</dt><dd>{editableTurnover ? <div className="portfolio-turnover-editor"><input aria-label={String(row.label)} size={16} value={turnover} disabled={busy || frozen} onChange={(event) => setTurnover(event.target.value)} /><button className="icon-button" type="button" aria-label={t("save")} title={t("save")} disabled={busy || frozen || !dirty || !titlesValid} onClick={() => run(persist)}><Save size={16} /></button></div> : <data value={row.raw_value == null ? undefined : String(row.raw_value)}>{portfolioDisplayValue(row) === "N/A" ? t("noData") : portfolioDisplayValue(row)}</data>}</dd></div>;
   })}</dl></section></div><FormulaStrip title={t("analyticsFormula")} formula={t("analyticsFormulaExpression")} detail={t("analyticsFormulaDetail")} /></>;
@@ -483,7 +487,33 @@ function EditableSectionTitle({ index, value, defaultValue, overridden, disabled
     </div>}
   </>;
 }
-function PerformerList({ title, data }: { title: string; data: JsonRecord[] }) { const { locale, t } = useLocale(); const numberLocale = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en-HK"; return <div><h4>{title}</h4>{data.map((row, index) => <article key={`${String(row.issuer)}-${index}`}><span>{index + 1}</span><strong>{String(locale === "zh-Hans" ? (row.issuer_zh_hans ?? "") : locale === "zh-Hant" ? (row.issuer_zh_hant ?? "") : (row.issuer ?? ""))}</strong><em>{percent(row.return, numberLocale, t("noData"))}</em></article>)}</div>; }
+function PerformerList({ side, title, defaultTitle, overridden, disabled, onTitleChange, onReset, data }: {
+  side: string;
+  title: string;
+  defaultTitle: string;
+  overridden: boolean;
+  disabled: boolean;
+  onTitleChange: (value: string) => void;
+  onReset: () => void;
+  data: JsonRecord[];
+}) {
+  const { locale, t } = useLocale();
+  const [editing, setEditing] = useState(false);
+  const id = useId();
+  const numberLocale = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en-HK";
+  return <div><div className="performer-title-row"><h4>{title}</h4><button type="button" className="icon-button"
+    aria-label={t("editPerformerTitle", { side })} title={t("editPerformerTitle", { side })}
+    aria-expanded={editing} disabled={disabled} onClick={() => setEditing((current) => !current)}><Pencil size={16} /></button></div>
+    {editing && <div className="analytics-title-editor performer-title-editor">
+      <label htmlFor={id}>{t("performerTitle", { side })}</label>
+      <MarkerInput id={id} value={title} maxLength={200} required disabled={disabled} onValueChange={onTitleChange} />
+      <div className="analytics-title-actions">
+        <button type="button" disabled={disabled || !overridden} onClick={onReset}><RotateCcw size={16} /> {t("resetReportTitle", { title: defaultTitle })}</button>
+        <button type="button" onClick={() => setEditing(false)}>{t("done")}</button>
+      </div>
+    </div>}
+    {data.map((row, index) => <article key={`${String(row.issuer)}-${index}`}><span>{index + 1}</span><strong>{String(locale === "zh-Hans" ? (row.issuer_zh_hans ?? "") : locale === "zh-Hant" ? (row.issuer_zh_hant ?? "") : (row.issuer ?? ""))}</strong><em>{percent(row.return, numberLocale, t("noData"))}</em></article>)}</div>;
+}
 
 function footnotesOf(report: Report): Record<FootnoteSectionKey, string> {
   const stored = (sectionsOf(report).footnotes as JsonRecord | undefined) ?? {};
