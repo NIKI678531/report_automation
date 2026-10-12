@@ -191,6 +191,7 @@ def test_custom_report_titles_without_markers_match_all_exports(client, language
     detail = client.get(f"/api/v1/reports/{created['id']}").json()
     overrides = {key: value.rstrip("*^") for key, value in detail["report_title_defaults"].items()}
     overrides["company_news"] = "Editorial News"
+    overrides["performers"] = detail["report_title_defaults"]["performers"].rstrip("*^") + " HIDDEN GROUP"
     content = detail["latest_document"]["content"]
     original_analytics = content["sections"]["analytics"].copy()
     content["title_overrides"] = overrides
@@ -216,7 +217,7 @@ def test_custom_report_titles_without_markers_match_all_exports(client, language
         ))
     finally:
         pdf.close()
-    for key, title in overrides.items():
+    for key, title in ((key, title) for key, title in overrides.items() if key != "performers"):
         assert title in html, key
         assert title in docx_text, key
         assert unicodedata.normalize("NFKC", title) in pdf_text, (key, pdf_text)
@@ -225,6 +226,10 @@ def test_custom_report_titles_without_markers_match_all_exports(client, language
             assert f">{original}<" not in html
             assert original not in docx_text
             assert unicodedata.normalize("NFKC", original) not in pdf_text
+    hidden_group_title = overrides["performers"]
+    assert hidden_group_title not in html
+    assert hidden_group_title not in docx_text
+    assert unicodedata.normalize("NFKC", hidden_group_title) not in pdf_text
 
 
 def test_recalculation_replaces_existing_final_analytics_snapshot(client):

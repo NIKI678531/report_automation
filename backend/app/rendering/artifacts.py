@@ -1584,8 +1584,6 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         _sector_legend(right, chart["rows"], font_name=font_name)
     _remove_initial_empty_paragraph(right)
 
-    performers_heading = document.add_heading(titles["performers"], 1)
-    _format_paragraph(performers_heading, before=10, after=3, keep_with_next=True)
     performers = document.add_table(rows=1, cols=2)
     _set_table_geometry(performers, outer_widths)
     _set_table_borders(performers)

@@ -428,7 +428,7 @@ function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
   const resetTitle = (key: string) => setTitleOverrides((current) => { const next = { ...current }; delete next[key]; return next; });
   const top10Default = defaultTitle("top10", t("top10", { product: productTicker }));
   const sectorDefault = defaultTitle("sector_breakdown", t("sectorBreakdown", { product: productTicker }));
-  const performersDefault = defaultTitle("performers", t("performersIn", { month: monthName }));
+  const performersDefault = defaultTitle("performers", `${t("performersIn", { month: monthName })}**`);
   const portfolioDefault = defaultTitle("portfolio_analysis", t("portfolioAnalysis", { product: productTicker }));
   const top10Title = title("top10", top10Default);
   const sectorTitle = title("sector_breakdown", sectorDefault);

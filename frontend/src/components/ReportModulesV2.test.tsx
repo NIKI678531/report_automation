@@ -170,7 +170,6 @@ describe("report module data responsibilities", () => {
     editable.report_title_defaults = {
       top10: "Top 10 3033.HK Constituents*",
       sector_breakdown: "3033.HK Sectors Breakdown*",
-      performers: "Performers in June**",
       portfolio_analysis: "3033.HK Portfolio Analysis",
     };
     render(<ReportModule report={editable} active="analytics" busy={false} run={run} registerPendingSave={registerPendingSave} />);
@@ -295,7 +294,7 @@ describe("report module data responsibilities", () => {
 
     expect(screen.getByText(aum)).toBeTruthy();
     expect(screen.getByDisplayValue(turnover)).toBeTruthy();
-    expect(screen.getByText(`Performers in ${monthName}`)).toBeTruthy();
+    expect(screen.getByText(`Performers in ${monthName}**`)).toBeTruthy();
   });
 
   it("saves only the 3033 turnover display text without changing any other report data", async () => {
