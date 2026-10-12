@@ -5,23 +5,29 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import os
 import re
+import ssl
 import threading
 import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Engine, create_engine, event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.integrations.news import NewsProviderError
+from app.domain.localization import simplified_to_traditional, traditional_to_simplified
 
 
 NEWS_REQUIRED_COLUMNS = {
@@ -51,6 +57,11 @@ MONTHLY_REQUIRED_COLUMNS = {
         "updated_at",
     },
 }
+MONTHLY_TURNOVER_REQUIRED_COLUMNS = {
+    "id", "bloomberg_ticker", "calendar_ticker", "month_start", "period_start",
+    "period_end", "total_turnover", "trading_days", "average_daily_turnover", "currency",
+    "fetched_at",
+}
 _NON_WORD = re.compile(r"[^0-9A-Za-z\u3400-\u9fff]+")
 _LATIN_BOUNDARY = r"0-9A-Z"
 _LISTING_SUFFIXES = {"S", "SW", "W"}
@@ -62,6 +73,8 @@ class DaReportProviderError(NewsProviderError):
 
 
 def is_configured() -> bool:
+    if settings.da_report_database_url:
+        return not settings.da_report_mysql_problems()
     path = settings.da_report_sqlite_path
     return bool(
         (path and path.expanduser().is_file())
@@ -85,6 +98,61 @@ def _contains_alias(text_value: str, alias: str) -> bool:
     ) is not None
 
 
+def _sqlite_contains_company_alias(text_value: Any, alias: Any) -> int:
+    """SQLite scalar used so company matching participates in count and pagination."""
+    normalized_alias = _normalize_text(alias)
+    if not normalized_alias:
+        return 0
+    return int(_contains_alias(_normalize_text(text_value), normalized_alias))
+
+
+def _company_aliases(constituent: dict[str, Any]) -> list[str]:
+    source_names = constituent.get("source_names") if isinstance(constituent.get("source_names"), dict) else {}
+    name_zh_hant = str(constituent.get("name_zh_hant") or "").strip()
+    name_zh_hans = str(constituent.get("name_zh_hans") or "").strip()
+    converted_name_zh_hans = traditional_to_simplified(name_zh_hant) if name_zh_hant else ""
+    converted_name_zh_hant = simplified_to_traditional(name_zh_hans) if name_zh_hans else ""
+    values = (
+        constituent.get("report_display_name"),
+        constituent.get("name_en"),
+        name_zh_hant,
+        name_zh_hans,
+        converted_name_zh_hans,
+        converted_name_zh_hant,
+        constituent.get("ticker"),
+        *source_names.values(),
+    )
+    aliases: list[str] = []
+    for value in values:
+        alias = _normalize_text(value)
+        if len(alias) >= 2 and alias not in aliases:
+            aliases.append(alias)
+    return aliases
+
+
+def _company_facets(constituents: list[dict[str, Any]]) -> list[dict[str, str | None]]:
+    facets: list[dict[str, str | None]] = []
+    seen: set[str] = set()
+    for row in constituents:
+        security_code = str(row.get("security_code") or "").strip()
+        if not security_code or security_code in seen:
+            continue
+        seen.add(security_code)
+        name_en = str(row.get("name_en") or row.get("name_zh_hant") or security_code).strip()
+        name_zh_hant = str(row.get("name_zh_hant") or "").strip() or None
+        name_zh_hans = str(row.get("name_zh_hans") or "").strip() or None
+        if name_zh_hans is None and name_zh_hant is not None:
+            name_zh_hans = traditional_to_simplified(name_zh_hant) or None
+        facets.append({
+            "security_code": security_code,
+            "ticker": str(row.get("ticker") or "").strip(),
+            "name_en": name_en,
+            "name_zh_hans": name_zh_hans,
+            "name_zh_hant": name_zh_hant,
+        })
+    return facets
+
+
 def _constituent_aliases(constituents: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
     aliases: list[tuple[str, str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -99,6 +167,8 @@ def _constituent_aliases(constituents: list[dict[str, Any]]) -> list[tuple[str, 
             row.get("name_en"),
             row.get("name_zh_hant"),
             row.get("name_zh_hans"),
+            simplified_to_traditional(row.get("name_zh_hans")) if row.get("name_zh_hans") else None,
+            traditional_to_simplified(row.get("name_zh_hant")) if row.get("name_zh_hant") else None,
             *source_names.values(),
         )
         for value in values:
@@ -236,15 +306,134 @@ def _engine(path: str) -> Engine:
     @event.listens_for(engine, "connect")
     def configure_read_only(dbapi_connection, connection_record) -> None:
         del connection_record
+        dbapi_connection.create_function(
+            "contains_company_alias",
+            2,
+            _sqlite_contains_company_alias,
+            deterministic=True,
+        )
         dbapi_connection.execute("PRAGMA query_only=ON")
 
     return engine
 
 
+@lru_cache(maxsize=4)
+def _mysql_engine(database_url: str, timeout: int, ssl_ca: str | None, verify_identity: bool) -> Engine:
+    tls = ssl.create_default_context(cafile=ssl_ca)
+    tls.check_hostname = verify_identity
+    if not verify_identity:  # LOCAL test databases may use MySQL's generated CA.
+        tls.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    engine = create_engine(
+        make_url(database_url),
+        connect_args={"charset": "utf8mb4", "connect_timeout": timeout, "read_timeout": timeout,
+                      "write_timeout": timeout, "ssl": tls},
+        pool_pre_ping=True, pool_recycle=300, pool_size=3, max_overflow=2, pool_timeout=timeout,
+        isolation_level="REPEATABLE READ", hide_parameters=True,
+    )
+
+    @event.listens_for(engine, "connect")
+    def configure_read_only(dbapi_connection, connection_record):
+        del connection_record
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute("SET SESSION TRANSACTION READ ONLY")
+            cursor.execute(f"SET SESSION MAX_EXECUTION_TIME = {timeout * 1000}")
+            cursor.execute("SET SESSION time_zone = '+00:00'")
+            # PyMySQL can fall back to plaintext if the server does not offer TLS.
+            cursor.execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+            if not cursor.fetchone()[1]:
+                raise DaReportProviderError("DA_REPORT_TLS_REQUIRED", "DA-Report MySQL requires TLS.", 503)
+
+    return engine
+
+
+@dataclass(frozen=True)
+class _DataSource:
+    engine: Engine
+    name: str
+    file_checksum: str | None = None
+
+    @property
+    def source_type(self) -> str:
+        return "DA_REPORT_SQLITE" if self.file_checksum else "DA_REPORT_MYSQL"
+
+
+def _data_source() -> _DataSource:
+    # An explicit MySQL source never falls back to a stale local file or object URL on failure.
+    if settings.da_report_database_url:
+        if settings.da_report_mysql_problems():
+            raise DaReportProviderError("DA_REPORT_CONFIGURATION_INVALID", "Check the DA-Report MySQL configuration.", 503)
+        try:
+            engine = _mysql_engine(
+                settings.da_report_database_url, max(1, int(settings.da_report_timeout_seconds)),
+                str(settings.da_report_mysql_ssl_ca) if settings.da_report_mysql_ssl_ca else None,
+                settings.da_report_mysql_ssl_verify_identity,
+            )
+        except (SQLAlchemyError, OSError, ValueError):
+            raise DaReportProviderError("DA_REPORT_CONFIGURATION_INVALID", "Check the DA-Report MySQL configuration and CA bundle.", 503) from None
+        return _DataSource(engine, "DA_REPORT")
+    path = _materialize_snapshot()
+    stat = path.stat()
+    return _DataSource(_engine(str(path.resolve())), path.name,
+                       _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns))
+
+
+def _table_columns(connection, table_name: str) -> set[str]:
+    schema = inspect(connection)
+    if not schema.has_table(table_name):
+        return set()
+    return {str(column["name"]) for column in schema.get_columns(table_name)}
+
+
+@contextmanager
+def _connect_source(source: _DataSource):
+    try:
+        with source.engine.connect() as connection:
+            yield connection
+    except (SQLAlchemyError, OSError, ValueError):
+        # Do not expose SQL, credentials or connection details through provider errors or traces.
+        raise DaReportProviderError("DA_REPORT_UNAVAILABLE", "The DA-Report data source could not be queried.", 503, retryable=True) from None
+
+
+def _joined_text(source: _DataSource, columns: tuple[str, ...]) -> str:
+    parts = [f"COALESCE({column}, '')" for column in columns]
+    if source.engine.dialect.name == "mysql":
+        return "CONCAT_WS(' ', " + ", ".join(parts) + ")"
+    return " || ' ' || ".join(parts)
+
+
+def _company_predicate(source: _DataSource, title: str, key: str, alias: str, parameters: dict) -> str:
+    if source.engine.dialect.name != "mysql":
+        parameters[key] = alias
+        return f"contains_company_alias({title}, :{key}) = 1"
+    # ICU regular expressions replace the SQLite UDF. Parameters keep aliases out of SQL.
+    # Include full-width ASCII forms (NFKC in the SQLite implementation), punctuation separators,
+    # and Latin token boundaries so NIO does not match 'senior'. Chinese names match substrings.
+    normalized = _normalize_text(alias)
+    parts = []
+    for char in normalized:
+        if char == " ":
+            parts.append("[^0-9A-Z㐀-鿿０-９Ａ-Ｚａ-ｚ]+")
+        elif char.isascii() and char.isalnum():
+            parts.append(f"[{char}{chr(ord(char) + 0xFEE0)}]")
+        else:
+            parts.append(re.escape(char))
+    pattern = "".join(parts)
+    if not any("\u3400" <= char <= "\u9fff" for char in normalized):
+        pattern = "(^|[^0-9A-Z０-９Ａ-Ｚａ-ｚ])" + pattern + "([^0-9A-Z０-９Ａ-Ｚａ-ｚ]|$)"
+    parameters[key] = pattern
+    return f"REGEXP_LIKE({title}, :{key}, 'i')"
+
+
+def _source_checksum(source: _DataSource, datasets: dict) -> str:
+    if source.file_checksum:
+        return source.file_checksum
+    encoded = json.dumps({name: metadata["checksum"] for name, metadata in datasets.items()}, sort_keys=True)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 def _validate_columns(connection, required_columns: dict[str, set[str]], error_code: str) -> None:
     for table_name, required in required_columns.items():
-        rows = connection.execute(text(f"PRAGMA table_info({table_name})")).mappings()
-        actual = {str(row["name"]) for row in rows}
+        actual = _table_columns(connection, table_name)
         missing = sorted(required - actual)
         if missing:
             raise DaReportProviderError(
@@ -262,22 +451,28 @@ def _validate_monthly_schema(connection) -> None:
     _validate_columns(connection, MONTHLY_REQUIRED_COLUMNS, "DA_REPORT_MONTHLY_SCHEMA_MISMATCH")
 
 
+def _missing_table_columns(connection, table_name: str) -> list[str]:
+    actual = _table_columns(connection, table_name)
+    return sorted(MONTHLY_REQUIRED_COLUMNS[table_name] - actual)
+
+
 def _monthly_dataset_metadata(
-    path: Path,
-    file_checksum: str,
+    source: _DataSource,
     table_name: str,
     rows: list[dict[str, Any]],
     query_window: dict[str, str | None],
 ) -> dict[str, Any]:
     payload = json.dumps(rows, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     return {
-        "source_type": "DA_REPORT_SQLITE",
-        "source_object": f"{path.name}#{table_name}",
+        "source_type": source.source_type,
+        "source_object": f"{source.name}#{table_name}",
         "checksum": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
         "row_count": len(rows),
         "lineage": {
-            "source_system": "DA_REPORT_SQLITE",
-            "sqlite_checksum": file_checksum,
+            "source_system": source.source_type,
+            # Retrieval time belongs to the enclosing snapshot/audit. Keep content metadata stable
+            # so refreshing unchanged MySQL rows does not create a new snapshot just for the clock.
+            **({"sqlite_checksum": source.file_checksum} if source.file_checksum else {"read_consistency": "REPEATABLE_READ"}),
             "source_table": table_name,
             "source_record_ids": [row["_source_id"] for row in rows],
             "query_window": query_window,
@@ -294,15 +489,35 @@ def load_monthly_data(
     constituent_index_code: str,
     report_date: date,
 ) -> dict[str, Any]:
-    path = _materialize_snapshot()
-    stat = path.stat()
-    file_checksum = _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    source = _data_source()
     history_start = date(report_date.year - 1, 1, 1)
     month_start = report_date.replace(day=1)
-    with _engine(str(path.resolve())).connect() as connection:
-        _validate_monthly_schema(connection)
+    provider_findings: list[dict[str, Any]] = []
+    with _connect_source(source) as connection:
+        # Historical performance is independently releasable. Missing KPI/calendar/event tables
+        # keep the report pending, but must not hide a complete official FUND/BENCHMARK series.
+        _validate_columns(
+            connection,
+            {"total_return_series": MONTHLY_REQUIRED_COLUMNS["total_return_series"]},
+            "DA_REPORT_MONTHLY_SCHEMA_MISMATCH",
+        )
+        optional_ready: dict[str, bool] = {}
+        for table_name in ("fund_kpi_daily", "trading_calendar", "index_events"):
+            missing_columns = _missing_table_columns(connection, table_name)
+            optional_ready[table_name] = not missing_columns
+            if missing_columns:
+                provider_findings.append({
+                    "check_id": f"DA_REPORT_{table_name.upper()}_SCHEMA_MISMATCH",
+                    "error_code": f"DA_REPORT_{table_name.upper()}_SCHEMA_MISMATCH",
+                    "severity": "WARNING" if table_name == "index_events" else "BLOCKING",
+                    "status": "FAILED",
+                    "message": f"DA-Report is missing required fields in {table_name}: {', '.join(missing_columns)}.",
+                    "actual": {"missing_columns": missing_columns},
+                    "threshold": {"required_columns": sorted(MONTHLY_REQUIRED_COLUMNS[table_name])},
+                    "fix_hint": f"Publish {table_name} in the configured DA-Report source; Historical Performance remains available.",
+                })
         total_return_rows = list(connection.execute(text("""
-            SELECT id, instrument_code, trade_date, total_return_value, series_type, currency, source
+            SELECT id, instrument_code, trade_date, total_return_value, series_type, currency, source, updated_at
             FROM total_return_series
             WHERE instrument_code IN (:fund_code, :benchmark_code)
               AND trade_date BETWEEN :history_start AND :report_date
@@ -323,7 +538,7 @@ def load_monthly_data(
             "product_code": product_code,
             "month_start": month_start.isoformat(),
             "report_date": report_date.isoformat(),
-        }).mappings())
+        }).mappings()) if optional_ready["fund_kpi_daily"] else []
         calendar_rows = list(connection.execute(text("""
             SELECT id, market_code, trade_date, is_trading_day, source
             FROM trading_calendar
@@ -334,7 +549,7 @@ def load_monthly_data(
             "market_code": trading_calendar_code,
             "month_start": month_start.isoformat(),
             "report_date": report_date.isoformat(),
-        }).mappings())
+        }).mappings()) if optional_ready["trading_calendar"] else []
         event_rows = list(connection.execute(text("""
             SELECT id, index_code, event_type, announcement_date, effective_date, source
             FROM index_events
@@ -343,7 +558,7 @@ def load_monthly_data(
         """), {
             "index_code": constituent_index_code,
             "report_date": report_date.isoformat(),
-        }).mappings())
+        }).mappings()) if optional_ready["index_events"] else []
 
     roles = {
         fund_instrument_code: "FUND",
@@ -358,6 +573,7 @@ def load_monthly_data(
         "series_type": str(row["series_type"]),
         "currency": str(row["currency"]).upper(),
         "source": str(row["source"]),
+        "source_updated_at": str(row["updated_at"]),
     } for row in total_return_rows]
     series_roles = {row["instrument_role"] for row in series}
     currencies = {row["currency"] for row in series}
@@ -392,19 +608,22 @@ def load_monthly_data(
         nonnegative_kpis = all(Decimal(row["value"]) >= 0 for row in fund_kpis)
     except InvalidOperation:
         nonnegative_kpis = False
-    if (
+    kpi_invalid = (
         len(aum_rows) != 1
         or not turnover_rows
         or len(kpi_keys) != len(fund_kpis)
         or not nonnegative_kpis
         or any(row["metric_code"] not in {"AUM", "DAILY_TURNOVER"} for row in fund_kpis)
         or any(not row["unit"] or not row["currency"] for row in fund_kpis)
-    ):
-        raise DaReportProviderError(
-            "DA_REPORT_FUND_KPI_INCOMPLETE",
-            "The DA-Report snapshot requires one report-date AUM row and report-month daily turnover rows.",
-            422,
-        )
+    )
+    if optional_ready["fund_kpi_daily"] and kpi_invalid:
+        provider_findings.append({
+            "check_id": "DA_REPORT_FUND_KPI_INCOMPLETE", "error_code": "DA_REPORT_FUND_KPI_INCOMPLETE",
+            "severity": "BLOCKING", "status": "FAILED",
+            "message": "The DA-Report snapshot requires one report-date AUM row and report-month daily turnover rows.",
+            "actual": {"rows": len(fund_kpis)}, "threshold": "One report-date AUM and report-month turnover rows",
+            "fix_hint": "Backfill the official fund KPI rows in DA-Report and publish the updated source.",
+        })
 
     calendar = [{
         "_source_id": int(row["id"]),
@@ -413,12 +632,15 @@ def load_monthly_data(
         "is_trading_day": bool(row["is_trading_day"]),
         "source": str(row["source"]),
     } for row in calendar_rows]
-    if len({row["date"] for row in calendar}) != len(calendar) or not any(row["is_trading_day"] for row in calendar):
-        raise DaReportProviderError(
-            "DA_REPORT_TRADING_CALENDAR_INCOMPLETE",
-            "The DA-Report snapshot contains no report-month trading days for this product.",
-            422,
-        )
+    calendar_valid = len({row["date"] for row in calendar}) == len(calendar) and any(row["is_trading_day"] for row in calendar)
+    if optional_ready["trading_calendar"] and not calendar_valid:
+        provider_findings.append({
+            "check_id": "DA_REPORT_TRADING_CALENDAR_INCOMPLETE", "error_code": "DA_REPORT_TRADING_CALENDAR_INCOMPLETE",
+            "severity": "BLOCKING", "status": "FAILED",
+            "message": "The DA-Report snapshot contains no report-month trading days for this product.",
+            "actual": {"rows": len(calendar)}, "threshold": "At least one report-month trading day",
+            "fix_hint": "Backfill the official market calendar in DA-Report and publish the updated source.",
+        })
 
     index_events = [{
         "_source_id": int(row["id"]),
@@ -430,22 +652,25 @@ def load_monthly_data(
     } for row in event_rows]
     datasets = {
         "total_return_series": _monthly_dataset_metadata(
-            path, file_checksum, "total_return_series", series,
+            source, "total_return_series", series,
             {"from": history_start.isoformat(), "to": report_date.isoformat()},
         ),
-        "fund_kpi_daily": _monthly_dataset_metadata(
-            path, file_checksum, "fund_kpi_daily", fund_kpis,
-            {"from": month_start.isoformat(), "to": report_date.isoformat()},
-        ),
-        "trading_calendar": _monthly_dataset_metadata(
-            path, file_checksum, "trading_calendar", calendar,
-            {"from": month_start.isoformat(), "to": report_date.isoformat()},
-        ),
-        "index_events": _monthly_dataset_metadata(
-            path, file_checksum, "index_events", index_events,
-            {"from": report_date.isoformat(), "to": None},
-        ),
     }
+    if optional_ready["fund_kpi_daily"] and not kpi_invalid:
+        datasets["fund_kpi_daily"] = _monthly_dataset_metadata(
+            source, "fund_kpi_daily", fund_kpis,
+            {"from": month_start.isoformat(), "to": report_date.isoformat()},
+        )
+    if optional_ready["trading_calendar"] and calendar_valid:
+        datasets["trading_calendar"] = _monthly_dataset_metadata(
+            source, "trading_calendar", calendar,
+            {"from": month_start.isoformat(), "to": report_date.isoformat()},
+        )
+    if optional_ready["index_events"]:
+        datasets["index_events"] = _monthly_dataset_metadata(
+            source, "index_events", index_events,
+            {"from": report_date.isoformat(), "to": None},
+        )
     for rows in (series, fund_kpis, calendar, index_events):
         for row in rows:
             row.pop("_source_id", None)
@@ -455,12 +680,160 @@ def load_monthly_data(
         "trading_calendar": calendar,
         "index_events": index_events,
         "datasets": datasets,
-        "source_checksum": file_checksum,
+        "source_checksum": _source_checksum(source, datasets),
+        "_findings": provider_findings,
     }
 
 
-def _published_at(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _bloomberg_equity_ticker(product_ticker: str) -> str:
+    """Translate the catalog's listed ticker to the explicit Bloomberg equity identifier."""
+    normalized = str(product_ticker or "").strip().upper()
+    match = re.fullmatch(r"([0-9A-Z]+)\.([A-Z]{2})", normalized)
+    return f"{match.group(1)} {match.group(2)} Equity" if match else normalized
+
+
+def _matches_stored_double(calculated: Decimal, stored: Decimal) -> bool:
+    """Compare a Decimal result with one value that made a round trip through MySQL DOUBLE."""
+    storage_ulp = Decimal(str(math.ulp(float(stored))))
+    return abs(calculated - stored) <= max(Decimal("0.000001"), storage_ulp)
+
+
+def load_monthly_turnover(*, product_ticker: str, report_date: date) -> dict[str, Any]:
+    """Load one Bloomberg monthly turnover aggregate from the DA Report snapshot.
+
+    The upstream row carries both inputs requested by the business formula: ``INTERVAL_SUM`` and
+    the trading-day count. The returned average is recomputed with ``Decimal``; the stored DOUBLE
+    is retained only as source evidence and checked at its actual floating-point precision.
+    """
+    source = _data_source()
+    month_start = report_date.replace(day=1)
+    bloomberg_ticker = _bloomberg_equity_ticker(product_ticker)
+    with _connect_source(source) as connection:
+        actual = _table_columns(connection, "market_monthly_turnovers")
+        missing = sorted(MONTHLY_TURNOVER_REQUIRED_COLUMNS - actual)
+        if missing:
+            raise DaReportProviderError(
+                "DA_REPORT_MONTHLY_TURNOVER_NOT_AVAILABLE",
+                "The DA-Report snapshot does not contain the Bloomberg monthly-turnover contract.",
+                404,
+            )
+        records = list(connection.execute(text("""
+            SELECT id, bloomberg_ticker, calendar_ticker, month_start, period_start, period_end,
+                   total_turnover, trading_days, average_daily_turnover, currency, fetched_at
+            FROM market_monthly_turnovers
+            WHERE UPPER(bloomberg_ticker) = :bloomberg_ticker
+              AND month_start = :month_start
+            ORDER BY id
+        """), {
+            "bloomberg_ticker": bloomberg_ticker.upper(),
+            "month_start": month_start.isoformat(),
+        }).mappings())
+    if not records:
+        raise DaReportProviderError(
+            "DA_REPORT_MONTHLY_TURNOVER_NOT_FOUND",
+            f"DA-Report has no completed Bloomberg turnover record for {bloomberg_ticker} in {report_date:%Y-%m}.",
+            404,
+        )
+    if len(records) != 1:
+        raise DaReportProviderError(
+            "DA_REPORT_MONTHLY_TURNOVER_DUPLICATE",
+            f"DA-Report has more than one Bloomberg turnover record for {bloomberg_ticker} in {report_date:%Y-%m}.",
+            422,
+        )
+
+    record = dict(records[0])
+    try:
+        total_turnover = Decimal(str(record["total_turnover"]))
+        trading_day_count = int(record["trading_days"])
+        source_average = Decimal(str(record["average_daily_turnover"]))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise DaReportProviderError(
+            "DA_REPORT_MONTHLY_TURNOVER_INVALID",
+            "The Bloomberg monthly-turnover row contains a non-numeric formula input.",
+            422,
+        ) from error
+    currency = str(record.get("currency") or "").strip().upper()
+    expected_start = month_start.isoformat()
+    expected_end = report_date.isoformat()
+    period_valid = (
+        str(record.get("month_start")) == expected_start
+        and str(record.get("period_start")) == expected_start
+        and str(record.get("period_end")) == expected_end
+    )
+    numeric_inputs_valid = (
+        total_turnover.is_finite()
+        and total_turnover >= 0
+        and source_average.is_finite()
+        and source_average >= 0
+        and trading_day_count > 0
+    )
+    calculated_average = (
+        total_turnover / Decimal(trading_day_count)
+        if numeric_inputs_valid else None
+    )
+    average_matches = (
+        calculated_average is not None
+        and _matches_stored_double(calculated_average, source_average)
+    )
+    if (
+        not numeric_inputs_valid
+        or not re.fullmatch(r"[A-Z]{3}", currency)
+        or not period_valid
+        or not average_matches
+    ):
+        raise DaReportProviderError(
+            "DA_REPORT_MONTHLY_TURNOVER_INVALID",
+            "The Bloomberg monthly-turnover row failed its period, currency or formula checks.",
+            422,
+        )
+
+    row = {
+        "_source_id": int(record["id"]),
+        "bloomberg_ticker": str(record["bloomberg_ticker"]),
+        "calendar_ticker": str(record["calendar_ticker"]),
+        "month_start": expected_start,
+        "period_start": expected_start,
+        "period_end": expected_end,
+        "total_turnover": format(total_turnover, "f"),
+        "trading_days": trading_day_count,
+        "average_daily_turnover": format(calculated_average, "f"),
+        "source_average_daily_turnover": format(source_average, "f"),
+        "currency": currency,
+        "unit": "unit",
+        "source": "Bloomberg",
+        "formula": "INTERVAL_SUM(TURNOVER) / trading_days",
+        "source_updated_at": str(record["fetched_at"]),
+    }
+    metadata = _monthly_dataset_metadata(
+        source,
+        "market_monthly_turnovers",
+        [row],
+        {"from": expected_start, "to": expected_end},
+    )
+    metadata["mapping_version"] = "da-report-bloomberg-turnover-v1"
+    metadata["lineage"].update({
+        "source_field_map": {
+            "total_turnover": "total_turnover (Bloomberg INTERVAL_SUM, MARKET_DATA_OVERRIDE=TURNOVER)",
+            "trading_days": "trading_days",
+            "average_daily_turnover": "total_turnover / trading_days",
+            "currency": "currency",
+            "unit": "Bloomberg turnover currency amount",
+        },
+        "product_mapping": {
+            "product_ticker": product_ticker,
+            "bloomberg_ticker": bloomberg_ticker,
+        },
+    })
+    row.pop("_source_id", None)
+    return {
+        "fund_turnover_monthly": [row],
+        "datasets": {"fund_turnover_monthly": metadata},
+        "source_checksum": _source_checksum(source, {"fund_turnover_monthly": metadata}),
+    }
+
+
+def _published_at(value: str | datetime) -> datetime:
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
@@ -471,6 +844,8 @@ def _catalog_filter_signature(
     importance: str | None,
     from_date: date | None,
     to_date: date | None,
+    company: str | None,
+    company_scope: str | None,
 ) -> str:
     payload = {
         "query": (query or "").strip(),
@@ -479,6 +854,8 @@ def _catalog_filter_signature(
         "importance": importance or "",
         "from_date": from_date.isoformat() if from_date else "",
         "to_date": to_date.isoformat() if to_date else "",
+        "company": company or "",
+        "company_scope": company_scope or "",
     }
     encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -517,6 +894,9 @@ def _decode_catalog_cursor(cursor: str, sort: str, signature: str) -> tuple[str,
 
 
 def _catalog_item(row: Any) -> dict[str, Any]:
+    source_name_zh_hans = traditional_to_simplified(row["source_name_zh"]) if row["source_name_zh"] else None
+    title_zh_hans = traditional_to_simplified(row["title_zh"]) if row["title_zh"] else None
+    summary_zh_hans = traditional_to_simplified(row["summary_zh"]) if row["summary_zh"] else None
     return {
         "provider": "DA_REPORT",
         "external_id": str(row["external_id"]),
@@ -524,15 +904,21 @@ def _catalog_item(row: Any) -> dict[str, Any]:
         "source_code": row["source_code"],
         "source_name": row["source_name_en"] or row["source_name_zh"] or row["source_code"],
         "source_name_zh": row["source_name_zh"],
+        "source_name_zh_hans": source_name_zh_hans,
+        "source_name_zh_hans_source": "OPENCC_T2S" if source_name_zh_hans else "MISSING",
         "published_at": _published_at(str(row["effective_at"])),
         "published_at_source": "published_at" if row["published_at"] else "fetched_at",
-        "fetched_at": row["fetched_at"],
+        "fetched_at": str(row["fetched_at"]),
         "title": row["title_en"] or row["title_zh"] or row["title_raw"] or "",
         "title_en": row["title_en"],
         "title_zh": row["title_zh"],
+        "title_zh_hans": title_zh_hans,
+        "title_zh_hans_source": "OPENCC_T2S" if title_zh_hans else "MISSING",
         "summary": row["summary_en"] or row["summary_zh"] or row["summary_raw"] or "",
         "summary_en": row["summary_en"],
         "summary_zh": row["summary_zh"],
+        "summary_zh_hans": summary_zh_hans,
+        "summary_zh_hans_source": "OPENCC_T2S" if summary_zh_hans else "MISSING",
         "category": row["category"],
         "region": row["region"],
         "sentiment": row["sentiment"],
@@ -542,7 +928,7 @@ def _catalog_item(row: Any) -> dict[str, Any]:
 
 
 def _list_company_news_catalog_sync(
-    path: Path,
+    data_source: _DataSource,
     query: str | None,
     source: str | None,
     sentiment: str | None,
@@ -552,8 +938,10 @@ def _list_company_news_catalog_sync(
     sort: str,
     cursor: str | None,
     limit: int,
+    constituents: list[dict[str, Any]],
+    company: str | None,
+    company_scope: str | None,
 ) -> dict[str, Any]:
-    _verify_file(path)
     if sort not in {"newest", "oldest"}:
         raise DaReportProviderError("DA_REPORT_SORT_INVALID", "News sort must be newest or oldest.", 422)
     if not 1 <= limit <= 100:
@@ -577,13 +965,68 @@ def _list_company_news_catalog_sync(
     terms = (query or "").strip().split()
     for index, term in enumerate(terms):
         key = f"query_{index}"
-        predicates.append(
-            "LOWER(COALESCE(e.title_en, '') || ' ' || COALESCE(e.title_zh, '') || ' ' || "
-            "COALESCE(e.summary_en, '') || ' ' || COALESCE(e.summary_zh, '') || ' ' || "
-            "COALESCE(i.title_raw, '') || ' ' || COALESCE(i.summary_raw, '') || ' ' || "
-            "COALESCE(s.name_en, '') || ' ' || COALESCE(s.name_zh, '')) LIKE :" + key
-        )
+        search_text = _joined_text(data_source, ("e.title_en", "e.title_zh", "e.summary_en", "e.summary_zh",
+                                                  "i.title_raw", "i.summary_raw", "s.name_en", "s.name_zh"))
+        predicates.append(f"LOWER({search_text}) LIKE :{key}")
         parameters[key] = f"%{term.casefold()}%"
+    normalized_company = (company or "").strip()
+    normalized_company_scope = (company_scope or "").strip().upper()
+    if normalized_company_scope not in {"", "CONSTITUENTS"}:
+        raise DaReportProviderError(
+            "DA_REPORT_COMPANY_SCOPE_INVALID",
+            "Company scope must be CONSTITUENTS when supplied.",
+            422,
+        )
+    if normalized_company and normalized_company_scope:
+        raise DaReportProviderError(
+            "DA_REPORT_COMPANY_FILTER_CONFLICT",
+            "Choose either one company or the complete constituent scope, not both.",
+            422,
+        )
+    if normalized_company_scope and not constituents:
+        raise DaReportProviderError(
+            "DA_REPORT_CONSTITUENTS_UNAVAILABLE",
+            "The report-month constituent company list is unavailable.",
+            422,
+        )
+    title_expression = _joined_text(data_source, ("e.title_en", "e.title_zh", "i.title_raw"))
+    if normalized_company:
+        selected_company = next(
+            (
+                row for row in constituents
+                if str(row.get("security_code") or "").strip() == normalized_company
+            ),
+            None,
+        )
+        if selected_company is None:
+            raise DaReportProviderError(
+                "DA_REPORT_COMPANY_INVALID",
+                "The selected company is not part of this report's constituent snapshot.",
+                422,
+            )
+        aliases = _company_aliases(selected_company)
+        if aliases:
+            company_predicates: list[str] = []
+            for index, alias in enumerate(aliases):
+                key = f"company_alias_{index}"
+                company_predicates.append(_company_predicate(data_source, title_expression, key, alias, parameters))
+            predicates.append("(" + " OR ".join(company_predicates) + ")")
+        else:
+            predicates.append("0 = 1")
+    elif normalized_company_scope == "CONSTITUENTS":
+        aliases: list[str] = []
+        for constituent in constituents:
+            for alias in _company_aliases(constituent):
+                if alias not in aliases:
+                    aliases.append(alias)
+        if aliases:
+            company_predicates = []
+            for index, alias in enumerate(aliases):
+                key = f"constituent_alias_{index}"
+                company_predicates.append(_company_predicate(data_source, title_expression, key, alias, parameters))
+            predicates.append("(" + " OR ".join(company_predicates) + ")")
+        else:
+            predicates.append("0 = 1")
     if source:
         predicates.append("s.code = :source")
         parameters["source"] = source
@@ -608,7 +1051,16 @@ def _list_company_news_catalog_sync(
         parameters["to_date_exclusive"] = (to_date + timedelta(days=1)).isoformat()
 
     where_sql = " WHERE " + " AND ".join(f"({predicate})" for predicate in predicates)
-    signature = _catalog_filter_signature(query, source, sentiment, importance, from_date, to_date)
+    signature = _catalog_filter_signature(
+        query,
+        source,
+        sentiment,
+        importance,
+        from_date,
+        to_date,
+        normalized_company,
+        normalized_company_scope,
+    )
     page_predicates = list(predicates)
     if cursor:
         cursor_at, cursor_id = _decode_catalog_cursor(cursor, sort, signature)
@@ -646,7 +1098,7 @@ def _list_company_news_catalog_sync(
         LIMIT :limit
     """)
     try:
-        with _engine(str(path.resolve())).connect() as connection:
+        with _connect_source(data_source) as connection:
             _validate_schema(connection)
             rows = list(connection.execute(catalog_query, {**parameters, "limit": limit + 1}).mappings())
             total = int(connection.execute(
@@ -672,6 +1124,7 @@ def _list_company_news_catalog_sync(
                 "value": str(row["value"]),
                 "label": row["label"] or row["label_zh"] or row["value"],
                 "label_zh": row["label_zh"],
+                "label_zh_hans": traditional_to_simplified(row["label_zh"]) if row["label_zh"] else None,
                 "count": int(row["count"]),
             } for row in connection.execute(text(
                 "SELECT s.code AS value, s.name_en AS label, s.name_zh AS label_zh, COUNT(*) AS count "
@@ -719,6 +1172,7 @@ def _list_company_news_catalog_sync(
         "has_more": len(rows) > limit,
         "next_cursor": next_cursor,
         "facets": {
+            "companies": _company_facets(constituents),
             "sources": sources,
             "sentiments": sentiments,
             "importance": importance_counts,
@@ -726,6 +1180,10 @@ def _list_company_news_catalog_sync(
             "date_max": date_bounds["date_max"],
         },
     }
+
+
+def _list_configured_catalog_sync(*args):
+    return _list_company_news_catalog_sync(_data_source(), *args)
 
 
 async def list_company_news_catalog(
@@ -738,10 +1196,12 @@ async def list_company_news_catalog(
     sort: Literal["newest", "oldest"] = "newest",
     cursor: str | None = None,
     limit: int = 50,
+    constituents: list[dict[str, Any]] | None = None,
+    company: str | None = None,
+    company_scope: Literal["CONSTITUENTS"] | None = None,
 ) -> dict[str, Any]:
     return await asyncio.to_thread(
-        _list_company_news_catalog_sync,
-        _materialize_snapshot(),
+        _list_configured_catalog_sync,
         query,
         source,
         sentiment,
@@ -751,11 +1211,13 @@ async def list_company_news_catalog(
         sort,
         cursor,
         limit,
+        constituents or [],
+        company,
+        company_scope,
     )
 
 
-def _get_company_news_catalog_item_sync(path: Path, external_id: str) -> dict[str, Any]:
-    _verify_file(path)
+def _get_company_news_catalog_item_sync(source: _DataSource, external_id: str) -> dict[str, Any]:
     try:
         item_id = int(external_id)
     except (TypeError, ValueError) as error:
@@ -796,7 +1258,7 @@ def _get_company_news_catalog_item_sync(path: Path, external_id: str) -> dict[st
           AND COALESCE(i.published_at, i.fetched_at) IS NOT NULL
     """)
     try:
-        with _engine(str(path.resolve())).connect() as connection:
+        with _connect_source(source) as connection:
             _validate_schema(connection)
             row = connection.execute(query, {"external_id": item_id}).mappings().one_or_none()
     except DaReportProviderError:
@@ -819,21 +1281,18 @@ def _get_company_news_catalog_item_sync(path: Path, external_id: str) -> dict[st
 
 async def get_company_news_catalog_item(external_id: str) -> dict[str, Any]:
     return await asyncio.to_thread(
-        _get_company_news_catalog_item_sync,
-        _materialize_snapshot(),
-        external_id,
+        lambda: _get_company_news_catalog_item_sync(_data_source(), external_id),
     )
 
 
 def _fetch_sync(
-    path: Path,
+    source: _DataSource,
     constituents: list[dict[str, Any]],
     from_date: date,
     to_date: date,
     page: int,
     limit: int,
 ) -> list[dict[str, Any]]:
-    _verify_file(path)
     aliases = _constituent_aliases(constituents)
     if not aliases:
         return []
@@ -868,7 +1327,7 @@ def _fetch_sync(
         ORDER BY e.importance_score DESC, i.published_at DESC, i.id DESC
     """)
     try:
-        with _engine(str(path.resolve())).connect() as connection:
+        with _connect_source(source) as connection:
             _validate_schema(connection)
             rows = connection.execute(query, {
                 "report_type": "regional",
@@ -897,8 +1356,14 @@ def _fetch_sync(
                         "scope": "CONSTITUENTS",
                         "site": urlparse(source_url).hostname,
                         "external_id": str(row["external_id"]),
+                        "source_name_en": row["source_name_en"],
+                        "source_name_zh": row["source_name_zh"],
+                        "title_en": row["title_en"],
+                        "title_zh": row["title_zh"],
+                        "summary_en": row["summary_en"],
+                        "summary_zh": row["summary_zh"],
                         "source_code": row["source_code"],
-                        "fetched_at": row["fetched_at"],
+                        "fetched_at": str(row["fetched_at"]),
                         "region": row["region"],
                         "sentiment": row["sentiment"],
                         "importance_score": row["importance_score"],
@@ -928,7 +1393,7 @@ def _fetch_configured_sync(
     page: int,
     limit: int,
 ) -> list[dict[str, Any]]:
-    return _fetch_sync(_materialize_snapshot(), constituents, from_date, to_date, page, limit)
+    return _fetch_sync(_data_source(), constituents, from_date, to_date, page, limit)
 
 
 async def fetch_news(

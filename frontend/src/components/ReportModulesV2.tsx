@@ -146,11 +146,15 @@ function ReportTitleFields({ defaults, overrides, disabled, onChange, productNam
     { label: "constituentPerformance", keys: ["constituent_performance"] },
     { label: "finalAnalytics", keys: ["top10", "sector_breakdown", "performers", "top_performers", "bottom_performers", "portfolio_analysis", "portfolio.AUM", "portfolio.AVERAGE_DAILY_TURNOVER", "portfolio.NUMBER_OF_HOLDINGS"] },
   ] as const;
+  const storedProductName = terminology.product_name;
+  const productNameOverride = typeof storedProductName === "string" && storedProductName !== ""
+    ? storedProductName
+    : undefined;
   return <section className="report-title-editor" aria-label={t("reportTitles")}>
     <details>
       <summary>{t("reportTitles")}</summary>
-      <ReportTitleField label={t("productName")} value={String(terminology.product_name ?? productName)}
-        overridden={terminology.product_name !== undefined} disabled={disabled}
+      <ReportTitleField label={t("productName")} value={productNameOverride ?? productName}
+        overridden={productNameOverride !== undefined} disabled={disabled}
         onChange={(value) => onTerminologyChange({ ...terminology, product_name: value })}
         onReset={() => { const next = { ...terminology }; delete next.product_name; onTerminologyChange(next); }} />
       {groups.map((group) => <section className="report-title-group" key={group.label}>
@@ -401,9 +405,9 @@ function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
     await api.saveDocument(report.id, version, next);
   }, [content, normalizedTurnover, report.id, titleOverrides, turnoverDirty, version]);
   useLayoutEffect(() => {
-    registerPendingSave(dirty && titlesValid ? persist : null);
+    registerPendingSave(dirty ? persist : null);
     return () => registerPendingSave(null);
-  }, [dirty, persist, registerPendingSave, titlesValid]);
+  }, [dirty, persist, registerPendingSave]);
   const sectorChart = analytics.sector_chart as SectorChartSnapshot | undefined;
   const sectorSeries = sectorSlices(sectorChart, locale);
   const monthName = reportMonthName(report);
@@ -434,7 +438,7 @@ function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
     index={index} value={value} defaultValue={fallback} overridden={titleOverrides[key] !== undefined}
     disabled={busy || frozen} onChange={(next) => setTitle(key, next)} onReset={() => resetTitle(key)}
   />;
-  return <><ModuleHeading eyebrow={t("pageDetail", { page: "05", detail: t("calculatedOutputs") })} title={t("finalAnalytics")} description={t("analyticsDescription")} actions={<><button disabled={busy || frozen || !dirty || !titlesValid} onClick={() => run(persist)}><Save size={16} /> {t("saveAnalyticsTitles")}</button><button className="primary" disabled={busy || isReportReadOnly(report) || !report.active_snapshot_id} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> {t("refreshAnalytics")}</button></>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section">{editableTitle("01", "top10", top10Title, top10Default)}<table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{shownName(row)}</th><td>{percent(row.weight, numberLocale, t("noData"))}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section">{editableTitle("02", "sector_breakdown", sectorTitle, sectorDefault)}{sectorSeries.length ? <SectorDonut chart={sectorChart} title={sectorTitle} /> : <EmptyData />}</section><section className="analytics-section">{editableTitle("03", "performers", performersTitle, performersDefault)}<div className="performer-columns"><PerformerList title={reportTitle(report, "top_performers", t("top"))} data={top} /><PerformerList title={reportTitle(report, "bottom_performers", t("bottom"))} data={bottom} /></div></section><section className="analytics-section">{editableTitle("04", "portfolio_analysis", portfolioTitle, portfolioDefault)}<dl className="portfolio-list">{displayPortfolio.map((row) => {
+  return <><ModuleHeading eyebrow={t("pageDetail", { page: "05", detail: t("calculatedOutputs") })} title={t("finalAnalytics")} description={t("analyticsDescription")} actions={<><button disabled={busy || frozen || !dirty || !titlesValid} onClick={() => run(persist)}><Save size={16} /> {t("saveAnalyticsTitles")}</button><button className="primary" disabled={busy || isReportReadOnly(report) || !report.active_snapshot_id || titleDirty} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> {t("refreshAnalytics")}</button></>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section">{editableTitle("01", "top10", top10Title, top10Default)}<table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{shownName(row)}</th><td>{percent(row.weight, numberLocale, t("noData"))}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section">{editableTitle("02", "sector_breakdown", sectorTitle, sectorDefault)}{sectorSeries.length ? <SectorDonut chart={sectorChart} title={sectorTitle} /> : <EmptyData />}</section><section className="analytics-section">{editableTitle("03", "performers", performersTitle, performersDefault)}<div className="performer-columns"><PerformerList title={reportTitle(report, "top_performers", t("top"))} data={top} /><PerformerList title={reportTitle(report, "bottom_performers", t("bottom"))} data={bottom} /></div></section><section className="analytics-section">{editableTitle("04", "portfolio_analysis", portfolioTitle, portfolioDefault)}<dl className="portfolio-list">{displayPortfolio.map((row) => {
     const editableTurnover = turnoverEnabled && row.metric_code === "AVERAGE_DAILY_TURNOVER";
     return <div key={String(row.metric_code)} className={editableTurnover ? "portfolio-turnover-row" : undefined}><dt>{String(row.label)}</dt><dd>{editableTurnover ? <div className="portfolio-turnover-editor"><input aria-label={String(row.label)} size={16} value={turnover} disabled={busy || frozen} onChange={(event) => setTurnover(event.target.value)} /><button className="icon-button" type="button" aria-label={t("save")} title={t("save")} disabled={busy || frozen || !dirty || !titlesValid} onClick={() => run(persist)}><Save size={16} /></button></div> : <data value={row.raw_value == null ? undefined : String(row.raw_value)}>{portfolioDisplayValue(row) === "N/A" ? t("noData") : portfolioDisplayValue(row)}</data>}</dd></div>;
   })}</dl></section></div><FormulaStrip title={t("analyticsFormula")} formula={t("analyticsFormulaExpression")} detail={t("analyticsFormulaDetail")} /></>;

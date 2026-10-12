@@ -344,7 +344,7 @@ describe("3033 product scope", () => {
 
   it("saves title edits before finalizing without blocking on review findings and opens downloads", async () => {
     let current = report("ready", "2026-07-31", "QA_BLOCKED");
-    current.report_title_defaults = { top10: "Largest positions*" };
+    current.report_title_defaults = { top10: "Largest 3033.HK positions*" };
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockImplementation(async () => [current]);
     vi.spyOn(api, "getReport").mockImplementation(async () => current);
@@ -369,11 +369,11 @@ describe("3033 product scope", () => {
     renderAt(`/reports/${current.id}`);
     const reviewButton = await screen.findByRole("button", { name: "Review & finalize" });
     fireEvent.click(screen.getByText("Report titles", { selector: "summary" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Largest positions*" }), { target: { value: "Largest positions" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Largest 3033.HK positions*" }), { target: { value: "Largest 3033.HK positions" } });
     fireEvent.click(reviewButton);
 
     await waitFor(() => expect(finalize).toHaveBeenCalledTimes(1));
-    expect(saveDocument).toHaveBeenCalledWith("ready", 1, expect.objectContaining({ title_overrides: { top10: "Largest positions" } }));
+    expect(saveDocument).toHaveBeenCalledWith("ready", 1, expect.objectContaining({ title_overrides: { top10: "Largest 3033.HK positions" } }));
     expect(finalize).toHaveBeenCalledWith("ready", 2);
     expect(saveDocument.mock.invocationCallOrder[0]).toBeLessThan(finalize.mock.invocationCallOrder[0]);
     expect(review).not.toHaveBeenCalled();

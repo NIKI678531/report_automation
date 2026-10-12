@@ -835,7 +835,7 @@ def test_language_variant_from_finalized_v2_keeps_source_render_identity_after_c
 def test_language_variants_keep_independent_title_overrides(client):
     source = create_report(client)
     source_document = client.get(f"/api/v1/reports/{source['id']}").json()["latest_document"]
-    source_document["content"]["title_overrides"] = {"top10": "Largest positions"}
+    source_document["content"]["title_overrides"] = {"top10": "Largest 3033.HK positions"}
     saved_source = client.patch(f"/api/v1/reports/{source['id']}/document", json={
         "version": source_document["version"], "content": source_document["content"],
     }).json()
@@ -848,7 +848,7 @@ def test_language_variants_keep_independent_title_overrides(client):
     assert not target["latest_document"]["content"].get("title_overrides")
     assert target["report_title_defaults"]["top10"] == "3033.HK 十大成分股*"
     target_document = target["latest_document"]
-    target_document["content"]["title_overrides"] = {"top10": "主要持仓"}
+    target_document["content"]["title_overrides"] = {"top10": "3033.HK 主要持仓"}
     saved_target = client.patch(f"/api/v1/reports/{target_id}/document", json={
         "version": target_document["version"], "content": target_document["content"],
     }).json()
@@ -856,8 +856,8 @@ def test_language_variants_keep_independent_title_overrides(client):
         "source_document_version": saved_source["version"], "target_document_version": saved_target["version"],
     })
     assert synced.status_code == 200, synced.text
-    assert client.get(f"/api/v1/reports/{target_id}").json()["latest_document"]["content"]["title_overrides"] == {"top10": "主要持仓"}
-    assert client.get(f"/api/v1/reports/{source['id']}").json()["latest_document"]["content"]["title_overrides"] == {"top10": "Largest positions"}
+    assert client.get(f"/api/v1/reports/{target_id}").json()["latest_document"]["content"]["title_overrides"] == {"top10": "3033.HK 主要持仓"}
+    assert client.get(f"/api/v1/reports/{source['id']}").json()["latest_document"]["content"]["title_overrides"] == {"top10": "Largest 3033.HK positions"}
 
 
 def test_language_variant_retargets_v4_footnote_content_to_blank_editorial(client):

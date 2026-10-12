@@ -420,7 +420,9 @@ def test_custom_report_headings_are_escaped_in_preview_and_exports(client):
     report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     document = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]
     hostile = '<script>alert("title")</script> & Assets'
-    document["content"]["title_overrides"] = {"top10": hostile, "portfolio.AUM": hostile}
+    top10_title = f"3033.HK {hostile}"
+    aum_title = f"{hostile} (HKD)"
+    document["content"]["title_overrides"] = {"top10": top10_title, "portfolio.AUM": aum_title}
     saved = client.patch(f"/api/v1/reports/{report['id']}/document", json={
         "version": document["version"], "content": document["content"],
     })
@@ -428,13 +430,15 @@ def test_custom_report_headings_are_escaped_in_preview_and_exports(client):
     preview = client.post(f"/api/v1/reports/{report['id']}/preview")
     assert preview.status_code == 200
     assert "<script>" not in preview.text
-    assert escape(hostile).replace("&quot;", "&#34;") in preview.text
+    assert escape(top10_title).replace("&quot;", "&#34;") in preview.text
+    assert escape(aum_title).replace("&quot;", "&#34;") in preview.text
     finalized = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": saved.json()["version"]})
     assert finalized.status_code == 200, finalized.text
     exported = download_report(client, report["id"], "html")
     assert exported.status_code == 200
     assert "<script>" not in exported.text
-    assert escape(hostile).replace("&quot;", "&#34;") in exported.text
+    assert escape(top10_title).replace("&quot;", "&#34;") in exported.text
+    assert escape(aum_title).replace("&quot;", "&#34;") in exported.text
 
 
 def test_a_fund_name_from_the_catalog_cannot_inject_markup(client, monkeypatch):

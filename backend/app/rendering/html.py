@@ -259,6 +259,7 @@ def sector_chart(
     language_mode: str = "EN",
     product_ticker: str = "3033.HK",
     overrides: dict[str, str] | None = None,
+    title: str | None = None,
 ) -> dict[str, Any]:
     """Lay out the `industry_breakdown` chart snapshot.
 
@@ -266,9 +267,12 @@ def sector_chart(
     in ``domain.metrics.industry_breakdown.sector_chart_snapshot``. Everything here is geometry and colour
     resolution — the renderer must not regroup, re-sort or recompute (rules document §4.3).
     """
+    resolved_title = str(
+        title or term("sector_breakdown", language_mode, product=product_ticker)
+    )
     series = (chart_snapshot or {}).get("series") or []
     if not series:
-        return {"has_data": False, "rows": []}
+        return {"has_data": False, "rows": [], "title": resolved_title}
 
     view_box = float(chart_tokens["viewBoxSize"])
     center = view_box / 2
@@ -333,12 +337,14 @@ def sector_chart(
         f"{item['sector']} {item['display_value']}" for item in rows
     )
     separator = "：" if is_chinese(language_mode) else ": "
+    accessible_heading = resolved_title.rstrip("*^")
     return {
         "has_data": True,
         "view_box": view_box,
         "box_mm": float(chart_tokens["boxWidthMm"]),
         "rows": rows,
-        "alt_text": f"{term('sector_breakdown', language_mode, product=product_ticker).rstrip('*')}{separator}{localized_summary}",
+        "title": resolved_title,
+        "alt_text": f"{accessible_heading}{separator}{localized_summary}",
     }
 
 
@@ -463,5 +469,6 @@ def render_html(
             language_mode,
             str(document.get("product_ticker") or f"{report.product_code}.HK"),
             document.get("_industry_overrides") or {},
+            title=titles["sector_breakdown"],
         ),
     )

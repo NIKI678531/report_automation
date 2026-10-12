@@ -6,6 +6,7 @@ the zero-weight filter, the percentage string and the colour identity are decide
 renderers -- canonical HTML/PDF, DOCX and the React workbench -- consume it, so anything these
 tests do not pin down is free to drift between formats.
 """
+import io
 from decimal import Decimal
 
 from app.domain.metrics.final_analytics import calculate_snapshot
@@ -234,3 +235,43 @@ def test_every_output_format_reads_the_same_display_value(client, tmp_path):
     assert "Average Daily Turnover (HKD)^^" in docx_text
     assert "12,882 million" in docx_text
     assert "47.75%" not in docx_text and "49.27%" not in docx_text
+
+
+def test_custom_sector_heading_updates_accessible_metadata(client):
+    import docx
+
+    report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
+    client.post(
+        f"/api/v1/reports/{report['id']}/snapshots",
+        json={"source_policy": "GOLDEN_FIXTURE", "mapping_version": "hstech-v1"},
+    )
+    client.post(f"/api/v1/reports/{report['id']}/calculations")
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    content = detail["latest_document"]["content"]
+    sector_title = "3033.HK Editorial sector mix"
+    content["title_overrides"] = {"sector_breakdown": sector_title}
+    saved = client.patch(f"/api/v1/reports/{report['id']}/document", json={
+        "version": detail["latest_document"]["version"], "content": content,
+    })
+    assert saved.status_code == 200, saved.text
+    finalized = client.post(
+        f"/api/v1/reports/{report['id']}/finalize",
+        json={"version": saved.json()["version"]},
+    )
+    assert finalized.status_code == 200, finalized.text
+
+    html = download_report(client, report["id"], "html").text
+    assert f"<title>{sector_title}</title>" in html
+    assert f'aria-label="{sector_title}: ' in html
+    assert f"<desc>{sector_title}: " in html
+
+    document = docx.Document(
+        io.BytesIO(download_report(client, report["id"], "docx").content)
+    )
+    chart_description = next(
+        element.get("descr", "")
+        for element in document.element.body.xpath(".//wp:docPr")
+        if element.get("title") == sector_title
+    )
+    assert chart_description.startswith(f"{sector_title}: ")
+    assert all(value in chart_description for value in ("47.8%", "49.3%", "1.7%", "1.3%"))

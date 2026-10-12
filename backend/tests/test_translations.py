@@ -48,15 +48,15 @@ def test_only_review_text_is_sent():
     source, target = documents()
     source["sections"]["company_news"] = [{"summary": "paid news must remain private"}]
     source["sections"]["footnotes"] = {"historical": "approved disclosure"}
-    source["title_overrides"] = {"top10": "Manual source heading"}
-    target["title_overrides"] = {"top10": "手工编辑的标题"}
+    source["title_overrides"] = {"top10": "Manual TEST source heading"}
+    target["title_overrides"] = {"top10": "TEST 手工编辑的标题"}
     before = deepcopy(source)
 
     def translator(texts, *_):
         assert "paid news" not in str(texts)
         assert "approved disclosure" not in str(texts)
         assert "12.5" not in str(texts)
-        assert "Manual source heading" not in str(texts)
+        assert "Manual TEST source heading" not in str(texts)
         return {key: value.replace("Market review", "市场回顾").replace("Return", "回报") for key, value in texts.items()}
 
     translated, _ = convert(source, target, translator)

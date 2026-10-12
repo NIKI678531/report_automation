@@ -1567,12 +1567,19 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     source_chart = analytics.get("sector_chart") or {}
     sector_series = source_chart.get("series") or []
     industry_overrides = content.get("_industry_overrides") or {}
-    chart = sector_chart(source_chart, tokens["chart"]["sectorDonut"], language_mode, content["product_ticker"], industry_overrides)
+    chart = sector_chart(
+        source_chart,
+        tokens["chart"]["sectorDonut"],
+        language_mode,
+        content["product_ticker"],
+        industry_overrides,
+        title=titles["sector_breakdown"],
+    )
     chart_paragraph = right.add_paragraph()
     _format_paragraph(chart_paragraph, alignment=WD_ALIGN_PARAGRAPH.CENTER)
     if chart.get("has_data"):
         picture = chart_paragraph.add_run().add_picture(_sector_chart_image(chart, sector_series, font_name), width=Cm(7.2))
-        picture._inline.docPr.set("title", titles["sector_breakdown"])
+        picture._inline.docPr.set("title", str(chart["title"]))
         picture._inline.docPr.set("descr", str(chart.get("alt_text") or ""))
         _sector_legend(right, chart["rows"], font_name=font_name)
     _remove_initial_empty_paragraph(right)

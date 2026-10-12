@@ -555,7 +555,7 @@ def test_report_title_overrides_are_versioned_and_defaults_keep_markers(client):
     assert reset.json()["content"]["title_overrides"] == {}
 
 
-@pytest.mark.parametrize("overrides", [None, [], {"unknown": "Title"}, {"top10": " "}, {"top10": 7}, {"top10": "x" * 201}])
+@pytest.mark.parametrize("overrides", [None, [], {"unknown": "Title"}, {"top10": " "}, {"top10": 7}, {"top10": "x" * 201}, {"top10": "A\x00B"}])
 def test_report_title_overrides_reject_invalid_values(client, overrides):
     report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     document = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]
@@ -575,7 +575,7 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
     assert content["sections"]["month_in_review"]["display_title"] == "June in Review"
     content["sections"]["month_in_review"]["display_title"] = "Editable Monthly Perspective"
     content["sections"]["month_in_review"]["title"] = "Editable Monthly Perspective"
-    content["title_overrides"] = {"top10": "Largest positions", "portfolio.AUM": "Fund assets"}
+    content["title_overrides"] = {"top10": "Largest 3033.HK positions", "portfolio.AUM": "Fund assets (HKD)"}
     saved = client.patch(
         f"/api/v1/reports/{report['id']}/document",
         json={"version": detail["latest_document"]["version"], "content": content},
@@ -598,6 +598,26 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
     assert rejected.status_code == 422
     assert rejected.json()["error_code"] == "REVIEW_BLOCK_TITLE_INVALID"
     assert rejected.json()["field"] == "sections.month_in_review.blocks.0.title"
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("historical_performance", "Historical performance of 3033.HK*"),
+    ("top10", "Largest positions*"),
+    ("performers", "Monthly movers**"),
+    ("portfolio.AUM", "Fund assets (USD)^"),
+])
+def test_report_title_overrides_preserve_bound_report_data(client, key, value):
+    report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
+    document = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]
+    document["content"]["title_overrides"] = {key: value}
+
+    response = client.patch(f"/api/v1/reports/{report['id']}/document", json={
+        "version": document["version"], "content": document["content"],
+    })
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error_code"] == "REPORT_TITLE_INVALID"
+    assert response.json()["field"] == f"title_overrides.{key}"
 
 
 def test_review_subtitle_and_title_body_indents_are_saved_and_previewed(client):
