@@ -171,6 +171,8 @@ describe("report module data responsibilities", () => {
       top10: "Top 10 3033.HK Constituents*",
       sector_breakdown: "3033.HK Sectors Breakdown*",
       portfolio_analysis: "3033.HK Portfolio Analysis",
+      "portfolio.AUM": "Asset Under Management (HKD)^",
+      "portfolio.AVERAGE_DAILY_TURNOVER": "Average Daily Turnover (HKD)^^",
     };
     render(<ReportModule report={editable} active="analytics" busy={false} run={run} registerPendingSave={registerPendingSave} />);
 
@@ -189,6 +191,18 @@ describe("report module data responsibilities", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Bottom performers title" }), { target: { value: "June laggards" } });
     fireEvent.click(screen.getAllByRole("button", { name: "Done" })[0]);
 
+    for (const [current, replacement] of [
+      ["Asset Under Management (HKD)^", "Fund assets (HKD)^"],
+      ["Average Daily Turnover (HKD)^^", "Monthly average turnover (HKD)^^"],
+    ]) {
+      fireEvent.click(screen.getByRole("button", { name: `Edit portfolio label: ${current}` }));
+      fireEvent.change(screen.getByRole("textbox", { name: `Portfolio label: ${current}` }), { target: { value: replacement } });
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    }
+
+    expect(screen.getByText("Fund assets (HKD)^")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Monthly average turnover (HKD)^^" })).toHaveProperty("value", "12,882 million");
+
     expect(screen.getByRole("button", { name: "Refresh analytics" })).toHaveProperty("disabled", true);
     await registerPendingSave.mock.lastCall![0]!();
     expect(saveDocument).toHaveBeenCalledWith(report.id, 4, expect.objectContaining({
@@ -199,6 +213,8 @@ describe("report module data responsibilities", () => {
         top_performers: "June leaders^",
         bottom_performers: "June laggards",
         portfolio_analysis: "3033.HK fund profile^",
+        "portfolio.AUM": "Fund assets (HKD)^",
+        "portfolio.AVERAGE_DAILY_TURNOVER": "Monthly average turnover (HKD)^^",
       },
     }));
   });

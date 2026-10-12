@@ -1056,8 +1056,14 @@ tbody tr:last-child th, tbody tr:last-child td { box-shadow: none; }
 .portfolio-list { margin: 0; padding: var(--space-xs) var(--space-md) var(--space-md); }
 .portfolio-list > div { display: flex; justify-content: space-between; gap: var(--space-lg); padding: var(--space-md) 0; box-shadow: inset 0 -1px 0 var(--color-border); }
 .portfolio-list > div:last-child { box-shadow: none; }
-.portfolio-list dt { color: var(--color-text-secondary); font-size: var(--text-body-sm); }
+.portfolio-list dt { min-width: var(--space-none); color: var(--color-text-secondary); font-size: var(--text-body-sm); }
 .portfolio-list dd { margin: 0; color: var(--color-text); font-family: var(--font-numeric); font-weight: var(--weight-emphasis); font-variant-numeric: var(--numeric-features); }
+.portfolio-list > .portfolio-editable-title-row { align-items: flex-start; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }
+.portfolio-editable-title-row dt { flex: 1 1 var(--layout-review-control-min); }
+.portfolio-metric-title-row { display: flex; align-items: flex-start; gap: var(--space-xs); }
+.portfolio-metric-title-row > span { flex: 1; }
+.portfolio-metric-title-row .icon-button { flex: 0 0 auto; }
+.portfolio-metric-title-editor { margin-block-start: var(--space-sm); padding: var(--space-sm); box-shadow: inset 0 0 0 1px var(--color-border); }
 .portfolio-list > .portfolio-turnover-row { flex-wrap: wrap; align-items: center; gap: var(--space-sm) var(--space-lg); }
 .portfolio-turnover-row dd { min-width: var(--space-none); max-width: 100%; }
 .portfolio-turnover-editor { display: flex; align-items: center; gap: var(--space-xs); }
