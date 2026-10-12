@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Calculator, Database, RefreshCw, Save, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Calculator, Database, Pencil, RefreshCw, RotateCcw, Save, Sparkles } from "lucide-react";
 import { api, type DatasetSlot, type Report } from "../api";
 import { SectorDonut, sectorSlices, type SectorChartSnapshot } from "../features/analytics/SectorDonut";
 import { CompanyNewsWorkbench } from "../features/news/CompanyNewsWorkbench";
 import { legacyReviewBlocks, pageOnePresentation, retargetHistoricalFootnoteStyles, richHtmlToPlainText, ReviewCanvas, type PageOnePresentation, type ReviewBlock } from "../features/review/ReviewCanvas";
-import { FOOTNOTE_SECTIONS, isReportReadOnly, reportConstituentsTitle, reportMonthName, reportProductTicker, reviewLegacyText, type FootnoteSectionKey, type ModuleId } from "../reportModules";
+import { FOOTNOTE_SECTIONS, isReportReadOnly, reportConstituentsTitle, reportMonthName, reportProductTicker, reportTitle, reportTitleOverrides, reviewLegacyText, type FootnoteSectionKey, type ModuleId } from "../reportModules";
 import type { RegisterPendingSave } from "../pendingSave";
 import { CsvDatasetUpload } from "./CsvDatasetUpload";
-import { MarkerTextarea } from "./SuperscriptMarkerControl";
+import { MarkerInput, MarkerTextarea } from "./SuperscriptMarkerControl";
 import { reportLocale, useLocale } from "../i18n";
 
 type RunAction = (work: () => Promise<unknown>) => Promise<void>;
@@ -109,6 +109,63 @@ export function ReportModule({ report, active, busy, run, registerPendingSave = 
   return null;
 }
 
+function ReportTitleField({ label, value, overridden, disabled, onChange, onReset }: {
+  label: string;
+  value: string;
+  overridden: boolean;
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onReset: () => void;
+}) {
+  const { t } = useLocale();
+  const id = useId();
+  return <div className="report-title-field">
+    <div className="report-title-label">
+      <label htmlFor={id}>{label}</label>
+      <button type="button" className="icon-button" disabled={disabled || !overridden}
+        title={t("resetReportTitle", { title: label })} aria-label={t("resetReportTitle", { title: label })}
+        onClick={onReset}><RotateCcw size={16} /></button>
+    </div>
+    <MarkerInput id={id} value={value} maxLength={200} required disabled={disabled} onValueChange={onChange} />
+  </div>;
+}
+
+function ReportTitleFields({ defaults, overrides, disabled, onChange, productName, terminology, onTerminologyChange }: {
+  defaults: Record<string, string>;
+  overrides: Record<string, string>;
+  disabled: boolean;
+  onChange: (value: Record<string, string>) => void;
+  productName: string;
+  terminology: JsonRecord;
+  onTerminologyChange: (value: JsonRecord) => void;
+}) {
+  const { t } = useLocale();
+  const groups = [
+    { label: "historicalPerformance", keys: ["historical_performance"] },
+    { label: "companyNews", keys: ["company_news"] },
+    { label: "constituentPerformance", keys: ["constituent_performance"] },
+    { label: "finalAnalytics", keys: ["top10", "sector_breakdown", "performers", "top_performers", "bottom_performers", "portfolio_analysis", "portfolio.AUM", "portfolio.AVERAGE_DAILY_TURNOVER", "portfolio.NUMBER_OF_HOLDINGS"] },
+  ] as const;
+  return <section className="report-title-editor" aria-label={t("reportTitles")}>
+    <details>
+      <summary>{t("reportTitles")}</summary>
+      <ReportTitleField label={t("productName")} value={String(terminology.product_name ?? productName)}
+        overridden={terminology.product_name !== undefined} disabled={disabled}
+        onChange={(value) => onTerminologyChange({ ...terminology, product_name: value })}
+        onReset={() => { const next = { ...terminology }; delete next.product_name; onTerminologyChange(next); }} />
+      {groups.map((group) => <section className="report-title-group" key={group.label}>
+        <h4>{t(group.label)}</h4>
+        {group.keys.filter((key) => defaults[key] !== undefined).map((key) => <ReportTitleField
+          key={key} label={defaults[key]} value={overrides[key] ?? defaults[key]}
+          overridden={overrides[key] !== undefined} disabled={disabled}
+          onChange={(value) => onChange({ ...overrides, [key]: value })}
+          onReset={() => { const next = { ...overrides }; delete next[key]; onChange(next); }}
+        />)}
+      </section>)}
+    </details>
+  </section>;
+}
+
 function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_SAVE }: Omit<ModuleProps, "active">) {
   const { t } = useLocale();
   const locale = reportLocale(report.language_mode);
@@ -117,6 +174,7 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
   const review = (sectionsOf(report).month_in_review as JsonRecord | undefined) ?? {};
   const defaultReviewTitle = reviewTitleOf(report, review);
   const initialTerminology = useMemo(() => (content?.terminology_overrides as JsonRecord | undefined) ?? {}, [report.id, version]);
+  const initialTitleOverrides = useMemo(() => reportTitleOverrides(content), [report.id, version]);
   const initialBlocks = useMemo(() => legacyReviewBlocks(review, defaultReviewTitle, report.language_mode ?? "EN", !isReportReadOnly(report)), [report.id, version]);
   const initialHistoricalFootnote = useMemo(() => String(((sectionsOf(report).footnotes as JsonRecord | undefined) ?? {}).historical ?? ""), [report.id, version]);
   const initialPresentation = useMemo(() => pageOnePresentation(content?.presentation, initialBlocks, initialHistoricalFootnote), [report.id, version, initialBlocks, initialHistoricalFootnote]);
@@ -124,6 +182,7 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
   const [presentation, setPresentation] = useState<PageOnePresentation>(initialPresentation);
   const [historicalFootnote, setHistoricalFootnote] = useState(initialHistoricalFootnote);
   const [terminology, setTerminology] = useState<JsonRecord>(initialTerminology);
+  const [titleOverrides, setTitleOverrides] = useState(initialTitleOverrides);
   const [previewHtml, setPreviewHtml] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState("");
@@ -133,7 +192,8 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
     setPresentation(initialPresentation);
     setHistoricalFootnote(initialHistoricalFootnote);
     setTerminology((content?.terminology_overrides as JsonRecord | undefined) ?? {});
-  }, [report.id, version, initialBlocks, initialHistoricalFootnote, initialPresentation]);
+    setTitleOverrides(initialTitleOverrides);
+  }, [report.id, version, initialBlocks, initialHistoricalFootnote, initialPresentation, initialTitleOverrides]);
   const draftContent = useMemo(() => {
     const next = structuredClone(content ?? {}) as JsonRecord;
     const nextSections = (next.sections as JsonRecord | undefined) ?? {};
@@ -158,8 +218,9 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
     nextSections.footnotes = { ...footnotes, historical: synchronizedHistoricalFootnote };
     next.presentation = presentation;
     next.terminology_overrides = terminology;
+    if (content?.title_overrides !== undefined || Object.keys(titleOverrides).length) next.title_overrides = titleOverrides;
     return next;
-  }, [blocks, content, defaultReviewTitle, historicalFootnote, presentation, terminology]);
+  }, [blocks, content, defaultReviewTitle, historicalFootnote, presentation, terminology, titleOverrides]);
   const persist = useCallback(async () => { await api.saveDocument(report.id, version, draftContent); }, [draftContent, report.id, version]);
   const frozen = isReportReadOnly(report);
   useEffect(() => {
@@ -186,6 +247,7 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
     || JSON.stringify(presentation) !== JSON.stringify(initialPresentation)
     || historicalFootnote !== initialHistoricalFootnote
     || JSON.stringify(terminology) !== JSON.stringify(initialTerminology)
+    || JSON.stringify(titleOverrides) !== JSON.stringify(initialTitleOverrides)
   );
   useLayoutEffect(() => {
     registerPendingSave(dirty ? persist : null);
@@ -197,7 +259,13 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
   const assistedPrompt = locale === "zh-Hans" ? "请在审核人确认后完成展望。" : locale === "zh-Hant" ? "請在審閱人確認後完成展望。" : "Complete the outlook after reviewer confirmation.";
   const localizedConstituentName = (row: JsonRecord) => locale === "zh-Hans" ? row.name_zh_hans : row.name_zh_hant;
   const localizedIndustryName = (row: JsonRecord) => locale === "zh-Hans" ? row.label_zh_hans : row.label_zh_hant;
-  return <><ModuleHeading eyebrow={t("pageDetail", { page: "01", detail: t("freeLayout") })} title={t("monthReview")} description={t("reviewDescription")} actions={<><button disabled={busy || !report.active_snapshot_id || frozen} onClick={() => run(() => api.generateDraft(report.id, version, assistedPrompt))}><Sparkles size={16} /> {t("assistedDraft")}</button><button className="primary" disabled={busy || frozen || !dirty} onClick={() => run(persist)}><Save size={16} /> {t("saveLayout")}</button></>} />{locale !== "en" && <section className="terminology-review"><h3>{t("terminologyReview")}</h3><p>{t("terminologyHelp")}</p>{constituentNames.length > 0 && <details><summary>{t("securityNames")}</summary><div className="terminology-list">{constituentNames.map((row) => { const key = String(row.security_code ?? row.ticker ?? ""); const stored = (terminology.securities as JsonRecord | undefined) ?? {}; return <label key={key}><span>{row.ticker ? String(row.ticker) : key}</span><input value={String(stored[key] ?? localizedConstituentName(row) ?? "")} disabled={frozen} onChange={(event) => setNamedTerm("securities", key, event.target.value)} /></label>; })}</div></details>}{industryNames.length > 0 && <details><summary>{t("industryNames")}</summary><div className="terminology-list">{industryNames.map((row) => { const key = String(row.code ?? ""); const stored = (terminology.industries as JsonRecord | undefined) ?? {}; return <label key={key}><span>{key}</span><input value={String(stored[key] ?? localizedIndustryName(row) ?? "")} disabled={frozen} onChange={(event) => setNamedTerm("industries", key, event.target.value)} /></label>; })}</div></details>}</section>}<ReviewCanvas blocks={blocks} presentation={presentation} historicalFootnote={historicalFootnote} historicalTitle={t("historicalTitle")} disabled={frozen} previewHtml={previewHtml} previewBusy={previewBusy} previewError={previewError} onBlocksChange={setBlocks} onPresentationChange={setPresentation} onHistoricalFootnoteChange={setHistoricalFootnote} /></>;
+  return <><ModuleHeading eyebrow={t("pageDetail", { page: "01", detail: t("freeLayout") })} title={t("monthReview")} description={t("reviewDescription")} actions={<><button disabled={busy || !report.active_snapshot_id || frozen} onClick={() => run(() => api.generateDraft(report.id, version, assistedPrompt))}><Sparkles size={16} /> {t("assistedDraft")}</button><button className="primary" disabled={busy || frozen || !dirty} onClick={() => run(persist)}><Save size={16} /> {t("saveLayout")}</button></>} />{locale !== "en" && <section className="terminology-review"><h3>{t("terminologyReview")}</h3><p>{t("terminologyHelp")}</p>{constituentNames.length > 0 && <details><summary>{t("securityNames")}</summary><div className="terminology-list">{constituentNames.map((row) => { const key = String(row.security_code ?? row.ticker ?? ""); const stored = (terminology.securities as JsonRecord | undefined) ?? {}; return <label key={key}><span>{row.ticker ? String(row.ticker) : key}</span><input value={String(stored[key] ?? localizedConstituentName(row) ?? "")} disabled={frozen} onChange={(event) => setNamedTerm("securities", key, event.target.value)} /></label>; })}</div></details>}{industryNames.length > 0 && <details><summary>{t("industryNames")}</summary><div className="terminology-list">{industryNames.map((row) => { const key = String(row.code ?? ""); const stored = (terminology.industries as JsonRecord | undefined) ?? {}; return <label key={key}><span>{key}</span><input value={String(stored[key] ?? localizedIndustryName(row) ?? "")} disabled={frozen} onChange={(event) => setNamedTerm("industries", key, event.target.value)} /></label>; })}</div></details>}</section>}
+    <ReportTitleFields defaults={report.report_title_defaults ?? {}} overrides={titleOverrides} disabled={frozen || busy}
+      onChange={setTitleOverrides} productName={report.product_name} terminology={terminology} onTerminologyChange={setTerminology} />
+    <ReviewCanvas blocks={blocks} presentation={presentation} historicalFootnote={historicalFootnote}
+      historicalTitle={titleOverrides.historical_performance ?? report.report_title_defaults?.historical_performance ?? t("historicalTitle")}
+      disabled={frozen || busy} previewHtml={previewHtml} previewBusy={previewBusy} previewError={previewError}
+      onBlocksChange={setBlocks} onPresentationChange={setPresentation} onHistoricalFootnoteChange={setHistoricalFootnote} /></>;
 }
 
 function PerformanceModule({ report, busy, run }: Omit<ModuleProps, "active">) {
@@ -211,7 +279,7 @@ function PerformanceModule({ report, busy, run }: Omit<ModuleProps, "active">) {
   return <>
     <ModuleHeading eyebrow={t("pageDetail", { page: "02", detail: t("cdbAutomatic") })} title={t("historicalPerformance")} description={t("performanceDescription", { benchmark: report.benchmark_instrument_code })} actions={<button disabled={busy || isReportReadOnly(report)} onClick={() => run(() => api.refreshAutomaticData(report.id, report.version))}><RefreshCw size={16} /> {t("refreshWarehouse")}</button>} />
     <section className="data-surface">
-      <h3>{t("historicalTitle")}</h3>
+      <h3>{reportTitle(report, "historical_performance", t("historicalTitle"))}</h3>
       <table>
         <thead><tr><th aria-label={t("instrument")}></th><th>{t("return1m")}</th><th>{t("return3m")}</th><th>{t("return6m")}</th><th>{t("returnYtd")}</th></tr></thead>
         <tbody>{displayRows.map(({ role, label }, index) => {
@@ -227,7 +295,7 @@ function PerformanceModule({ report, busy, run }: Omit<ModuleProps, "active">) {
 
 function NewsModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_SAVE }: Omit<ModuleProps, "active">) {
   const { t } = useLocale();
-  return <><ModuleHeading eyebrow={t("pageDetail", { page: "03", detail: t("daCatalog") })} title={t("companyNews")} description={t("newsDescription")} /><CompanyNewsWorkbench key={report.id} report={report} busy={busy} run={run} selectedSnapshot={rows(sectionsOf(report).company_news)} registerPendingSave={registerPendingSave} /></>;
+  return <><ModuleHeading eyebrow={t("pageDetail", { page: "03", detail: t("daCatalog") })} title={reportTitle(report, "company_news", t("companyNews"))} description={t("newsDescription")} /><CompanyNewsWorkbench key={report.id} report={report} busy={busy} run={run} selectedSnapshot={rows(sectionsOf(report).company_news)} registerPendingSave={registerPendingSave} /></>;
 }
 
 function ConstituentsModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_SAVE }: Omit<ModuleProps, "active">) {
@@ -254,7 +322,7 @@ function ConstituentsModule({ report, busy, run, registerPendingSave = IGNORE_PE
   const dateLocale = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en-HK";
   const localizedConstituent = (row: JsonRecord) => locale === "zh-Hans" ? row.name_zh_hans : locale === "zh-Hant" ? row.name_zh_hant : row.name_en;
   const localizedIndustry = (row: JsonRecord) => locale === "zh-Hans" ? row.effective_industry_name_zh_hans : locale === "zh-Hant" ? row.effective_industry_name_zh_hant : row.sector;
-  const constituentTitle = locale === "en" ? reportConstituentsTitle(report) : t("constituentsTitle", { product: productTicker });
+  const constituentTitle = reportTitle(report, "constituent_performance", locale === "en" ? reportConstituentsTitle(report) : t("constituentsTitle", { product: productTicker }));
   return <><ModuleHeading eyebrow={t("pageDetail", { page: "04", detail: t("cdbFmp") })} title={constituentTitle} description={data.length ? t("holdingsBound", { count: data.length, month: report.report_date.slice(0, 7) }) : t("holdingsEmpty")} actions={<button className="primary" disabled={busy || frozen || !dirty || !rebalancingDate} onClick={() => run(persist)}><Save size={16} /> {t("saveDate")}</button>} />
     <section className="rebalancing-editor" aria-label={t("rebalancingEditor")}><label><span>{t("nextRebalancingDate")}</span><input aria-label={locale === "en" ? "Next rebalancing date" : t("nextRebalancingDate")} type="date" value={rebalancingDate} disabled={frozen} onChange={(event) => setRebalancingDate(event.target.value)} /></label><p>{locale !== "en" ? `(*${t("nextRebalancingDate")}：${rebalancingDate ? formatDate(rebalancingDate) : t("noData")})` : `(*Next Rebalancing Date: ${rebalancingDate ? formatDate(rebalancingDate) : t("noData")})`}</p></section>
     <ConstituentSources report={report} busy={busy} run={run} /><section className="data-surface constituent-table"><table><thead><tr><th>{t("code")}</th><th>{t("constituent")}</th><th>{t("price")}</th><th>{t("weightShort")}</th><th>1M</th><th>3M</th><th>6M</th><th>YTD</th></tr></thead><tbody>{data.map((row) => <tr key={String(row.security_code)}><th scope="row"><span className="security-code">{String(row.ticker ?? row.security_code)}</span></th><td><strong>{String(localizedConstituent(row) ?? "")}</strong><small>{String(localizedIndustry(row) ?? "")}</small></td><td>{row.close_price == null ? t("noData") : `${String(row.currency ?? "")} ${price(row.close_price, t("noData"))}`}</td><td>{percent(row.weight, dateLocale, t("noData"))}</td><td>{percent(row.return_1m, dateLocale, t("noData"))}</td><td>{percent(row.return_3m, dateLocale, t("noData"))}</td><td>{percent(row.return_6m, dateLocale, t("noData"))}</td><td>{percent(row.return_ytd, dateLocale, t("noData"))}</td></tr>)}</tbody></table>{!data.length && <EmptyData />}</section></>;
@@ -292,39 +360,50 @@ function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
   const top10 = rows(analytics.top10); const top = rows(analytics.top); const bottom = rows(analytics.bottom); const portfolio = portfolioRows(analytics.portfolio);
   const version = report.latest_document?.version ?? 1;
   const content = report.latest_document?.content;
+  const initialTitleOverrides = useMemo(() => reportTitleOverrides(content), [report.id, version]);
   const turnoverValue = portfolioDisplayValue(portfolio.find((row) => row.metric_code === "AVERAGE_DAILY_TURNOVER") ?? {});
   const initialTurnover = turnoverValue === "N/A" ? "NA" : turnoverValue;
   const [turnover, setTurnover] = useState(initialTurnover);
-  useEffect(() => setTurnover(initialTurnover), [report.id, version, initialTurnover]);
+  const [titleOverrides, setTitleOverrides] = useState(initialTitleOverrides);
+  useEffect(() => {
+    setTurnover(initialTurnover);
+    setTitleOverrides(initialTitleOverrides);
+  }, [report.id, version, initialTitleOverrides, initialTurnover]);
   const turnoverEnabled = report.product_code === "3033";
   const frozen = isReportReadOnly(report) || !content;
   const normalizedTurnover = turnover.trim() && turnover.trim() !== "N/A" ? turnover.trim() : "NA";
-  const dirty = turnoverEnabled && !frozen && normalizedTurnover !== initialTurnover.trim();
+  const turnoverDirty = turnoverEnabled && normalizedTurnover !== initialTurnover.trim();
+  const titleDirty = JSON.stringify(titleOverrides) !== JSON.stringify(initialTitleOverrides);
+  const titlesValid = Object.values(titleOverrides).every((value) => value.trim().length >= 1 && value.trim().length <= 200);
+  const dirty = !frozen && (turnoverDirty || titleDirty);
   const persist = useCallback(async () => {
     const next = structuredClone(content ?? {}) as JsonRecord;
-    const nextSections = (next.sections as JsonRecord | undefined) ?? {};
-    next.sections = nextSections;
-    const nextAnalytics = (nextSections.analytics as JsonRecord | undefined) ?? {};
-    nextSections.analytics = nextAnalytics;
-    const nextPortfolio = rows(nextAnalytics.portfolio);
-    nextAnalytics.portfolio = nextPortfolio;
-    const turnoverIndex = nextPortfolio.findIndex((row) => {
-      const code = String(row.metric_code ?? "").trim().toUpperCase();
-      return code ? code === "AVERAGE_DAILY_TURNOVER" : String(row.label ?? "").trim().toLowerCase().startsWith("average daily turnover");
-    });
-    const nextTurnover = {
-      ...(turnoverIndex >= 0 ? nextPortfolio[turnoverIndex] : portfolioRows(nextPortfolio).find((row) => row.metric_code === "AVERAGE_DAILY_TURNOVER")),
-      display_value: normalizedTurnover,
-      value: normalizedTurnover,
-    };
-    if (turnoverIndex >= 0) nextPortfolio[turnoverIndex] = nextTurnover;
-    else nextPortfolio.push(nextTurnover);
+    if (content?.title_overrides !== undefined || Object.keys(titleOverrides).length) next.title_overrides = titleOverrides;
+    if (turnoverDirty) {
+      const nextSections = (next.sections as JsonRecord | undefined) ?? {};
+      next.sections = nextSections;
+      const nextAnalytics = (nextSections.analytics as JsonRecord | undefined) ?? {};
+      nextSections.analytics = nextAnalytics;
+      const nextPortfolio = rows(nextAnalytics.portfolio);
+      nextAnalytics.portfolio = nextPortfolio;
+      const turnoverIndex = nextPortfolio.findIndex((row) => {
+        const code = String(row.metric_code ?? "").trim().toUpperCase();
+        return code ? code === "AVERAGE_DAILY_TURNOVER" : String(row.label ?? "").trim().toLowerCase().startsWith("average daily turnover");
+      });
+      const nextTurnover = {
+        ...(turnoverIndex >= 0 ? nextPortfolio[turnoverIndex] : portfolioRows(nextPortfolio).find((row) => row.metric_code === "AVERAGE_DAILY_TURNOVER")),
+        display_value: normalizedTurnover,
+        value: normalizedTurnover,
+      };
+      if (turnoverIndex >= 0) nextPortfolio[turnoverIndex] = nextTurnover;
+      else nextPortfolio.push(nextTurnover);
+    }
     await api.saveDocument(report.id, version, next);
-  }, [content, normalizedTurnover, report.id, version]);
+  }, [content, normalizedTurnover, report.id, titleOverrides, turnoverDirty, version]);
   useLayoutEffect(() => {
-    registerPendingSave(dirty ? persist : null);
+    registerPendingSave(dirty && titlesValid ? persist : null);
     return () => registerPendingSave(null);
-  }, [dirty, persist, registerPendingSave]);
+  }, [dirty, persist, registerPendingSave, titlesValid]);
   const sectorChart = analytics.sector_chart as SectorChartSnapshot | undefined;
   const sectorSeries = sectorSlices(sectorChart, locale);
   const monthName = reportMonthName(report);
@@ -334,16 +413,30 @@ function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
     const displayValue = portfolioDisplayValue(row);
     return {
       ...row,
-      label: locale === "zh-Hans" ? ({ AUM: "资产管理规模（百万港元）^", AVERAGE_DAILY_TURNOVER: "平均每日成交额（百万港元）^^", NUMBER_OF_HOLDINGS: "持仓数量" } as Record<string, string>)[String(row.metric_code)] ?? row.label : locale === "zh-Hant" ? ({ AUM: "資產管理規模（百萬港元）^", AVERAGE_DAILY_TURNOVER: "平均每日成交額（百萬港元）^^", NUMBER_OF_HOLDINGS: "持倉數量" } as Record<string, string>)[String(row.metric_code)] ?? row.label : row.label,
+      label: reportTitle(report, `portfolio.${row.metric_code}`, String(locale === "zh-Hans" ? ({ AUM: "资产管理规模（百万港元）^", AVERAGE_DAILY_TURNOVER: "平均每日成交额（百万港元）^^", NUMBER_OF_HOLDINGS: "持仓数量" } as Record<string, string>)[String(row.metric_code)] ?? row.label : locale === "zh-Hant" ? ({ AUM: "資產管理規模（百萬港元）^", AVERAGE_DAILY_TURNOVER: "平均每日成交額（百萬港元）^^", NUMBER_OF_HOLDINGS: "持倉數量" } as Record<string, string>)[String(row.metric_code)] ?? row.label : row.label)),
       display_value: locale !== "en" && displayValue.endsWith(" million") ? displayValue.slice(0, -8) : displayValue,
     };
   });
   const numberLocale = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en-HK";
-  const top10Title = t("top10", { product: productTicker });
-  const sectorTitle = t("sectorBreakdown", { product: productTicker });
-  return <><ModuleHeading eyebrow={t("pageDetail", { page: "05", detail: t("calculatedOutputs") })} title={t("finalAnalytics")} description={t("analyticsDescription")} actions={<button className="primary" disabled={busy || isReportReadOnly(report) || !report.active_snapshot_id} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> {t("refreshAnalytics")}</button>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section"><SectionTitle index="01" title={top10Title} /><table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{shownName(row)}</th><td>{percent(row.weight, numberLocale, t("noData"))}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section"><SectionTitle index="02" title={sectorTitle} />{sectorSeries.length ? <SectorDonut chart={sectorChart} title={sectorTitle} /> : <EmptyData />}</section><section className="analytics-section"><SectionTitle index="03" title={t("performersIn", { month: monthName })} /><div className="performer-columns"><PerformerList title={t("top")} data={top} /><PerformerList title={t("bottom")} data={bottom} /></div></section><section className="analytics-section"><SectionTitle index="04" title={t("portfolioAnalysis", { product: productTicker })} /><dl className="portfolio-list">{displayPortfolio.map((row) => {
+  const defaultTitle = (key: string, fallback: string) => report.report_title_defaults?.[key] ?? fallback;
+  const title = (key: string, fallback: string) => titleOverrides[key] ?? defaultTitle(key, fallback);
+  const setTitle = (key: string, value: string) => setTitleOverrides((current) => ({ ...current, [key]: value }));
+  const resetTitle = (key: string) => setTitleOverrides((current) => { const next = { ...current }; delete next[key]; return next; });
+  const top10Default = defaultTitle("top10", t("top10", { product: productTicker }));
+  const sectorDefault = defaultTitle("sector_breakdown", t("sectorBreakdown", { product: productTicker }));
+  const performersDefault = defaultTitle("performers", t("performersIn", { month: monthName }));
+  const portfolioDefault = defaultTitle("portfolio_analysis", t("portfolioAnalysis", { product: productTicker }));
+  const top10Title = title("top10", top10Default);
+  const sectorTitle = title("sector_breakdown", sectorDefault);
+  const performersTitle = title("performers", performersDefault);
+  const portfolioTitle = title("portfolio_analysis", portfolioDefault);
+  const editableTitle = (index: string, key: string, value: string, fallback: string) => <EditableSectionTitle
+    index={index} value={value} defaultValue={fallback} overridden={titleOverrides[key] !== undefined}
+    disabled={busy || frozen} onChange={(next) => setTitle(key, next)} onReset={() => resetTitle(key)}
+  />;
+  return <><ModuleHeading eyebrow={t("pageDetail", { page: "05", detail: t("calculatedOutputs") })} title={t("finalAnalytics")} description={t("analyticsDescription")} actions={<><button disabled={busy || frozen || !dirty || !titlesValid} onClick={() => run(persist)}><Save size={16} /> {t("saveAnalyticsTitles")}</button><button className="primary" disabled={busy || isReportReadOnly(report) || !report.active_snapshot_id} onClick={() => run(() => api.calculate(report.id))}><RefreshCw size={16} /> {t("refreshAnalytics")}</button></>} /><IndustryMasterStatus report={report} /><div className="analytics-grid"><section className="analytics-section">{editableTitle("01", "top10", top10Title, top10Default)}<table><tbody>{top10.map((row, index) => <tr key={`${String(row.issuer)}-${index}`}><th>{shownName(row)}</th><td>{percent(row.weight, numberLocale, t("noData"))}</td></tr>)}</tbody></table>{!top10.length && <EmptyData />}</section><section className="analytics-section">{editableTitle("02", "sector_breakdown", sectorTitle, sectorDefault)}{sectorSeries.length ? <SectorDonut chart={sectorChart} title={sectorTitle} /> : <EmptyData />}</section><section className="analytics-section">{editableTitle("03", "performers", performersTitle, performersDefault)}<div className="performer-columns"><PerformerList title={reportTitle(report, "top_performers", t("top"))} data={top} /><PerformerList title={reportTitle(report, "bottom_performers", t("bottom"))} data={bottom} /></div></section><section className="analytics-section">{editableTitle("04", "portfolio_analysis", portfolioTitle, portfolioDefault)}<dl className="portfolio-list">{displayPortfolio.map((row) => {
     const editableTurnover = turnoverEnabled && row.metric_code === "AVERAGE_DAILY_TURNOVER";
-    return <div key={String(row.metric_code)} className={editableTurnover ? "portfolio-turnover-row" : undefined}><dt>{String(row.label)}</dt><dd>{editableTurnover ? <div className="portfolio-turnover-editor"><input aria-label={String(row.label)} size={16} value={turnover} disabled={busy || frozen} onChange={(event) => setTurnover(event.target.value)} /><button className="icon-button" type="button" aria-label={t("save")} title={t("save")} disabled={busy || frozen || !dirty} onClick={() => run(persist)}><Save size={16} /></button></div> : <data value={row.raw_value == null ? undefined : String(row.raw_value)}>{portfolioDisplayValue(row) === "N/A" ? t("noData") : portfolioDisplayValue(row)}</data>}</dd></div>;
+    return <div key={String(row.metric_code)} className={editableTurnover ? "portfolio-turnover-row" : undefined}><dt>{String(row.label)}</dt><dd>{editableTurnover ? <div className="portfolio-turnover-editor"><input aria-label={String(row.label)} size={16} value={turnover} disabled={busy || frozen} onChange={(event) => setTurnover(event.target.value)} /><button className="icon-button" type="button" aria-label={t("save")} title={t("save")} disabled={busy || frozen || !dirty || !titlesValid} onClick={() => run(persist)}><Save size={16} /></button></div> : <data value={row.raw_value == null ? undefined : String(row.raw_value)}>{portfolioDisplayValue(row) === "N/A" ? t("noData") : portfolioDisplayValue(row)}</data>}</dd></div>;
   })}</dl></section></div><FormulaStrip title={t("analyticsFormula")} formula={t("analyticsFormulaExpression")} detail={t("analyticsFormulaDetail")} /></>;
 }
 
@@ -357,7 +450,35 @@ function IndustryMasterStatus({ report }: { report: Report }) {
   return <section className="dataset-upload" aria-label={t("hsicsStatus")}><div className="dataset-slot-head"><div><strong>{locale !== "en" ? t("hsicsMaster") : (slot?.title ?? t("hsicsMaster"))}</strong><span>{locale !== "en" ? t("hsicsHelp") : (slot?.description ?? t("hsicsHelp"))}</span></div><span className={`dataset-state state-${state.toLowerCase()}`}>{statusLabel(state)}</span></div><p className="dataset-current">{slot?.rows ? t("effectiveRecords", { count: slot.rows }) : t("managedCentrally")}</p></section>;
 }
 
-function SectionTitle({ index, title }: { index: string; title: string }) { return <div className="section-title"><span>{index}</span><h3>{title}</h3></div>; }
+function EditableSectionTitle({ index, value, defaultValue, overridden, disabled, onChange, onReset }: {
+  index: string;
+  value: string;
+  defaultValue: string;
+  overridden: boolean;
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onReset: () => void;
+}) {
+  const { t } = useLocale();
+  const [editing, setEditing] = useState(false);
+  const id = useId();
+  return <>
+    <div className="section-title">
+      <span>{index}</span><h3>{value}</h3>
+      <button type="button" className="icon-button" aria-label={t("editAnalyticsTitle", { index })}
+        title={t("editAnalyticsTitle", { index })} aria-expanded={editing} disabled={disabled}
+        onClick={() => setEditing((current) => !current)}><Pencil size={16} /></button>
+    </div>
+    {editing && <div className="analytics-title-editor">
+      <label htmlFor={id}>{t("analyticsSectionTitle", { index })}</label>
+      <MarkerInput id={id} value={value} maxLength={200} required disabled={disabled} onValueChange={onChange} />
+      <div className="analytics-title-actions">
+        <button type="button" disabled={disabled || !overridden} onClick={onReset}><RotateCcw size={16} /> {t("resetReportTitle", { title: defaultValue })}</button>
+        <button type="button" onClick={() => setEditing(false)}>{t("done")}</button>
+      </div>
+    </div>}
+  </>;
+}
 function PerformerList({ title, data }: { title: string; data: JsonRecord[] }) { const { locale, t } = useLocale(); const numberLocale = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en-HK"; return <div><h4>{title}</h4>{data.map((row, index) => <article key={`${String(row.issuer)}-${index}`}><span>{index + 1}</span><strong>{String(locale === "zh-Hans" ? (row.issuer_zh_hans ?? "") : locale === "zh-Hant" ? (row.issuer_zh_hant ?? "") : (row.issuer ?? ""))}</strong><em>{percent(row.return, numberLocale, t("noData"))}</em></article>)}</div>; }
 
 function footnotesOf(report: Report): Record<FootnoteSectionKey, string> {

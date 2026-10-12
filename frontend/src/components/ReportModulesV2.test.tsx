@@ -162,6 +162,38 @@ describe("report module data responsibilities", () => {
     await waitFor(() => expect(calculate).toHaveBeenCalledWith(report.id));
   });
 
+  it("edits and saves all four Final Analytics section titles with publication markers", async () => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    const registerPendingSave = vi.fn<(save: (() => Promise<void>) | null) => void>();
+    const editable = structuredClone(report);
+    editable.report_title_defaults = {
+      top10: "Top 10 3033.HK Constituents*",
+      sector_breakdown: "3033.HK Sectors Breakdown*",
+      performers: "Performers in June**",
+      portfolio_analysis: "3033.HK Portfolio Analysis",
+    };
+    render(<ReportModule report={editable} active="analytics" busy={false} run={run} registerPendingSave={registerPendingSave} />);
+
+    const replacements = ["Largest positions*", "Industry allocation*", "June movers**", "Fund profile^"];
+    for (const [offset, replacement] of replacements.entries()) {
+      const index = String(offset + 1).padStart(2, "0");
+      fireEvent.click(screen.getByRole("button", { name: `Edit section ${index} title` }));
+      fireEvent.change(screen.getByRole("textbox", { name: `Section ${index} title` }), { target: { value: replacement } });
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    }
+
+    await registerPendingSave.mock.lastCall![0]!();
+    expect(saveDocument).toHaveBeenCalledWith(report.id, 4, expect.objectContaining({
+      title_overrides: {
+        top10: "Largest positions*",
+        sector_breakdown: "Industry allocation*",
+        performers: "June movers**",
+        portfolio_analysis: "Fund profile^",
+      },
+    }));
+  });
+
   it.each([
     { locale: "zh-Hans", languageMode: "ZH_HANS", constituent: "3033.HK 成分股表现", top10: "3033.HK 十大成分股", sectors: "3033.HK 行业分布" },
     { locale: "zh-Hant", languageMode: "ZH_HANT", constituent: "3033.HK 成分股表現", top10: "3033.HK 十大成分股", sectors: "3033.HK 行業分佈" },
@@ -201,6 +233,28 @@ describe("report module data responsibilities", () => {
     expect(screen.getAllByText("N/A")).toHaveLength(1);
     expect(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)^^" })).toHaveProperty("value", "NA");
     expect(screen.getByText("Number of holdings").nextElementSibling?.textContent).toBe("30");
+  });
+
+  it("uses the saved report headings in module views without changing values", () => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    const edited = structuredClone(report);
+    edited.report_title_defaults = { sector_breakdown: "Default sectors*" };
+    edited.latest_document!.content.title_overrides = {
+      historical_performance: "Fund history", constituent_performance: "Constituent returns",
+      top10: "Largest positions", performers: "Monthly movers", top_performers: "Leading performers", bottom_performers: "Lagging performers",
+      portfolio_analysis: "Fund statistics", "portfolio.AUM": "Assets", "portfolio.AVERAGE_DAILY_TURNOVER": "Daily turnover",
+    };
+    const { rerender } = render(<ReportModule report={edited} active="analytics" busy={false} run={run} />);
+    for (const title of ["Largest positions", "Monthly movers", "Leading performers", "Lagging performers", "Fund statistics", "Default sectors*"]) {
+      expect(screen.getByRole("heading", { name: title })).toBeTruthy();
+    }
+    expect(screen.getByText("Assets")).toBeTruthy();
+    expect(screen.getByText("67,536.55 million").closest("data")?.getAttribute("value")).toBe("67536.55");
+    expect(screen.getByRole("textbox", { name: "Daily turnover" })).toHaveProperty("value", "12,882 million");
+    rerender(<ReportModule report={edited} active="performance" busy={false} run={run} />);
+    expect(screen.getByRole("heading", { name: "Fund history" })).toBeTruthy();
+    rerender(<ReportModule report={edited} active="constituents" busy={false} run={run} />);
+    expect(screen.getByRole("heading", { name: "Constituent returns" })).toBeTruthy();
   });
 
   it.each([
@@ -501,7 +555,7 @@ describe("report module data responsibilities", () => {
       .toBe("First paragraph.\n\nSecond paragraph.");
   });
 
-  it("keeps product and benchmark headings fixed in the Chinese Review editor", () => {
+  it("edits the product heading without exposing benchmark data as editable", () => {
     vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
     const localizedReport = { ...report, language_mode: "ZH_HANS" } as Report;
 
@@ -511,8 +565,58 @@ describe("report module data responsibilities", () => {
       </LocaleProvider>,
     );
 
-    expect(screen.queryByLabelText("产品名称")).toBeNull();
+    expect(screen.getByLabelText("产品名称")).toHaveProperty("value", report.product_name);
     expect(screen.queryByLabelText("基准名称")).toBeNull();
+  });
+
+  it("saves and previews title marker edits with the pending Review content, and restores defaults", async () => {
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    const previewDraft = vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
+    const registerPendingSave = vi.fn<(save: (() => Promise<void>) | null) => void>();
+    const editable = { ...report, report_title_defaults: {
+      top10: "Top 10 3033.HK Constituents*",
+      "portfolio.AUM": "Asset Under Management (HKD)^",
+      "portfolio.AVERAGE_DAILY_TURNOVER": "Average Daily Turnover (HKD)^^",
+    } };
+    render(<ReportModule report={editable} active="review" busy={false} run={run} registerPendingSave={registerPendingSave} />);
+    fireEvent.click(screen.getByText("Report titles", { selector: "summary" }));
+    for (const label of Object.values(editable.report_title_defaults)) {
+      const field = screen.getByRole("textbox", { name: label });
+      expect(field).toHaveProperty("value", label);
+      fireEvent.change(field, { target: { value: label.replace(/[*^]+$/, "") } });
+    }
+    fireEvent.change(screen.getByRole("textbox", { name: "Historical performance footnote" }), { target: { value: "Edited disclosure." } });
+    await waitFor(() => expect(previewDraft).toHaveBeenCalledWith(report.id, 4, expect.objectContaining({
+      title_overrides: { top10: "Top 10 3033.HK Constituents", "portfolio.AUM": "Asset Under Management (HKD)", "portfolio.AVERAGE_DAILY_TURNOVER": "Average Daily Turnover (HKD)" },
+    }), expect.any(AbortSignal)));
+    await registerPendingSave.mock.lastCall![0]!();
+    expect(saveDocument.mock.lastCall![2]).toMatchObject({
+      title_overrides: { top10: "Top 10 3033.HK Constituents", "portfolio.AUM": "Asset Under Management (HKD)" },
+      sections: { footnotes: { historical: "Edited disclosure." } },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Restore default: Top 10 3033.HK Constituents*" }));
+    expect(screen.getByRole("textbox", { name: editable.report_title_defaults.top10 })).toHaveProperty("value", editable.report_title_defaults.top10);
+    fireEvent.click(screen.getByRole("button", { name: "Save layout" }));
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(2));
+    expect(saveDocument.mock.lastCall![2].title_overrides).not.toHaveProperty("top10");
+  });
+
+  it("reloads title overrides per report version and keeps frozen headings read-only", () => {
+    vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
+    vi.spyOn(api, "previewSaved").mockResolvedValue("<html><body></body></html>");
+    const editable = { ...report, report_title_defaults: { top10: "Top positions*" } };
+    const { rerender } = render(<ReportModule report={editable} active="review" busy={false} run={run} />);
+    fireEvent.click(screen.getByText("Report titles", { selector: "summary" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Top positions*" }), { target: { value: "Unsaved" } });
+    const next = structuredClone(editable);
+    next.id = "report-2";
+    next.latest_document!.version += 1;
+    next.latest_document!.content.title_overrides = { top10: "Saved title" };
+    rerender(<ReportModule report={next} active="review" busy={false} run={run} />);
+    expect(screen.getByRole("textbox", { name: "Top positions*" })).toHaveProperty("value", "Saved title");
+    rerender(<ReportModule report={{ ...next, status: "FINALIZED" }} active="review" busy={false} run={run} />);
+    expect(screen.getByRole("textbox", { name: "Top positions*" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Restore default: Top positions*" })).toHaveProperty("disabled", true);
   });
 
   it("previews unsaved Review changes and ignores an older response", async () => {

@@ -18,6 +18,7 @@ from app.domain.service import translations
 from app.domain.schemas import TranslationJobRead
 from app.worker import dispatch_translation
 from app.domain.models import DataSnapshot, Report, ReportStatus
+from app.domain.report_titles import report_title_defaults
 from app.domain.schemas import (
     AiDraftRequest,
     DocumentUpdate,
@@ -128,14 +129,19 @@ def detail(db: Session, report: Report) -> ReportDetail:
         snapshot = db.get(DataSnapshot, report.active_snapshot_id)
         quality = snapshot.quality_results if snapshot else []
     base = ReportRead.model_validate(report).model_dump()
+    content = service.document_content_for_read(report, document)
     return ReportDetail(
         **base,
         translation_enabled=settings.translation_provider == "OPENAI_COMPATIBLE" and not settings.translation_problems(),
         translation_source_language_mode=source.language_mode if source else None,
+        report_title_defaults=report_title_defaults(
+            content, product_code=report.product_code, benchmark_name=report.benchmark_code,
+            report_date=report.report_date, language_mode=report.language_mode,
+        ),
         latest_document={
             "version": document.version,
             "checksum": document.checksum,
-            "content": service.document_content_for_read(report, document),
+            "content": content,
         },
         quality_results=quality,
     )

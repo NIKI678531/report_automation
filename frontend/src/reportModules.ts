@@ -20,6 +20,7 @@ export type ModuleId = (typeof REPORT_MODULES)[number]["id"];
 interface ReportIdentity {
 	product_code: string;
 	report_date: string;
+	report_title_defaults?: Record<string, string>;
 	latest_document?: { content: Record<string, unknown> } | null;
 }
 
@@ -106,6 +107,16 @@ export function reportPageEyebrow(moduleId: ModuleId, detail: string): string {
 
 export function reportConstituentsTitle(report: ReportIdentity): string {
 	return `The Performance of ${reportProductTicker(report)} Constituents`;
+}
+
+export function reportTitleOverrides(content?: Record<string, unknown>): Record<string, string> {
+	const value = content?.title_overrides;
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
+export function reportTitle(report: ReportIdentity, key: string, fallback: string): string {
+	return reportTitleOverrides(report.latest_document?.content)[key] ?? report.report_title_defaults?.[key] ?? fallback;
 }
 
 export function reportMonthName(report: ReportIdentity): string {

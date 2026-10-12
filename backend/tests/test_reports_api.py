@@ -2,6 +2,7 @@ from conftest import download_report, export_records
 import io
 import unicodedata
 
+import pytest
 from docx import Document
 from app.domain.localization import simplified_to_traditional
 
@@ -178,6 +179,52 @@ def test_report_golden_lifecycle_and_preview(client):
     artifacts = export_records(client, report["id"])
     assert len({item["content_manifest"]["checksum"] for item in artifacts}) == 1
     assert artifacts[0]["content_manifest"]["checksum"]
+
+
+@pytest.mark.parametrize("language_mode", ["EN", "ZH_HANS", "ZH_HANT"])
+def test_custom_report_titles_without_markers_match_all_exports(client, language_mode):
+    import pypdfium2 as pdfium
+
+    created = client.post("/api/v1/reports", json={
+        "report_date": "2026-08-31", "language_mode": language_mode,
+    }).json()
+    detail = client.get(f"/api/v1/reports/{created['id']}").json()
+    overrides = {key: value.rstrip("*^") for key, value in detail["report_title_defaults"].items()}
+    overrides["company_news"] = "Editorial News"
+    content = detail["latest_document"]["content"]
+    original_analytics = content["sections"]["analytics"].copy()
+    content["title_overrides"] = overrides
+    saved = client.patch(f"/api/v1/reports/{created['id']}/document", json={
+        "version": detail["latest_document"]["version"], "content": content,
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["content"]["sections"]["analytics"] == original_analytics
+    preview = client.post(f"/api/v1/reports/{created['id']}/preview")
+    assert preview.status_code == 200, preview.text
+    assert ">Editorial News</h2>" in preview.text
+    finalized = client.post(f"/api/v1/reports/{created['id']}/finalize", json={"version": saved.json()["version"]})
+    assert finalized.status_code == 200, finalized.text
+    exports = {format_name: download_report(client, created["id"], format_name) for format_name in ("html", "pdf", "docx")}
+    assert all(response.status_code == 200 for response in exports.values())
+    html = exports["html"].text
+    document = Document(io.BytesIO(exports["docx"].content))
+    docx_text = all_docx_text(document)
+    pdf = pdfium.PdfDocument(exports["pdf"].content)
+    try:
+        pdf_text = unicodedata.normalize("NFKC", " ".join(
+            " ".join(page.get_textpage().get_text_range().split()) for page in pdf
+        ))
+    finally:
+        pdf.close()
+    for key, title in overrides.items():
+        assert title in html, key
+        assert title in docx_text, key
+        assert unicodedata.normalize("NFKC", title) in pdf_text, (key, pdf_text)
+        original = detail["report_title_defaults"][key]
+        if original != title:
+            assert f">{original}<" not in html
+            assert original not in docx_text
+            assert unicodedata.normalize("NFKC", original) not in pdf_text
 
 
 def test_recalculation_replaces_existing_final_analytics_snapshot(client):
@@ -783,6 +830,34 @@ def test_language_variant_from_finalized_v2_keeps_source_render_identity_after_c
             "w": 6,
             "h": 4,
         }
+
+
+def test_language_variants_keep_independent_title_overrides(client):
+    source = create_report(client)
+    source_document = client.get(f"/api/v1/reports/{source['id']}").json()["latest_document"]
+    source_document["content"]["title_overrides"] = {"top10": "Largest positions"}
+    saved_source = client.patch(f"/api/v1/reports/{source['id']}/document", json={
+        "version": source_document["version"], "content": source_document["content"],
+    }).json()
+    created = client.post(f"/api/v1/reports/{source['id']}/language-variants", json={
+        "source_document_version": saved_source["version"], "language_mode": "ZH_HANS",
+    })
+    assert created.status_code == 201, created.text
+    target_id = created.json()["id"]
+    target = client.get(f"/api/v1/reports/{target_id}").json()
+    assert not target["latest_document"]["content"].get("title_overrides")
+    assert target["report_title_defaults"]["top10"] == "3033.HK 十大成分股*"
+    target_document = target["latest_document"]
+    target_document["content"]["title_overrides"] = {"top10": "主要持仓"}
+    saved_target = client.patch(f"/api/v1/reports/{target_id}/document", json={
+        "version": target_document["version"], "content": target_document["content"],
+    }).json()
+    synced = client.post(f"/api/v1/reports/{source['id']}/language-variants/{target_id}/sync", json={
+        "source_document_version": saved_source["version"], "target_document_version": saved_target["version"],
+    })
+    assert synced.status_code == 200, synced.text
+    assert client.get(f"/api/v1/reports/{target_id}").json()["latest_document"]["content"]["title_overrides"] == {"top10": "主要持仓"}
+    assert client.get(f"/api/v1/reports/{source['id']}").json()["latest_document"]["content"]["title_overrides"] == {"top10": "Largest positions"}
 
 
 def test_language_variant_retargets_v4_footnote_content_to_blank_editorial(client):

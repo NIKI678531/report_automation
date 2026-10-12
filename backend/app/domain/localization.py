@@ -36,6 +36,7 @@ REPORT_TERMS: dict[str, tuple[str, str, str]] = {
     "return_ytd": ("YTD return (%)", "年初至今回报（%）", "年初至今回報（%）"),
     "top10": ("Top 10 {product} Constituents*", "{product} 十大成分股*", "{product} 十大成分股*"),
     "sector_breakdown": ("{product} Sectors Breakdown*", "{product} 行业分布*", "{product} 行業分佈*"),
+    "performers": ("Performers in {month}**", "{month}成份股表现**", "{month}成份股表現**"),
     "top_performers": ("Top Performers in {month}**", "{month}表现最佳成份股**", "{month}表現最佳成份股**"),
     "bottom_performers": ("Bottom Performers in {month}**", "{month}表现最弱成份股**", "{month}表現最弱成份股**"),
     "issuer": ("Issuer", "发行人", "發行人"),

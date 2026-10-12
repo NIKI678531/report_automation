@@ -412,6 +412,31 @@ def test_report_templates_escape_by_default():
     assert "&lt;script&gt;" in rendered
 
 
+def test_custom_report_headings_are_escaped_in_preview_and_exports(client):
+    from html import escape
+
+    from conftest import download_report
+
+    report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
+    document = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]
+    hostile = '<script>alert("title")</script> & Assets'
+    document["content"]["title_overrides"] = {"top10": hostile, "portfolio.AUM": hostile}
+    saved = client.patch(f"/api/v1/reports/{report['id']}/document", json={
+        "version": document["version"], "content": document["content"],
+    })
+    assert saved.status_code == 200, saved.text
+    preview = client.post(f"/api/v1/reports/{report['id']}/preview")
+    assert preview.status_code == 200
+    assert "<script>" not in preview.text
+    assert escape(hostile).replace("&quot;", "&#34;") in preview.text
+    finalized = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": saved.json()["version"]})
+    assert finalized.status_code == 200, finalized.text
+    exported = download_report(client, report["id"], "html")
+    assert exported.status_code == 200
+    assert "<script>" not in exported.text
+    assert escape(hostile).replace("&quot;", "&#34;") in exported.text
+
+
 def test_a_fund_name_from_the_catalog_cannot_inject_markup(client, monkeypatch):
     from app.rendering.html import env
 

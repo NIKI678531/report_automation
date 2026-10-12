@@ -131,6 +131,26 @@ describe("Review page-one layout controls", () => {
       ]));
   });
 
+  it("deletes the last opening page and moves the Historical Performance group back safely", () => {
+    const onPresentationChange = vi.fn();
+    const initial = pageOnePresentation(undefined, blocks);
+    const { rerender } = render(<ReviewCanvas {...props(initial, onPresentationChange)} />);
+
+    expect(screen.getByRole("button", { name: "Delete last opening page" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    const pageTwo = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
+    rerender(<ReviewCanvas {...props(pageTwo, onPresentationChange)} />);
+    fireEvent.click(screen.getByRole("button", { name: "Delete last opening page" }));
+
+    const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
+    expect(updated.page_one.review_page_count).toBe(1);
+    expect(updated.page_one.elements.filter((element) => element.id === "historical_performance" || element.id === "footnote:historical"))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "historical_performance", page: 1 }),
+        expect.objectContaining({ id: "footnote:historical", page: 1 }),
+      ]));
+  });
+
   it("keeps the controlled rich footnote synchronized with its plain-text source", () => {
     const presentation = pageOnePresentation(undefined, blocks);
 

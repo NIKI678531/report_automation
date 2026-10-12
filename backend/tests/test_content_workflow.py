@@ -4,6 +4,7 @@ import io
 from datetime import datetime, timezone
 
 import pypdfium2 as pdfium
+import pytest
 from docx import Document
 from playwright.sync_api import sync_playwright
 from sqlalchemy import select
@@ -524,6 +525,49 @@ def test_review_blocks_render_to_html_and_editable_docx(client):
     assert "Editable custom review content" in text
 
 
+def test_report_title_overrides_are_versioned_and_defaults_keep_markers(client):
+    report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    defaults = detail["report_title_defaults"]
+    assert defaults["historical_performance"].endswith("*")
+    assert defaults["top10"] == "Top 10 3033.HK Constituents*"
+    assert defaults["performers"] == "Performers in August**"
+    assert defaults["top_performers"] == "Top Performers in August**"
+    assert defaults["portfolio.AUM"].endswith("^")
+    assert defaults["portfolio.AVERAGE_DAILY_TURNOVER"].endswith("^^")
+    content = detail["latest_document"]["content"]
+    overrides = {key: value.rstrip("*^") for key, value in defaults.items()}
+    content["title_overrides"] = overrides
+    saved = client.patch(f"/api/v1/reports/{report['id']}/document", json={
+        "version": detail["latest_document"]["version"], "content": content,
+    })
+    assert saved.status_code == 200, saved.text
+    reloaded = client.get(f"/api/v1/reports/{report['id']}").json()
+    assert reloaded["latest_document"]["content"]["title_overrides"] == overrides
+    assert reloaded["latest_document"]["checksum"] != detail["latest_document"]["checksum"]
+    assert reloaded["report_title_defaults"] == defaults
+    reset_content = reloaded["latest_document"]["content"]
+    reset_content["title_overrides"] = {}
+    reset = client.patch(f"/api/v1/reports/{report['id']}/document", json={
+        "version": reloaded["latest_document"]["version"], "content": reset_content,
+    })
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["content"]["title_overrides"] == {}
+
+
+@pytest.mark.parametrize("overrides", [None, [], {"unknown": "Title"}, {"top10": " "}, {"top10": 7}, {"top10": "x" * 201}])
+def test_report_title_overrides_reject_invalid_values(client, overrides):
+    report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
+    document = client.get(f"/api/v1/reports/{report['id']}").json()["latest_document"]
+    document["content"]["title_overrides"] = overrides
+    response = client.patch(f"/api/v1/reports/{report['id']}/document", json={
+        "version": document["version"], "content": document["content"],
+    })
+    assert response.status_code == 422, response.text
+    assert response.json()["error_code"] == "REPORT_TITLE_INVALID"
+    assert response.json()["field"].startswith("title_overrides")
+
+
 def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(client):
     report = client.post("/api/v1/reports", json={"report_date": "2026-06-30"}).json()
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
@@ -531,6 +575,7 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
     assert content["sections"]["month_in_review"]["display_title"] == "June in Review"
     content["sections"]["month_in_review"]["display_title"] = "Editable Monthly Perspective"
     content["sections"]["month_in_review"]["title"] = "Editable Monthly Perspective"
+    content["title_overrides"] = {"top10": "Largest positions", "portfolio.AUM": "Fund assets"}
     saved = client.patch(
         f"/api/v1/reports/{report['id']}/document",
         json={"version": detail["latest_document"]["version"], "content": content},
@@ -542,6 +587,7 @@ def test_review_title_survives_snapshot_rebinding_and_has_structured_validation(
     refreshed_detail = client.get(f"/api/v1/reports/{report['id']}").json()
     refreshed = refreshed_detail["latest_document"]["content"]
     assert refreshed["sections"]["month_in_review"]["display_title"] == "Editable Monthly Perspective"
+    assert refreshed["title_overrides"] == content["title_overrides"]
     assert ">Editable Monthly Perspective</h3>" in client.post(f"/api/v1/reports/{report['id']}/preview").text
 
     refreshed["sections"]["month_in_review"]["blocks"][0]["title"] = "   "

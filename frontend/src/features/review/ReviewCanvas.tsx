@@ -22,10 +22,11 @@ import {
   Minimize2,
   Pencil,
   Plus,
+  Trash2,
 } from "lucide-react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
 import { useLocale } from "../../i18n";
-import { MarkerTextarea } from "../../components/SuperscriptMarkerControl";
+import { MarkerInput, MarkerTextarea } from "../../components/SuperscriptMarkerControl";
 import { BoundedNumberInput, RichTypographyEditor, TextStyleControls, textStyleProperties } from "./RichTypographyEditor";
 import {
   FOOTNOTE_BODY_STYLE,
@@ -174,6 +175,7 @@ function ReviewBlockEditor({
   const { t } = useLocale();
   const titleStyle = element.title_style ?? REVIEW_TITLE_STYLE;
   const bodyStyle = element.body_style ?? REVIEW_BODY_STYLE;
+  const titleFieldId = useId();
   return <article
     className={`review-block page-one-module-shell${selected ? " selected" : ""}${expanded ? " is-expanded" : ""}`}
     data-layout-id={element.id}
@@ -196,19 +198,19 @@ function ReviewBlockEditor({
     />
     {expanded && <div className="module-title-style-controls" onClick={(event) => event.stopPropagation()}>
       <h4>{t("moduleTitleStyle")}</h4>
-      <label className="review-title-field">
-        <span>{t("moduleTitle")}</span>
-        <input
+      <div className="review-title-field">
+        <label htmlFor={titleFieldId}>{t("moduleTitle")}</label>
+        <MarkerInput
+          id={titleFieldId}
           className="review-block-title"
           aria-label={t("blockTitle", { id: block.block_id })}
           value={block.title}
           maxLength={200}
+          required
           disabled={disabled}
-          onChange={(event) => {
-            if (event.target.value.trim()) onTitleChange(event.target.value);
-          }}
+          onValueChange={onTitleChange}
         />
-      </label>
+      </div>
       <BoundedNumberInput
         label={t("titleContentSpacing")}
         value={titleStyle.space_after_pt}
@@ -662,6 +664,16 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
     onPresentationChange({ ...moved, page_one: { ...moved.page_one, review_page_count: nextCount } });
   }, [onPresentationChange, pageCount, presentation]);
 
+  const deleteLastReviewPage = useCallback(() => {
+    if (pageCount <= 1) return;
+    const nextCount = pageCount - 1;
+    const next = historyPage > nextCount
+      ? updateHistoricalGroup(presentation, (element) => ({ ...element, page: nextCount }))
+      : presentation;
+    setGroupDownRoomPt(null);
+    onPresentationChange({ ...next, page_one: { ...next.page_one, review_page_count: nextCount } });
+  }, [historyPage, onPresentationChange, pageCount, presentation]);
+
   const move = useCallback((direction: "left" | "right" | "up" | "down") => {
     if (disabled || !selectedElement) return;
     const horizontalDelta = direction === "left" ? -1 : direction === "right" ? 1 : 0;
@@ -847,6 +859,7 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
           <button type="button" disabled={disabled || historyPage <= 1} onClick={() => moveHistoryGroupToPage(historyPage - 1)}><ArrowUp size={16} /> {t("previousPage")}</button>
           <button type="button" disabled={disabled || historyPage >= MAX_REVIEW_PAGES} onClick={() => moveHistoryGroupToPage(historyPage + 1, true)}><ArrowDown size={16} /> {t("nextPage")}</button>
           <button type="button" disabled={disabled || pageCount >= MAX_REVIEW_PAGES} onClick={() => onPresentationChange({ ...presentation, page_one: { ...presentation.page_one, review_page_count: pageCount + 1 } })}><Plus size={16} /> {t("addReviewPage")}</button>
+          <button type="button" className="danger-button" disabled={disabled || pageCount <= 1} onClick={deleteLastReviewPage}><Trash2 size={16} /> {t("deleteReviewPage")}</button>
         </section>
 
         {historicalElement && footnoteElement && <div className="historical-group-builder">

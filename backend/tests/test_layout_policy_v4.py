@@ -12,7 +12,6 @@ from sqlalchemy import select
 
 from app.domain.document import initial_document
 from app.domain.models import ProductCatalog, Report, ReportStatus
-from app.domain.page_one_presentation import PageOneLayoutOverflowError
 from app.rendering import artifacts as artifact_module
 from app.rendering.html import render_html
 from conftest import download_report
@@ -114,21 +113,19 @@ def test_vertical_overflow_up_to_three_mm_is_an_audited_warning(monkeypatch, bot
     assert 2.7 <= findings[0]["overflow_mm"] <= 3.0
 
 
-def test_vertical_overflow_above_three_mm_remains_blocking(monkeypatch):
+def test_vertical_overflow_above_three_mm_is_audited_as_severe(monkeypatch):
     monkeypatch.setattr(
         artifact_module,
         "render_html",
         lambda *_args, **_kwargs: _layout_markup(node_bottom_px=550.6),
     )
 
-    with pytest.raises(PageOneLayoutOverflowError) as caught:
-        artifact_module.assert_page_one_layout_fits(
-            None, {"template_version": "3033-v4"}
-        )
-
-    finding = caught.value.findings[0]
+    finding = artifact_module.assert_page_one_layout_fits(
+        None, {"template_version": "3033-v4"}
+    )[0]
     assert finding["code"] == "PAGE_LAYOUT_VERTICAL_OVERFLOW"
-    assert finding["severity"] == "BLOCKING"
+    assert finding["severity"] == "WARNING"
+    assert finding["original_severity"] == "BLOCKING"
     assert finding["page"] == 2
     assert finding["overflow_mm"] > 3
 
@@ -148,16 +145,7 @@ def test_vertical_policy_exact_boundaries(monkeypatch, overflow_mm, expected_sev
         ),
     )
 
-    if expected_severity == "BLOCKING":
-        with pytest.raises(PageOneLayoutOverflowError) as caught:
-            artifact_module.assert_page_one_layout_fits(
-                None, {"template_version": "3033-v4"}
-            )
-        assert caught.value.findings[0]["severity"] == expected_severity
-        assert caught.value.findings[0]["overflow_mm"] == pytest.approx(overflow_mm, abs=0.005)
-        return
-
-    findings = artifact_module.assert_page_one_layout_fits(
+    findings = artifact_module.inspect_page_layout(
         None, {"template_version": "3033-v4"}
     )
     if expected_severity is None:
@@ -179,20 +167,20 @@ def test_svg_text_scroll_metrics_do_not_create_horizontal_false_positive(monkeyp
     ) == ()
 
 
-def test_real_horizontal_clipping_remains_blocking(monkeypatch):
+def test_real_horizontal_clipping_is_audited_as_severe(monkeypatch):
     monkeypatch.setattr(
         artifact_module,
         "render_html",
         lambda *_args, **_kwargs: _horizontal_layout_markup(clipped=True),
     )
 
-    with pytest.raises(PageOneLayoutOverflowError) as caught:
-        artifact_module.assert_page_one_layout_fits(
-            None, {"template_version": "3033-v4"}
-        )
-
-    assert caught.value.findings[0]["code"] == "PAGE_LAYOUT_HORIZONTAL_OVERFLOW"
-    assert caught.value.findings[0]["axis"] == "horizontal"
+    finding = artifact_module.assert_page_one_layout_fits(
+        None, {"template_version": "3033-v4"}
+    )[0]
+    assert finding["code"] == "PAGE_LAYOUT_HORIZONTAL_OVERFLOW"
+    assert finding["axis"] == "horizontal"
+    assert finding["severity"] == "WARNING"
+    assert finding["original_severity"] == "BLOCKING"
 
 
 def test_v4_html_inserts_opening_pages_before_the_four_fixed_business_pages():
@@ -387,7 +375,7 @@ def test_v3_docx_keeps_five_sections_and_literal_page_numbers(tmp_path):
         assert str(page_number) in footer_text
 
 
-def test_v3_preflight_keeps_page_one_only_zero_tolerance_contract(monkeypatch):
+def test_v3_preflight_audits_page_one_and_later_footer_overflow(monkeypatch):
     markup = """<!doctype html><style>
       .report-page { position:relative; width:400px; height:600px; overflow:hidden }
       .page-body { position:relative; width:300px }
@@ -403,18 +391,18 @@ def test_v3_preflight_keeps_page_one_only_zero_tolerance_contract(monkeypatch):
     </section>"""
     monkeypatch.setattr(artifact_module, "render_html", lambda *_args, **_kwargs: markup)
 
-    with pytest.raises(PageOneLayoutOverflowError) as caught:
-        artifact_module.assert_page_one_layout_fits(
-            None, {"template_version": "3033-v3"}
-        )
-
-    finding = caught.value.findings[0]
+    findings = artifact_module.assert_page_one_layout_fits(
+        None, {"template_version": "3033-v3"}
+    )
+    finding = findings[0]
     assert finding["layout_id"] == "review:summary"
     assert finding["axis"] == "vertical"
     assert finding["bottom"] - finding["safe_bottom"] == pytest.approx(9)
+    assert all(item["severity"] == "WARNING" for item in findings)
+    assert any(item.get("page") == 2 for item in findings)
 
 
-def test_v3_pdf_keeps_the_legacy_all_page_secondary_guard(monkeypatch, tmp_path):
+def test_v3_pdf_does_not_veto_footer_overflow(monkeypatch, tmp_path):
     markup = """<!doctype html><style>
       @page { size:A4; margin:0 }
       .report-page { position:relative; width:210mm; height:297mm; page-break-after:always }
@@ -428,8 +416,9 @@ def test_v3_pdf_keeps_the_legacy_all_page_secondary_guard(monkeypatch, tmp_path)
     monkeypatch.setattr(artifact_module, "render_html", lambda *_args, **_kwargs: markup)
     document = SimpleNamespace(content={"template_version": "3033-v3"})
 
-    with pytest.raises(ValueError, match="PDF_LAYOUT_OVERFLOW"):
-        artifact_module._render_file(None, document, "pdf", tmp_path / "legacy.pdf")
+    destination = tmp_path / "legacy.pdf"
+    artifact_module._render_file(None, document, "pdf", destination)
+    assert destination.read_bytes().startswith(b"%PDF")
 
 
 def test_finalized_v3_still_exports_legacy_html_pdf_and_docx(client):
@@ -518,7 +507,7 @@ def test_qa_blocked_can_finalize_and_layout_warning_is_audited(client, monkeypat
     assert exported.status_code == 200, exported.text
 
 
-def test_blocking_layout_failure_is_audited_during_finalize(client, monkeypatch):
+def test_blocking_layout_is_advisory_during_finalize(client, monkeypatch):
     created = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     document_version = client.get(
         f"/api/v1/reports/{created['id']}"
@@ -533,26 +522,22 @@ def test_blocking_layout_failure_is_audited_during_finalize(client, monkeypatch)
         "message": "Content exceeds the 3 mm tolerance or touches the page footer.",
     }
 
-    def reject(*_args, **_kwargs):
-        raise PageOneLayoutOverflowError((blocking,))
-
-    monkeypatch.setattr(artifact_module, "assert_page_one_layout_fits", reject)
+    monkeypatch.setattr(artifact_module, "inspect_page_layout", lambda *_args: (blocking,))
     response = client.post(
         f"/api/v1/reports/{created['id']}/finalize",
         json={"version": document_version},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200, response.text
     events = client.get(f"/api/v1/audit?report_id={created['id']}").json()
-    details = next(item["details"] for item in events if item["action"] == "report.finalize_failed")
-    assert details["layout_findings"] == [blocking]
+    details = next(item["details"] for item in events if item["action"] == "report.finalized")
+    assert details["layout_warning_findings"] == [{**blocking, "severity": "WARNING", "original_severity": "BLOCKING"}]
     assert details["document_checksum"]
     assert details["layout_policy_version"]
 
 
-def test_blocking_layout_failure_is_audited_during_export(client, monkeypatch):
-    from app.api.routes import render as render_route
-
+@pytest.mark.parametrize("format_name", ["html", "pdf", "docx"])
+def test_blocking_layout_is_advisory_during_export(client, monkeypatch, format_name):
     created = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     document_version = client.get(
         f"/api/v1/reports/{created['id']}"
@@ -572,22 +557,20 @@ def test_blocking_layout_failure_is_audited_during_export(client, monkeypatch):
         "message": "Content is clipped outside the horizontal page boundary.",
     }
 
-    def reject(*_args, **_kwargs):
-        raise PageOneLayoutOverflowError((blocking,))
-
-    monkeypatch.setattr(render_route, "generate_export", reject)
+    monkeypatch.setattr(artifact_module, "inspect_page_layout", lambda *_args: (blocking,))
     grant = client.get(
-        f"/api/v1/reports/{created['id']}/exports/pdf/download"
+        f"/api/v1/reports/{created['id']}/exports/{format_name}/download"
     ).json()
     response = client.get(grant["download_url"])
 
-    assert response.status_code == 422
+    assert response.status_code == 200, response.text
+    assert response.content
     events = client.get(f"/api/v1/audit?report_id={created['id']}").json()
     details = next(
         item["details"] for item in reversed(events)
-        if item["action"] == "export.failed"
+        if item["action"] == "export.generated"
     )
-    assert details["layout_findings"] == [blocking]
+    assert details["layout_warning_findings"] == [{**blocking, "severity": "WARNING", "original_severity": "BLOCKING"}]
     assert details["document_checksum"]
     assert details["layout_policy_version"]
 

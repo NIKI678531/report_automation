@@ -576,11 +576,10 @@ def test_chromium_preflight_detects_horizontal_scroll_overflow(monkeypatch):
     </section>"""
     monkeypatch.setattr(artifact_module, "render_html", lambda *_args, **_kwargs: markup)
 
-    with pytest.raises(PageOneLayoutOverflowError) as caught:
-        artifact_module.assert_page_one_layout_fits(None, {})
-
-    assert caught.value.findings[0]["layout_id"] == "review:summary"
-    assert caught.value.findings[0]["axis"] == "horizontal"
+    findings = artifact_module.assert_page_one_layout_fits(None, {})
+    assert findings[0]["layout_id"] == "review:summary"
+    assert findings[0]["axis"] == "horizontal"
+    assert findings[0]["severity"] == "WARNING"
 
 
 def test_chromium_preflight_detects_actual_layout_node_overlap(monkeypatch):
@@ -601,12 +600,11 @@ def test_chromium_preflight_detects_actual_layout_node_overlap(monkeypatch):
     </section>"""
     monkeypatch.setattr(artifact_module, "render_html", lambda *_args, **_kwargs: markup)
 
-    with pytest.raises(PageOneLayoutOverflowError) as caught:
-        artifact_module.assert_page_one_layout_fits(None, {})
-
-    overlap = next(finding for finding in caught.value.findings if finding["axis"] == "overlap")
+    findings = artifact_module.assert_page_one_layout_fits(None, {})
+    overlap = next(finding for finding in findings if finding["axis"] == "overlap")
     assert overlap["layout_id"] == "review:summary"
     assert overlap["overlaps_with"] == "historical_performance"
+    assert overlap["severity"] == "WARNING"
 
 
 def test_unsaved_preview_is_canonical_but_does_not_create_a_version_or_audit(client):
@@ -864,7 +862,9 @@ def test_v3_accepts_review_title_changes_and_rejects_invalid_presentation(client
     assert rejected_identity.json()["error_code"] == "PAGE_ONE_PRESENTATION_INVALID"
 
 
-def test_long_page_one_copy_can_be_saved_but_blocks_finalization(client):
+def test_long_page_one_copy_can_be_finalized_and_downloaded_with_warnings(client):
+    from conftest import download_report
+
     report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     content = detail["latest_document"]["content"]
@@ -889,12 +889,21 @@ def test_long_page_one_copy_can_be_saved_but_blocks_finalization(client):
 
     finalized = client.post(
         f"/api/v1/reports/{report['id']}/finalize",
-        json={"version": refreshed["version"]},
+        json={"version": refreshed["latest_document"]["version"]},
     )
 
-    assert finalized.status_code == 422, finalized.text
-    assert finalized.json()["error_code"] == "PAGE_ONE_LAYOUT_OVERFLOW"
+    assert finalized.status_code == 200, finalized.text
+    events = client.get(f"/api/v1/audit?report_id={report['id']}").json()
+    details = next(event["details"] for event in events if event["action"] == "report.finalized")
     assert any(
-        finding["layout_id"] == "review:summary"
-        for finding in finalized.json()["findings"]
+        finding["layout_id"] == "review:summary" and finding["original_severity"] == "BLOCKING"
+        for finding in details["layout_warning_findings"]
     )
+    for format_name in ("html", "pdf", "docx"):
+        exported = download_report(client, report["id"], format_name)
+        assert exported.status_code == 200, (format_name, exported.text)
+        assert len(exported.content) > 1000
+    events = client.get(f"/api/v1/audit?report_id={report['id']}").json()
+    exported_events = [event for event in events if event["action"] == "export.generated"]
+    assert len(exported_events) == 3
+    assert all(event["details"]["layout_warning_findings"] for event in exported_events)

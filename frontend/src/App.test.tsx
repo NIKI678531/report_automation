@@ -342,28 +342,40 @@ describe("3033 product scope", () => {
     expect(reviewButton.querySelector(".module-state")?.classList.contains("ready")).toBe(true);
   });
 
-  it("finalizes without blocking on review findings and opens direct format downloads", async () => {
-    let current = report("ready", "2026-07-31", "READY_TO_FINALIZE");
+  it("saves title edits before finalizing without blocking on review findings and opens downloads", async () => {
+    let current = report("ready", "2026-07-31", "QA_BLOCKED");
+    current.report_title_defaults = { top10: "Largest positions*" };
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockImplementation(async () => [current]);
     vi.spyOn(api, "getReport").mockImplementation(async () => current);
     vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
+    vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
+    vi.spyOn(api, "previewSaved").mockResolvedValue("<html><body></body></html>");
+    const saveDocument = vi.spyOn(api, "saveDocument").mockImplementation(async (_id, version, content) => {
+      current = { ...current, latest_document: { version: version + 1, checksum: "saved-title", content } };
+      return { version: version + 1 };
+    });
     const review = vi.spyOn(api, "review").mockResolvedValue({
       ready: false,
       blocking: [{ check_id: "SNAPSHOT_INCOMPLETE", fix_hint: "Upload Trading calendar." }],
       warnings: [],
     });
     const finalize = vi.spyOn(api, "finalize").mockImplementation(async () => {
-      current = report("ready", "2026-07-31", "FINALIZED");
+      current = { ...current, status: "FINALIZED", finalized_document_version: current.latest_document!.version };
       return current;
     });
     const downloadReport = vi.spyOn(api, "downloadReport").mockResolvedValue(undefined);
 
     renderAt(`/reports/${current.id}`);
     const reviewButton = await screen.findByRole("button", { name: "Review & finalize" });
+    fireEvent.click(screen.getByText("Report titles", { selector: "summary" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Largest positions*" }), { target: { value: "Largest positions" } });
     fireEvent.click(reviewButton);
 
     await waitFor(() => expect(finalize).toHaveBeenCalledTimes(1));
+    expect(saveDocument).toHaveBeenCalledWith("ready", 1, expect.objectContaining({ title_overrides: { top10: "Largest positions" } }));
+    expect(finalize).toHaveBeenCalledWith("ready", 2);
+    expect(saveDocument.mock.invocationCallOrder[0]).toBeLessThan(finalize.mock.invocationCallOrder[0]);
     expect(review).not.toHaveBeenCalled();
     expect(downloadReport).not.toHaveBeenCalled();
     const menu = await screen.findByRole("menu", { name: "Download report" });

@@ -34,6 +34,7 @@ from app.domain.metrics.final_analytics import normalize_portfolio_rows
 from app.domain.models import Report, ReportDocument
 from app.domain.page_one_presentation import PageOneLayoutOverflowError, page_one_presentation
 from app.domain.rich_text import PARAGRAPH_INDENT_STEP_EM
+from app.domain.report_titles import report_title_defaults, resolve_report_titles
 from .disclaimer import disclaimer_audit_fields, load_disclaimer
 from .html import (
     _render_tokens,
@@ -50,14 +51,14 @@ from .html import (
 
 MIME = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 MINOR_LAYOUT_OVERFLOW_TOLERANCE_MM = 3.0
-LAYOUT_POLICY_VERSION = "paged-layout-v2"
+LAYOUT_POLICY_VERSION = "paged-layout-advisory-v3"
 
 
 def renderer_version_for(format_name: str) -> str:
     return (
-        f"{settings.renderer_version}-paged-i18n-v4" if format_name == "pdf"
-        else "html-continuous-i18n-v4" if format_name == "html"
-        else "docx-paged-i18n-v4"
+        f"{settings.renderer_version}-paged-i18n-v5" if format_name == "pdf"
+        else "html-continuous-i18n-v5" if format_name == "html"
+        else "docx-paged-i18n-v5"
     )
 
 
@@ -1237,7 +1238,7 @@ def _render_historical_docx(
     content: dict[str, Any],
     page_one: dict[str, Any] | None,
     language_mode: str,
-    benchmark_name: str,
+    heading_text: str,
     usable_width: int,
     font_name: str,
     blue_hex: str,
@@ -1265,12 +1266,6 @@ def _render_historical_docx(
             )
             content_width = sum(column_widths[group_x:group_x + group_w])
     title_style = historical.get("title_style") if is_v4 else {}
-    heading_text = term(
-        "historical_performance",
-        language_mode,
-        product=content["product_ticker"],
-        benchmark=benchmark_name,
-    )
     if content_parent is document:
         history_heading = document.add_paragraph(style="Heading 1")
     else:
@@ -1369,6 +1364,10 @@ def _render_historical_docx(
 def render_docx(report: Report, content: dict, destination: Path) -> None:
     language_mode = str(content.get("language_mode") or report.language_mode or "EN")
     content = localized_document(content, language_mode)
+    titles = resolve_report_titles(content, report_title_defaults(
+        content, product_code=report.product_code, benchmark_name=report.benchmark_code,
+        report_date=report.report_date, language_mode=language_mode,
+    ))
     tokens = _render_tokens(str(content.get("design_token_version") or "3033-v1"))
     page_one = (
         page_one_presentation.resolve_for_render(content, tokens)
@@ -1437,14 +1436,13 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         )
     else:
         _legacy_review(document, content, language_mode, usable_width, font_name, deep)
-    benchmark_name = (content.get("terminology_overrides") or {}).get("benchmark_name") or content["benchmark_name"]
     if historical_page == 1:
         _render_historical_docx(
             document,
             content=content,
             page_one=page_one,
             language_mode=language_mode,
-            benchmark_name=benchmark_name,
+            heading_text=titles["historical_performance"],
             usable_width=usable_width,
             font_name=font_name,
             blue_hex=blue_hex,
@@ -1469,7 +1467,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
                     content=content,
                     page_one=page_one,
                     language_mode=language_mode,
-                    benchmark_name=benchmark_name,
+                    heading_text=titles["historical_performance"],
                     usable_width=_usable_width_twips(continuation),
                     font_name=font_name,
                     blue_hex=blue_hex,
@@ -1482,7 +1480,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         page2, company_page_number, report, language_mode, tokens, banner=banner,
         dynamic_page_number=is_v4, profile_page_number=2,
     )
-    news_heading = document.add_heading(term("company_news", language_mode), 1)
+    news_heading = document.add_heading(titles["company_news"], 1)
     _format_paragraph(news_heading, before=3, after=5, keep_with_next=True)
     for item in sections["company_news"]:
         if not any(str(item.get(field) or "").strip() for field in ("title", "summary", "source_name")):
@@ -1505,7 +1503,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         footnote=str(footnotes.get("constituents") or ""), banner=banner,
         dynamic_page_number=is_v4, profile_page_number=3,
     )
-    heading = document.add_heading(term("constituent_performance", language_mode, product=content["product_ticker"]), 1)
+    heading = document.add_heading(titles["constituent_performance"], 1)
     _format_paragraph(heading, alignment=WD_ALIGN_PARAGRAPH.CENTER, before=8, after=3, keep_with_next=True)
     for run in heading.runs:
         _set_run_font(run, font_name, size=16, bold=True, color=deep)
@@ -1550,7 +1548,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         _set_cell_borders(cell)
     _set_cell_margins(left, right=170)
     _set_cell_margins(right, left=170)
-    _add_blue_title(left, term("top10", language_mode, product=content["product_ticker"]), "(%)", width=outer_widths[0] - 170, font_name=font_name, blue=blue_hex)
+    _add_blue_title(left, titles["top10"], "(%)", width=outer_widths[0] - 170, font_name=font_name, blue=blue_hex)
     _table(
         left,
         None,
@@ -1563,7 +1561,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         row_height_cm=0.62,
     )
     _remove_initial_empty_paragraph(left)
-    _add_blue_title(right, term("sector_breakdown", language_mode, product=content["product_ticker"]), None, width=outer_widths[1] - 170, font_name=font_name, blue=blue_hex)
+    _add_blue_title(right, titles["sector_breakdown"], None, width=outer_widths[1] - 170, font_name=font_name, blue=blue_hex)
     # The Word contract permits charts as high-resolution images; the chart data and labels are
     # still sourced from the same immutable snapshot used by HTML/PDF.
     source_chart = analytics.get("sector_chart") or {}
@@ -1574,17 +1572,19 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _format_paragraph(chart_paragraph, alignment=WD_ALIGN_PARAGRAPH.CENTER)
     if chart.get("has_data"):
         picture = chart_paragraph.add_run().add_picture(_sector_chart_image(chart, sector_series, font_name), width=Cm(7.2))
-        picture._inline.docPr.set("title", term("sector_breakdown", language_mode, product=content["product_ticker"]))
+        picture._inline.docPr.set("title", titles["sector_breakdown"])
         picture._inline.docPr.set("descr", str(chart.get("alt_text") or ""))
         _sector_legend(right, chart["rows"], font_name=font_name)
     _remove_initial_empty_paragraph(right)
 
+    performers_heading = document.add_heading(titles["performers"], 1)
+    _format_paragraph(performers_heading, before=10, after=3, keep_with_next=True)
     performers = document.add_table(rows=1, cols=2)
     _set_table_geometry(performers, outer_widths)
     _set_table_borders(performers)
     for index, (title_text, rows) in enumerate((
-        (term("top_performers", language_mode, month=content["month_name"]), [[x.get("display_issuer", ""), pct(x["return"], language_mode)] for x in analytics["top"]]),
-        (term("bottom_performers", language_mode, month=content["month_name"]), [[x.get("display_issuer", ""), pct(x["return"], language_mode)] for x in analytics["bottom"]]),
+        (titles["top_performers"], [[x.get("display_issuer", ""), pct(x["return"], language_mode)] for x in analytics["top"]]),
+        (titles["bottom_performers"], [[x.get("display_issuer", ""), pct(x["return"], language_mode)] for x in analytics["bottom"]]),
     )):
         cell = performers.rows[0].cells[index]
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
@@ -1602,7 +1602,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
             font_name=font_name,
         )
 
-    portfolio_heading = document.add_heading(term("portfolio_analysis", language_mode, product=content["product_ticker"]), 1)
+    portfolio_heading = document.add_heading(titles["portfolio_analysis"], 1)
     _format_paragraph(portfolio_heading, before=12, after=5, keep_with_next=True)
     portfolio_rows = normalize_portfolio_rows(analytics.get("portfolio"), "HKD")
     if is_chinese(language_mode):
@@ -1618,7 +1618,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     portfolio_widths = [int(usable_width * 0.63), usable_width - int(usable_width * 0.63)]
     _set_table_geometry(portfolio_table, portfolio_widths)
     _set_table_borders(portfolio_table)
-    for values in [[x["label"], x["display_value"]] for x in portfolio_rows]:
+    for values in [[titles[f"portfolio.{item['metric_code']}"], item["display_value"]] for item in portfolio_rows]:
         row = portfolio_table.add_row()
         _prevent_row_split(row)
         row.height = Cm(0.72)
@@ -1685,7 +1685,7 @@ def _inspect_legacy_page_one_layout(
     report: Report,
     content: dict[str, Any],
 ) -> tuple[dict[str, Any], ...]:
-    """Preserve the v1-v3 page-one-only, zero-tolerance measurement contract."""
+    """Measure legacy page-one geometry and footer collisions on every sheet."""
 
     from playwright.sync_api import sync_playwright
 
@@ -1787,6 +1787,20 @@ def _inspect_legacy_page_one_layout(
                     }
                     return [...boundsFindings, ...overlapFindings];
                 }""")
+                findings.extend(page.evaluate("""() => Array.from(document.querySelectorAll('.report-page')).flatMap((reportPage) => {
+                    const body = reportPage.querySelector('.page-body');
+                    const footer = reportPage.querySelector('.page-footer');
+                    if (!body || !footer) return [];
+                    const bodyBottom = body.getBoundingClientRect().bottom;
+                    const footerTop = footer.getBoundingClientRect().top;
+                    return bodyBottom > footerTop ? [{
+                        code: 'PAGE_LAYOUT_VERTICAL_OVERFLOW', severity: 'BLOCKING',
+                        page: Number(reportPage.dataset.page), layout_id: 'page_body',
+                        element_id: 'page_body', axis: 'vertical',
+                        overflow_mm: (bodyBottom - footerTop) * 25.4 / 96,
+                        message: 'Report content enters the footer safe area.'
+                    }] : [];
+                })"""))
             finally:
                 browser.close()
     return tuple(findings)
@@ -1798,7 +1812,8 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
     The final 3 mm above the footer is an intentional tolerance band.  Entering that band is
     visible and audited, but does not prevent finalization or export.  Crossing the physical
     footer boundary, clipping horizontally, hiding content, or overlapping another module is
-    always blocking.  Draft preview deliberately skips this Chromium pass because the browser
+    classified as severe; release policy converts these findings to advisories. Draft preview
+    deliberately skips this Chromium pass because the browser
     editor provides its own immediate markers.
     """
 
@@ -2024,17 +2039,14 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
 
 
 def assert_page_one_layout_fits(report: Report, content: dict[str, Any]) -> tuple[dict[str, Any], ...]:
-    """Return advisory findings and raise only when the shared preflight finds blockers."""
+    """Retain the preflight entry point, reporting layout findings without vetoing release."""
 
     findings = inspect_page_layout(report, content)
-    blocking = (
-        tuple(item for item in findings if item.get("severity") == "BLOCKING")
-        if content.get("template_version") == "3033-v4"
-        else findings
+    return tuple(
+        {**item, "severity": "WARNING", "original_severity": item.get("severity", "BLOCKING")}
+        if item.get("severity") != "WARNING" else dict(item)
+        for item in findings
     )
-    if blocking:
-        raise PageOneLayoutOverflowError(findings)
-    return findings
 
 
 def generate_export(report: Report, document: ReportDocument, format_name: str) -> GeneratedExport:
@@ -2102,26 +2114,5 @@ def _render_file(report: Report, document: ReportDocument, format_name: str, des
                         });
                     }));
                 }""")
-                if document.content.get("template_version") != "3033-v4":
-                    # Preserve the v1-v3 PDF guard exactly. Their immutable rendering contract
-                    # predates the v4 advisory band and checks every fixed business page.
-                    overflow = page.evaluate("""() => Array.from(document.querySelectorAll('.report-page')).flatMap((reportPage) => {
-                        const body = reportPage.querySelector('.page-body');
-                        const footer = reportPage.querySelector('.page-footer');
-                        if (!body || !footer) return [];
-                        const bodyBottom = body.getBoundingClientRect().bottom;
-                        const footerTop = footer.getBoundingClientRect().top;
-                        return bodyBottom > footerTop
-                            ? [{ page: reportPage.dataset.page, bodyBottom, footerTop }]
-                            : [];
-                    })""")
-                    if overflow:
-                        browser.close()
-                        raise ValueError(
-                            "PDF_LAYOUT_OVERFLOW: report content enters the footer safe area: "
-                            f"{overflow}"
-                        )
-                # v4 was already measured by `assert_page_one_layout_fits`; applying the legacy
-                # zero-tolerance pass would incorrectly veto its audited 3 mm advisory band.
                 page.pdf(path=str(destination), format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}, prefer_css_page_size=True)
                 browser.close()

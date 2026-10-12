@@ -68,6 +68,18 @@ The frozen calculated payload for one module, unique per snapshot + `module_code
 `historical_performance`, `constituents_performance`, `final_analytics`, `footnotes`.
 _Avoid_: Module result, computed section
 
+**Report heading**:
+The editorial display wording above report content or beside a portfolio measure, including its
+optional footnote marker. Changing a heading does not change the underlying financial facts or
+approved legal copy. Each language variant can retain its own wording.
+_Avoid_: Metric name, navigation label
+
+**Layout finding**:
+A measured presentation issue such as overflow, clipping, overlap or footer contact. It remains
+visible to the reviewer and retained in the audit trail, but does not itself prevent finalization
+or download.
+_Avoid_: Data quality failure, authorization failure
+
 ### Data and lineage
 
 **Data snapshot**:

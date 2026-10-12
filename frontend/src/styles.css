@@ -1010,6 +1010,10 @@ tbody tr:last-child th, tbody tr:last-child td { box-shadow: none; }
 .surface-heading strong { color: var(--color-text); }
 .section-title span { font-family: var(--font-numeric); color: var(--color-primary); }
 .section-title h3 { margin: 0; color: var(--color-text); font-size: var(--text-body-lg); }
+.section-title .icon-button { flex: 0 0 auto; margin-inline-start: auto; }
+.analytics-title-editor { display: grid; gap: var(--space-sm); padding: var(--space-md); background: var(--color-surface-strong); box-shadow: inset 0 -1px 0 var(--color-border); }
+.analytics-title-editor > label { color: var(--color-text-secondary); font-size: var(--text-label-sm); font-weight: var(--weight-emphasis); }
+.analytics-title-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-sm); }
 
 .sector-donut-figure { display: grid; grid-template-columns: var(--layout-sector-chart-columns); align-items: center; gap: var(--space-md); margin: 0; padding: var(--space-md); }
 .sector-donut { display: block; width: 100%; max-width: var(--layout-sector-chart-size); aspect-ratio: 1; margin: auto; overflow: visible; transform: rotate(-90deg); }
@@ -1289,6 +1293,13 @@ tbody tr:last-child th, tbody tr:last-child td { box-shadow: none; }
 .rich-toolbar .toolbar-separator { width: 1px; margin: var(--space-xs); background: var(--color-border); }
 .rich-toolbar [aria-pressed="true"] { background: var(--color-primary-container); color: var(--color-primary); }
 .marker-textarea, .marker-input { display: grid; gap: var(--space-xs); min-width: 0; }
+.report-title-editor { margin-bottom: var(--space-lg); }
+.report-title-editor summary { cursor: pointer; font-weight: var(--weight-emphasis); }
+.report-title-editor summary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.report-title-group, .report-title-field { display: grid; gap: var(--space-sm); margin-top: var(--space-md); min-width: 0; }
+.report-title-label { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
+.report-title-label label { min-width: 0; overflow-wrap: anywhere; }
+.report-title-label .icon-button { flex-shrink: 0; }
 .marker-textarea > textarea, .marker-input > input { width: 100%; }
 .superscript-marker-control { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-xs); color: var(--color-text-secondary); font-size: var(--text-label-sm); }
 .superscript-marker-control label { display: grid; gap: var(--space-xs); }

@@ -12,7 +12,7 @@ const SUPERSCRIPT_DIGITS: Record<string, string> = {
   "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
   "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
 };
-const VALID_MARKER = /^[0-9⁰¹²³⁴⁵⁶⁷⁸⁹*†‡]{1,8}$/u;
+const VALID_MARKER = /^[0-9⁰¹²³⁴⁵⁶⁷⁸⁹*†‡^]{1,8}$/u;
 
 export function normalizeSuperscriptMarker(value: string): string | null {
   const trimmed = value.trim();

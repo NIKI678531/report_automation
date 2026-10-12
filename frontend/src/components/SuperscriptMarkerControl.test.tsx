@@ -16,6 +16,7 @@ describe("superscript footnote markers", () => {
   it("normalizes editable digit markers and preserves common publication symbols", () => {
     expect(normalizeSuperscriptMarker("120")).toBe("¹²⁰");
     expect(normalizeSuperscriptMarker("⁴†‡*")).toBe("⁴†‡*");
+    expect(normalizeSuperscriptMarker("^^")).toBe("^^");
     expect(normalizeSuperscriptMarker("1a")).toBeNull();
     expect(normalizeSuperscriptMarker("")).toBeNull();
   });

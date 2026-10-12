@@ -31,6 +31,7 @@ from app.domain.localization import (
 from app.domain.metrics.final_analytics import normalize_portfolio_rows
 from app.domain.models import Report
 from app.domain.page_one_presentation import page_one_presentation
+from app.domain.report_titles import report_title_defaults, resolve_report_titles
 from .disclaimer import load_disclaimer
 
 ROOT = Path(__file__).resolve().parent
@@ -402,6 +403,10 @@ def render_html(
     if page_one is not None:
         document = page_one["document"]
     sections = document["sections"]
+    titles = resolve_report_titles(document, report_title_defaults(
+        document, product_code=report.product_code, benchmark_name=report.benchmark_code,
+        report_date=report.report_date, language_mode=language_mode,
+    ))
     disclaimer = load_disclaimer()
     banner = testing_banner(document)
     enable_review_layout = template_version != "3033-v1"
@@ -417,6 +422,8 @@ def render_html(
                 row["display_value"] = term("no_data", language_mode)
             else:
                 row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
+    for row in portfolio:
+        row["label"] = titles[f"portfolio.{row['metric_code']}"]
     template_name = "3033-v4.html.j2" if template_version == "3033-v4" else "3033.html.j2"
     return env.get_template(template_name).render(
         report=report,
@@ -426,7 +433,7 @@ def render_html(
         html_language="zh-CN" if is_zh_hans(language_mode) else "zh-HK" if is_zh_hant(language_mode) else "en",
         cjk_font_css=_embedded_cjk_font_css(language_mode) if is_chinese(language_mode) else "",
         layout_mode=layout_mode,
-        t=lambda key, **values: term(key, language_mode, **values),
+        t=lambda key, **values: titles[key] if key in titles else term(key, language_mode, **values),
         product_display_name=(document.get("terminology_overrides") or {}).get("product_name") or report.product_name,
         benchmark_display_name=(document.get("terminology_overrides") or {}).get("benchmark_name") or document.get("benchmark_name") or report.benchmark_code,
         report_date_long=long_date(report.report_date, language_mode),
