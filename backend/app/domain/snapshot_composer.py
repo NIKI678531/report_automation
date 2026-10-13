@@ -9,7 +9,7 @@ from app.integrations.datawarehouse import (
     load_fund_aum,
     load_fund_kpis,
     load_historical_performance,
-    load_index_constituents,
+    load_portfolio_holdings,
 )
 from app.integrations.da_report import DaReportProviderError, load_monthly_data, load_monthly_turnover
 
@@ -206,30 +206,32 @@ def compose_da_report_fragment(product: ProductCatalog, report_date: date) -> tu
             datasets.update(performance_fragment["datasets"])
             fragment["historical_performance"] = performance_fragment["historical_performance"]
             fragment["source_checksum"] = performance_fragment["source_checksum"]
-        if settings.datawarehouse_constituents_enabled and performance_fragment:
-            effective_as_of = date.fromisoformat(
-                performance_fragment["historical_performance"]["effective_as_of"]
+    # Portfolio holdings are an independent monthly fact.  Do not bind their observation date or
+    # availability to Page 02 performance: every automatic report selects the latest holdings
+    # date available inside its own report month.
+    if settings.datawarehouse_constituents_enabled:
+        try:
+            constituent_fragment = load_portfolio_holdings(
+                fund_ticker=product.ticker,
+                index_code=product.constituent_index_code,
+                report_date=report_date,
             )
-            try:
-                constituent_fragment = load_index_constituents(
-                    index_code=product.constituent_index_code,
-                    report_date=report_date,
-                    effective_as_of=effective_as_of,
-                )
-            except DataWarehouseProviderError as error:
-                findings.append({
-                    "check_id": error.code,
-                    "error_code": error.code,
-                    "severity": "BLOCKING",
-                    "status": "FAILED",
-                    "message": error.message,
-                    "actual": None,
-                    "threshold": "A report-month CDB constituent identity snapshot for the configured index",
-                    "fix_hint": "Verify the configured CDB constituent view, index code and report-month coverage, then refresh.",
-                })
-            else:
-                findings.extend(constituent_fragment.pop("_findings", []))
-                fragment["constituents"] = constituent_fragment["constituents"]
-                fragment["constituent_index_code"] = constituent_fragment["constituent_index_code"]
-                fragment.setdefault("datasets", {}).update(constituent_fragment["datasets"])
+        except DataWarehouseProviderError as error:
+            findings.append({
+                "check_id": error.code,
+                "error_code": error.code,
+                "severity": "BLOCKING",
+                "status": "FAILED",
+                "message": error.message,
+                "actual": None,
+                "threshold": "The latest available CDB fund holding snapshot inside the report month, with holding-level GICS sectors",
+                "fix_hint": "Verify the configured enriched CDB holding view, product mapping and report-month coverage, then refresh.",
+            })
+        else:
+            findings.extend(constituent_fragment.pop("_findings", []))
+            fragment["constituents"] = constituent_fragment["constituents"]
+            fragment["constituent_index_code"] = constituent_fragment["constituent_index_code"]
+            fragment["effective_as_of"] = constituent_fragment["effective_as_of"]
+            fragment["industry_master"] = constituent_fragment["industry_master"]
+            fragment.setdefault("datasets", {}).update(constituent_fragment["datasets"])
     return fragment, findings

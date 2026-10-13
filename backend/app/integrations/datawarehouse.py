@@ -26,6 +26,7 @@ CLASS_MASTER = "view_ads_busi_product_fundinfo_class_f_p"
 FUND_RETURNS = "view_ads_busi_performance_class_returns_f_p"
 INDEX_RETURNS = "view_ads_busi_performance_index_returns_f_p"
 INDEX_CONSTITUENTS = "view_ads_busi_market_index_constituent_price_daily_f_p"
+PORTFOLIO_HOLDINGS = "view_ads_busi_valuation_holding_exposure_1_f_p"
 FUND_AUM = "view_ads_busi_valuation_nav_fund_level_exposure_1_f_p"
 RETURN_COLUMNS = {
     "return_1m": "returns_l1m",
@@ -41,6 +42,11 @@ REQUIRED_COLUMNS = {
         "trade_date", "index_code", "stock_code", "stock_name", "stock_name_eng", "ccy",
         "index_weight", "close_price", "industry_code", "industry_code2", "industry_code3", "sector",
     },
+    "portfolio_holdings": {
+        "trade_date", "tradar_code", "acct_holding_id", "seq_no", "description",
+        "securities_desc_tch", "ticker", "price", "ccy", "value_fc", "value_percent",
+        "asset_group", "position_class", "gics_sector",
+    },
     "fund_kpis": {
         "product_code", "as_of_date", "is_trading_day", "aum", "aum_currency", "aum_unit",
         "daily_turnover", "turnover_currency", "turnover_unit", "source", "updated_at",
@@ -53,6 +59,21 @@ _AMOUNT_UNITS = {
     "1", "one", "unit", "units", "k", "thousand", "thousands", "m", "mn", "million",
     "millions", "b", "bn", "billion", "billions",
 }
+_GICS_SECTORS = {
+    "energy": ("10", "Energy", "能源", "能源"),
+    "materials": ("15", "Materials", "原材料", "原材料"),
+    "industrials": ("20", "Industrials", "工业", "工業"),
+    "consumer discretionary": ("25", "Consumer Discretionary", "非必需消费品", "非必需消費品"),
+    "consumer staples": ("30", "Consumer Staples", "日常消费品", "日常消費品"),
+    "health care": ("35", "Health Care", "医疗保健", "醫療保健"),
+    "healthcare": ("35", "Health Care", "医疗保健", "醫療保健"),
+    "financials": ("40", "Financials", "金融", "金融"),
+    "information technology": ("45", "Information Technology", "信息技术", "資訊科技"),
+    "communication services": ("50", "Communication Services", "通讯服务", "通訊服務"),
+    "utilities": ("55", "Utilities", "公用事业", "公用事業"),
+    "real estate": ("60", "Real Estate", "房地产", "房地產"),
+}
+_UNCLASSIFIED_GICS = ("UNCLASSIFIED", "Unclassified", "未分类", "未分類")
 _MATERIALIZE_LOCK = threading.Lock()
 _REPORT_MONTH_CONSTITUENT_CACHE_TTL_SECONDS = 300.0
 _REPORT_MONTH_CONSTITUENT_CACHE_LOCK = threading.Lock()
@@ -74,6 +95,7 @@ def _view_names() -> dict[str, str]:
         "fund_returns": settings.datawarehouse_fund_returns_view,
         "index_returns": settings.datawarehouse_index_returns_view,
         "index_constituents": settings.datawarehouse_constituents_view,
+        "portfolio_holdings": settings.datawarehouse_portfolio_holdings_view,
     }
     if settings.datawarehouse_fund_kpi_view:
         views["fund_kpis"] = settings.datawarehouse_fund_kpi_view
@@ -398,6 +420,27 @@ def _security_code(raw: Any) -> str:
 def _clean_text(raw: Any) -> str | None:
     value = str(raw or "").strip()
     return value if value and "\ufffd" not in value else None
+
+
+def _portfolio_gics_sector(raw: Any) -> tuple[str, str, str, str]:
+    """Return the stable GICS sector identity supplied by the fund-holdings view.
+
+    Blank vendor classifications remain visible as ``Unclassified``.  A non-blank unknown label
+    is rejected instead of being silently merged into that bucket, because it may indicate a
+    provider taxonomy change that needs an explicit mapping decision.
+    """
+    value = _clean_text(raw)
+    if not value:
+        return _UNCLASSIFIED_GICS
+    normalized = " ".join(value.split()).casefold()
+    sector = _GICS_SECTORS.get(normalized)
+    if sector is None:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_GICS_INVALID",
+            f"The fund holding view returned an unsupported GICS sector: {value}.",
+            422,
+        )
+    return sector
 
 
 def _hsics_codes(record: dict[str, Any]) -> dict[str, str | None]:
@@ -965,6 +1008,340 @@ def load_index_constituents(
         "datasets": {"index_constituents": metadata},
         "source_checksum": payload_checksum,
         "_findings": [],
+    }
+
+
+def load_portfolio_holdings(
+    *,
+    fund_ticker: str,
+    index_code: str,
+    report_date: date,
+    effective_as_of: date | None = None,
+) -> dict[str, Any]:
+    """Load the latest physical-equity holdings available inside the report month.
+
+    One enriched fund-valuation view owns the security set, price, NAV weight and sector.  The
+    tracked-index view is deliberately absent from this path: neither its membership nor its
+    HSICS distribution may shape a chart labelled as the fund's sector breakdown.  An optional
+    ``effective_as_of`` is an upper bound retained for deterministic callers; the returned date
+    is always the latest holding observation in that report month on or before the bound.
+    """
+    holding_upper_bound = effective_as_of or report_date
+    if (
+        holding_upper_bound > report_date
+        or holding_upper_bound.strftime("%Y-%m") != report_date.strftime("%Y-%m")
+    ):
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_DATE_INVALID",
+            "The portfolio holding upper bound must fall within the selected report month.",
+            422,
+        )
+    month_start = report_date.replace(day=1)
+    views = _view_names()
+    engine, source = _data_source(views)
+    try:
+        with engine.connect() as connection:
+            _validate_schema(
+                connection,
+                views,
+                ("class_master", "portfolio_holdings"),
+            )
+            share_class = _listed_share_class(connection, views, fund_ticker)
+            all_holding_rows = list(connection.execute(text(f"""
+                SELECT
+                    trade_date, tradar_code, acct_holding_id, seq_no, description,
+                    securities_desc_tch, ticker, price, ccy, value_fc, value_percent,
+                    asset_group, position_class, gics_sector
+                FROM {views['portfolio_holdings']}
+                WHERE tradar_code = :tradar_code
+                  AND trade_date = (
+                      SELECT MAX(latest.trade_date)
+                      FROM {views['portfolio_holdings']} AS latest
+                      WHERE latest.tradar_code = :tradar_code
+                        AND latest.trade_date BETWEEN :month_start AND :holding_upper_bound
+                  )
+                ORDER BY value_percent DESC, ticker, acct_holding_id, seq_no
+            """), {
+                "tradar_code": share_class["tradar_code"],
+                "month_start": month_start.isoformat(),
+                "holding_upper_bound": holding_upper_bound.isoformat(),
+            }).mappings())
+    except DataWarehouseProviderError:
+        raise
+    except SQLAlchemyError as error:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_QUERY_FAILED",
+            "Fund portfolio holdings could not be queried from the CSOP data warehouse.",
+        ) from error
+
+    if not all_holding_rows:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_NOT_FOUND",
+            f"The CDB contains no fund holdings for {fund_ticker} between "
+            f"{month_start.isoformat()} and {holding_upper_bound.isoformat()}.",
+            422,
+        )
+    try:
+        holding_dates = {
+            (
+                raw_date.date()
+                if isinstance(raw_date, datetime)
+                else raw_date
+                if isinstance(raw_date, date)
+                else date.fromisoformat(str(raw_date)[:10])
+            )
+            for row in all_holding_rows
+            if (raw_date := row.get("trade_date")) is not None
+        }
+    except (TypeError, ValueError) as error:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_INVALID",
+            "The fund holding view contains an invalid trade_date.",
+            422,
+        ) from error
+    if len(holding_dates) != 1:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_INVALID",
+            "The latest fund holding observation does not resolve to one business date.",
+            422,
+        )
+    holding_effective_as_of = next(iter(holding_dates))
+    try:
+        source_total_weight = sum(
+            (Decimal(str(row.get("value_percent"))) for row in all_holding_rows),
+            Decimal("0"),
+        )
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_INVALID",
+            "The fund holding view does not provide a valid total portfolio weight.",
+            422,
+        ) from error
+    if not source_total_weight.is_finite() or abs(source_total_weight - Decimal("1")) > Decimal("0.0001"):
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_INVALID",
+            "The fund holding view's complete portfolio weights do not reconcile to 100%.",
+            422,
+        )
+
+    holding_rows = [
+        row for row in all_holding_rows
+        if str(row.get("asset_group") or "").strip().upper() == "EQUITY"
+        and str(row.get("position_class") or "").strip().upper() == "TRADING"
+        and Decimal(str(row.get("value_percent"))) > 0
+    ]
+    if not holding_rows:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_NOT_FOUND",
+            f"The CDB contains no positive trading-equity holdings for {fund_ticker} on "
+            f"{holding_effective_as_of.isoformat()}.",
+            422,
+        )
+
+    grouped: dict[str, dict[str, Any]] = {}
+    source_record_keys: list[str] = []
+    for raw in holding_rows:
+        record = dict(raw)
+        code = _security_code(record.get("ticker"))
+        if code == "0":
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_INVALID",
+                "A fund holding has no usable Hong Kong security code.",
+                422,
+            )
+        try:
+            weight = Decimal(str(record.get("value_percent")))
+            value_fc = Decimal(str(record.get("value_fc")))
+            price = Decimal(str(record.get("price")))
+        except (InvalidOperation, TypeError, ValueError) as error:
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_INVALID",
+                f"Fund holding {code} has a malformed value, price or weight.",
+                422,
+            ) from error
+        currency = str(record.get("ccy") or "").strip().upper()
+        if (
+            not weight.is_finite() or weight <= 0
+            or not value_fc.is_finite() or value_fc <= 0
+            or not price.is_finite() or price <= 0
+            or not _CURRENCY.fullmatch(currency)
+        ):
+            raise DataWarehouseProviderError(
+                "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_INVALID",
+                f"Fund holding {code} has a non-positive value/price/weight or invalid currency.",
+                422,
+            )
+        sector_code, sector_name, sector_zh_hans, sector_zh_hant = _portfolio_gics_sector(
+            record.get("gics_sector")
+        )
+        candidate = {
+            "security_code": code,
+            "ticker": f"{code.zfill(4)}.HK",
+            "name_en": _clean_text(record.get("description")) or code,
+            "name_zh_hant": _clean_text(record.get("securities_desc_tch")) or "",
+            "close_price": format(price, "f"),
+            "currency": currency,
+            "weight": format(weight, "f"),
+            "as_of_date": holding_effective_as_of.isoformat(),
+            "source_codes": {"gics_sector": sector_name},
+            "source_industry_code": sector_code,
+            "effective_industry_code": sector_code,
+            "effective_industry_name": sector_name,
+            "effective_industry_name_zh_hans": sector_zh_hans,
+            "effective_industry_name_zh_hant": sector_zh_hant,
+            "industry_taxonomy": "GICS",
+            "industry_taxonomy_version": "CDB-HOLDINGS-GICS-v1",
+            "industry_mapping_source": "PORTFOLIO_HOLDINGS_GICS",
+            "sector": sector_name,
+            "sector_zh_hans": sector_zh_hans,
+            "sector_zh_hant": sector_zh_hant,
+            "portfolio_value_fc": format(value_fc, "f"),
+        }
+        if code in grouped:
+            existing = grouped[code]
+            if (
+                existing["currency"] != currency
+                or existing["close_price"] != candidate["close_price"]
+                or existing["effective_industry_code"] != sector_code
+            ):
+                raise DataWarehouseProviderError(
+                    "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_INVALID",
+                    f"Fund holding {code} has inconsistent price, currency or GICS sector across position rows.",
+                    422,
+                )
+            existing["weight"] = format(Decimal(existing["weight"]) + weight, "f")
+            existing["portfolio_value_fc"] = format(
+                Decimal(existing["portfolio_value_fc"]) + value_fc,
+                "f",
+            )
+        else:
+            grouped[code] = candidate
+        source_record_keys.append(
+            f"{share_class['tradar_code']}:{holding_effective_as_of.isoformat()}:"
+            f"{record.get('acct_holding_id')}:{record.get('seq_no')}"
+        )
+
+    constituents = sorted(
+        grouped.values(),
+        key=lambda row: (-Decimal(str(row["weight"])), str(row["security_code"])),
+    )
+    selected_weight = sum((Decimal(str(row["weight"])) for row in constituents), Decimal("0"))
+    unclassified_codes = sorted(
+        (row["security_code"] for row in constituents if row["effective_industry_code"] == "UNCLASSIFIED"),
+        key=lambda code: int(code),
+    )
+    findings: list[dict[str, Any]] = []
+    if unclassified_codes:
+        findings.append({
+            "check_id": "PORTFOLIO_GICS_UNCLASSIFIED",
+            "error_code": "PORTFOLIO_GICS_UNCLASSIFIED",
+            "severity": "WARNING",
+            "status": "FAILED",
+            "message": "Some physical fund holdings have no GICS sector in the holding source and are shown as Unclassified.",
+            "actual": {"security_codes": unclassified_codes},
+            "threshold": "Every positive trading-equity holding has a source-supplied GICS sector",
+            "fix_hint": "Ask the CDB data owner to populate gics_sector; do not infer a sector from the tracked index.",
+        })
+
+    sector_rows = sorted({
+        (
+            row["effective_industry_code"],
+            row["effective_industry_name"],
+            row["effective_industry_name_zh_hans"],
+            row["effective_industry_name_zh_hant"],
+        )
+        for row in constituents
+    })
+    industry_master = {
+        "taxonomy": "GICS",
+        "version": "CDB-HOLDINGS-GICS-v1",
+        "as_of_date": holding_effective_as_of.isoformat(),
+        "record_count": len(sector_rows),
+        "source": views["portfolio_holdings"],
+        "checksum": hashlib.sha256(
+            json.dumps(sector_rows, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+    }
+    payload = {
+        "constituents": constituents,
+        "constituent_index_code": index_code,
+        "effective_as_of": holding_effective_as_of.isoformat(),
+        "industry_master": industry_master,
+    }
+    serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    payload_checksum = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    source_object = f"{source['source_object'].split('#', 1)[0]}#{views['portfolio_holdings']}"
+    metadata = {
+        "source_type": source["source_type"],
+        "source_name": source["source_name"],
+        "source_object": source_object,
+        "row_count": len(constituents),
+        "checksum": payload_checksum,
+        "mapping_version": "cdb-portfolio-holdings-gics-v2",
+        "lineage": {
+            "source_system": source["source_system"],
+            "source_table": views["portfolio_holdings"],
+            "source_record_keys": source_record_keys,
+            "requested_report_date": report_date.isoformat(),
+            "holding_window_start": month_start.isoformat(),
+            "holding_upper_bound": holding_upper_bound.isoformat(),
+            "selection_policy": "LATEST_AVAILABLE_HOLDINGS_IN_REPORT_MONTH",
+            "effective_as_of": holding_effective_as_of.isoformat(),
+            "weight_unit": "RATIO",
+            "weight_basis": "PORTFOLIO_NAV_MARKET_VALUE",
+            "weight_field": "value_percent",
+            "industry_basis": "PORTFOLIO_HOLDING_GICS_SECTOR",
+            "industry_field": "gics_sector",
+            "unclassified_policy": "EXPLICIT_UNCLASSIFIED",
+            "unclassified_security_codes": unclassified_codes,
+            "portfolio_total_weight": format(source_total_weight, "f"),
+            "selected_equity_weight": format(selected_weight, "f"),
+            "source_field_map": {
+                "security_code": "ticker",
+                "name_en": "description",
+                "name_zh_hant": "securities_desc_tch",
+                "close_price": "price",
+                "currency": "ccy",
+                "weight": "value_percent",
+                "portfolio_value_fc": "value_fc",
+                "effective_industry_name": "gics_sector",
+            },
+            "product_mapping": {
+                "fund_ticker": fund_ticker,
+                "tradar_code": str(share_class["tradar_code"]),
+                "class_id": str(share_class["class_id"]),
+            },
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    industry_metadata = {
+        "source_type": source["source_type"],
+        "source_name": source["source_name"],
+        "source_object": source_object,
+        "row_count": len(sector_rows),
+        "checksum": industry_master["checksum"],
+        "mapping_version": "cdb-portfolio-holdings-gics-v2",
+        "lineage": {
+            "source_system": source["source_system"],
+            "source_table": views["portfolio_holdings"],
+            "source_field": "gics_sector",
+            "taxonomy": "GICS",
+            "taxonomy_version": industry_master["version"],
+            "effective_as_of": holding_effective_as_of.isoformat(),
+            "unclassified_policy": "EXPLICIT_UNCLASSIFIED",
+            "unclassified_security_codes": unclassified_codes,
+        },
+    }
+    return {
+        **payload,
+        # Compatibility key: the API/upload slot remains named index_constituents, while its CDB
+        # lineage makes clear that all automatic values are fund-holdings facts.
+        "datasets": {
+            "index_constituents": metadata,
+            "industry_master": industry_metadata,
+        },
+        "source_checksum": payload_checksum,
+        "_findings": findings,
     }
 
 

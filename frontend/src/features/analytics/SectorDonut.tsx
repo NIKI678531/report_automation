@@ -26,6 +26,18 @@ const INDUSTRY_COLOR_CLASS: Record<string, number> = {
   "industry.hsics.28": 3,
   "industry.hsics.10": 4,
   "industry.hsics.50": 5,
+  "industry.gics.10": 6,
+  "industry.gics.15": 7,
+  "industry.gics.20": 8,
+  "industry.gics.25": 1,
+  "industry.gics.30": 4,
+  "industry.gics.35": 5,
+  "industry.gics.40": 6,
+  "industry.gics.45": 2,
+  "industry.gics.50": 3,
+  "industry.gics.55": 7,
+  "industry.gics.60": 8,
+  "industry.gics.UNCLASSIFIED": 5,
 };
 
 /**

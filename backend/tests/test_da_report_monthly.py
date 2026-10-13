@@ -218,6 +218,8 @@ def test_automatic_refresh_endpoint_does_not_version_unchanged_source(client, tm
     monkeypatch.setattr(settings, "da_report_sqlite_path", database)
     monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
     monkeypatch.setattr(settings, "da_report_auto_load", True)
+    # This case verifies the DA-Report + explicit-upload route, not automatic CDB holdings.
+    monkeypatch.setattr(settings, "datawarehouse_constituents_enabled", False)
     created = client.post("/api/v1/reports", json={"product_code": "3033", "report_date": "2026-06-30"})
     assert created.status_code == 201, created.text
     report = client.get(f"/api/v1/reports/{created.json()['id']}").json()
@@ -240,6 +242,8 @@ def test_report_auto_snapshot_becomes_valid_after_one_constituent_upload(client,
     monkeypatch.setattr(settings, "da_report_sqlite_path", database)
     monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
     monkeypatch.setattr(settings, "da_report_auto_load", True)
+    # This case verifies the DA-Report + explicit-upload route, not automatic CDB holdings.
+    monkeypatch.setattr(settings, "datawarehouse_constituents_enabled", False)
     master = (
         "taxonomy,version,level,code,parent_code,name_en,name_zh_hant,valid_from,valid_to,source,source_record_key\n"
         "HSICS,HSICS-2026-112,INDUSTRY,23,,Consumer Discretionary,,2026-01-01,2026-12-31,Official,industry-23\n"

@@ -412,9 +412,9 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | DS-01 | 产品与基准主数据 | CDB/产品配置 | 产品代码、名称、ticker、基准、币种、时区、有效期 | 生产必须 |
 | DS-02 | 官方总回报序列 | CDB | instrument_code、trade_date、total_return_value、series_type | 生产必须 |
-| DS-03 | 指数成份股快照 | CDB；CSV/XLSX回退 | as_of、证券标识、名称、价格、权重、行业、币种 | 生产必须 |
+| DS-03 | 基金组合成份股快照 | CDB 增强基金持仓估值；CSV/XLSX回退 | as_of、基金/证券标识、名称、估值价格、NAV权重、持仓GICS行业、币种 | 生产必须；自动行业分布不得读取指数快照 |
 | DS-04 | 证券主数据 | CDB | 证券代码、ticker、别名、上市地、币种、有效期 | 生产必须 |
-| DS-05 | HSICS行业分类 | CDB；B_HSICSe Industry Code 1.xlsx参考 | 行业/板块/子行业代码与名称、版本有效期 | 生产必须 |
+| DS-05 | 行业分类 | 自动：CDB持仓 `gics_sector`；上传：HSICS master | taxonomy、代码/名称、版本或as-of | 生产必须；一个快照只允许一种taxonomy |
 | DS-06 | 基金KPI | CDB | AUM、每日成交额及币种、产品代码、日期 | Portfolio Analysis |
 | DS-07 | 指数事件/交易日历 | CDB/指数数据 | 再平衡日、公告日、生效日、交易日 | 脚注与期间规则 |
 | DS-08 | 公司新闻 | DA-Report新闻适配器 | URL、来源、发布时间、标题、正文摘要、抓取时间 | 新闻模块 |
@@ -439,9 +439,9 @@ flowchart LR
 | --- | --- | --- |
 | product_master | product_code, ticker, name_en, name_zh_hant, benchmark_code, currency, timezone, valid_from, valid_to | 产品与基准一一映射；日期有效 |
 | total_return_series | instrument_code, trade_date, total_return_value, series_type, currency, source, updated_at | series_type必须为官方Total Return |
-| constituent_snapshot | index_code, as_of_date, security_code, ticker, names, close_price, currency, weight, industry_code | index+date+security唯一；weight单位明确 |
+| constituent_snapshot | product_code, as_of_date, security_code, ticker, names, close_price, currency, weight, industry_code | product+date+security唯一；weight为组合NAV比例；自动industry_code来自同一持仓行的GICS；指数权重/行业不得映射 |
 | security_master | security_code, ticker, sedol, names, aliases, exchange, currency, valid_from, valid_to | 支持新闻主体和上传代码映射 |
-| industry_master | taxonomy, version, industry_code, parent_code, level, names, valid_from, valid_to | 按报告日选择有效HSICS版本 |
+| industry_master | taxonomy, version, industry_code, parent_code, level, names, valid_from, valid_to | 自动路径记录持仓GICS as-of；上传路径按报告日选择有效HSICS版本 |
 | fund_kpi_daily | product_code, as_of_date, aum, aum_currency, daily_turnover, turnover_currency, source | AUM与成交额单位/币种不可缺 |
 | index_event | index_code, event_type, announcement_date, effective_date, source | 用于下一次再平衡日与脚注 |
 
@@ -457,8 +457,9 @@ flowchart LR
 | Ticker | ticker | 规范市场后缀与空格 | 可映射 |
 | Stk Name_E/TC/SC | name_en/name_zh_hant/name_zh_hans | Unicode规范化；保留原始文本 | 至少一项 |
 | Cls Price | close_price | Decimal；>0；记录币种 | 成份股表必填 |
-| Pct Idx Wgt / Weighting | weight | 识别百分数单位；规范为0-1；合计校验 | 必填 |
-| Industry / Sector | source_industry_code | 通过版本化HSICS映射到顶级行业 | 必填或可补映射 |
+| CDB `value_percent` / approved portfolio `Weighting` | weight | 规范为0-1；保留现金等非股票分母，不对股票重新归一化 | 必填；`Pct Idx Wgt`仅作指数元数据核对，不映射 |
+| CDB `gics_sector` | effective_industry | 自动路径按标准GICS Sector映射；空值显示Unclassified并告警；未知非空值阻断 | 自动必填或明确空值 |
+| Industry / Sector（上传） | source_industry_code | 通过版本化HSICS映射到顶级行业 | 上传必填或可补映射 |
 | 1M/3M/6M/YTD return | constituent_period_return | 识别百分数单位；保存期间起止日 | 若上传回报表则必填 |
 
 ## 5.5 来源优先级与覆盖规则
@@ -478,7 +479,7 @@ flowchart LR
 | 数据集 | 目标新鲜度 | 最低覆盖 | 异常行为 |
 | --- | --- | --- | --- |
 | 总回报序列 | 报告截止日最近交易日 | 期间内所有交易日；起止点存在 | 缺起止点阻断；中间缺口阻断 |
-| 成份股 | 报告截止日/最近有效指数日 | 全部生效成份股 | 证券重复、权重不平或日期错配阻断 |
+| 成份股 | 本报告月内不晚于报告截止日的最新有效基金估值日，独立于业绩有效日 | 全部正权重股票持仓 | 证券重复、完整组合权重不平、跨月回退或自动来源仍为指数权重/行业时阻断；指数成员差异仅告警 |
 | 行业映射 | 报告日有效版本 | 100%有效成份股 | 缺失阻断行业图和终稿 |
 | AUM | 报告截止日 | 单点 | 缺失时Portfolio Analysis阻断或经批准隐藏 |
 | 每日成交额 | 整个月交易日 | ≥95%交易日 | 低于95%阻断；缺一天显示覆盖率警告 |
@@ -595,7 +596,7 @@ Return(%) = (TR_end / TR_start - 1) × 100
 | 指标 | 公式/排序 | 检查 |
 | --- | --- | --- |
 | Top 10 | ORDER BY weight DESC, security_code ASC LIMIT 10 | 权重显示2位小数；不足10只显示全部并告警 |
-| Sector Weight | SUM(weight) GROUP BY 顶级HSICS行业 | 行业合计与证券权重合计差≤0.01个百分点 |
+| Sector Weight | SUM(weight) GROUP BY 生效行业（自动GICS；上传HSICS） | 行业合计与证券权重合计差≤0.01个百分点；不得借用指数行业 |
 | Top Performers | 1M return DESC, weight DESC, security_code ASC LIMIT 3 | 排除N/A |
 | Bottom Performers | 1M return ASC, weight DESC, security_code ASC LIMIT 3 | 排除N/A |
 | AUM | fund_kpi_daily在报告截止日的有效值 | 显示单位/币种和as_of |
@@ -607,9 +608,10 @@ Return(%) = (TR_end / TR_start - 1) × 100
 | ID | 检查 | 标准 | 处理 |
 | --- | --- | --- | --- |
 | QC-001 | 证券唯一 | index_code + as_of + security_code无重复 | 重复即失败 |
-| QC-002 | 权重合计 | 总权重=100% ± 0.01个百分点 | 失败阻断 |
+| QC-002 | 权重合计 | CDB完整组合=100% ± 0.01个百分点；展示股票保留源NAV权重、不重新归一化 | 失败阻断 |
 | QC-003 | 行业完整 | 全部有效成份股具有报告日有效行业 | 缺失阻断行业模块和终稿 |
 | QC-004 | 日期一致 | 所有业务数据日期不晚于报告截止日；同一快照日期口径一致 | 失败阻断 |
+| QC-AUTO-HOLDINGS-SOURCE | 自动成份股来源 | 自动报告使用本报告月最新基金 Holdings；权重=`value_percent`、行业=`gics_sector`，不得读取指数权重/行业 | 失败阻断并要求刷新快照 |
 | QC-005 | 总回报口径 | series_type=Total Return；基金/基准共同起止日 | 失败阻断 |
 | QC-006 | 历史深度 | 每个周期具有起止点和完整交易日序列 | 对应周期N/A；关键周期不足时阻断 |
 | QC-007 | 脚注一致 | 脚注日期、来源和计算参数完全一致 | 失败阻断 |
@@ -695,7 +697,7 @@ FR-502 表格跨页重复表头，列宽、数字格式、小数位、N/A和脚�
 
 FR-503 Top 10、行业、Top/Bottom和Portfolio Analysis全部来自计算引擎并可查看底层成份股。
 
-FR-504 行业图使用报告日有效HSICS顶级行业；无法映射的证券不得归入未声明的Other。
+FR-504 自动行业图使用基金持仓自身的GICS Sector；空源值明确显示Unclassified并告警，不得从跟踪指数推断。显式上传使用报告日有效HSICS顶级行业。
 
 FR-505 月名称、日期、单位、币种和脚注按报告参数与输出语言自动生成。
 

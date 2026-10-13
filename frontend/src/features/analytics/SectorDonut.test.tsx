@@ -48,6 +48,15 @@ describe("SectorDonut", () => {
     expect(reordered.map((slice) => slice.colorClass)).toEqual([technology.colorClass, consumer.colorClass]);
   });
 
+  it("binds holding GICS sectors to stable colour identities", () => {
+    const slices = sectorSlices({ series: [
+      { ...CHART.series[0], code: "25", color_token: "industry.gics.25" },
+      { ...CHART.series[1], code: "45", color_token: "industry.gics.45" },
+    ] });
+
+    expect(slices.map((slice) => slice.colorClass)).toEqual(["sector-color-1", "sector-color-2"]);
+  });
+
   it("renders nothing without a chart snapshot rather than recomputing one", () => {
     expect(sectorSlices(undefined)).toEqual([]);
     expect(sectorSlices({ series: [] })).toEqual([]);

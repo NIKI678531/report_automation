@@ -38,20 +38,20 @@ The legacy `POST /api/v1/reports/{id}/news/candidates/fetch` path remains availa
 
 ## Monthly report data inputs
 
-The product workspace exposes a constituent CSV override separately from automatic loading. Historical Performance comes from the read-only CDB warehouse. Page 04 can load HSTECH constituent identity from CDB and its returns from FMP without a CSV; Final Analytics is derived from the active constituent snapshot. Compatibility API slots remain readable for existing snapshots.
+The product workspace exposes a constituent CSV override separately from automatic loading. Historical Performance comes from the read-only CDB warehouse. Page 04 loads physical fund holdings, including their GICS sectors, from CDB and returns from FMP without a CSV; Final Analytics is derived from that active holding snapshot. Compatibility API slots remain readable for existing snapshots.
 
 | Slot | Template / accepted source | Required |
 |---|---|---|
-| `constituent_performance` / `index_constituents` | report-month CDB HSTECH identity, price, weight and HSICS data; approved CSV is an explicit override | automatic |
+| `constituent_performance` / `index_constituents` | report-month enriched CDB fund holdings own identity, valuation price, `value_percent` portfolio weight and `gics_sector`; approved CSV is an explicit full-dataset override | automatic |
 | `constituent_returns` | FMP dividend-adjusted EOD history; approved upload remains an explicit override | automatic |
 | `total_return_series` | CDB fund/index performance views (`CO-CHST`, listed `CLS00178`, `HSTECHN Index`) | automatic |
 | `fund_kpi_daily` | CDB fund-level AUM plus the configured unified daily KPI view when available | automatic |
 | `trading_calendar` | Configured unified CDB daily KPI/calendar view | automatic |
 | `fund_turnover_monthly` | DA-Report `market_monthly_turnovers` (Production MySQL; SQLite compatibility); audited fallback for completed months | automatic |
 | `index_events` | DA-Report `index_events` (Production MySQL; SQLite compatibility) | automatic; rows optional |
-| `industry_master` | centrally managed `docs/templates/industry-master-template.csv` | yes |
+| `industry_master` | automatic holdings GICS metadata; centrally managed HSICS template for explicit uploads | yes |
 
-The automatic Page 04 path reads the HSTECH identity, ticker, names, price/currency, weight and HSICS codes from CDB at the same effective date used by Historical Performance. The backend then maps each `.HK` ticker (falling back to a zero-padded local code), obtains dividend-adjusted FMP EOD prices through the selected report date, resolves common 1M/3M/6M/YTD boundaries and stores decimal-ratio returns. Exact source observations and dates are retained in dataset lineage. An approved identity or return upload remains supported and is never silently overwritten. Once the identity source, return source, other automatic datasets and one report-date-effective HSICS master are present, the backend calculates Historical Performance and Final Analytics and persists dataset-specific MetricValue and ModuleSnapshot lineage. The browser does not calculate authoritative values.
+The automatic Page 04 path reads identity, ticker, names, price/currency, NAV weight and GICS sector from the enriched fund-holdings view at the same effective date used by Historical Performance. It does not query HSTECH for sector classification. The backend then maps each `.HK` ticker (falling back to a zero-padded local code), obtains dividend-adjusted FMP EOD prices through the selected report date, resolves common 1M/3M/6M/YTD boundaries and stores decimal-ratio returns. Exact source observations and dates are retained in dataset lineage. A blank source GICS value is shown as Unclassified and warned; it is never inferred from the index. An approved identity or return upload remains supported and is never silently overwritten. Once the identity source, return source and other automatic datasets are present, the backend calculates Historical Performance and Final Analytics and persists dataset-specific MetricValue and ModuleSnapshot lineage. The browser does not calculate authoritative values.
 
 The first constituent CSV application uses **Use this data** and requires no reason. Replacing it requires a replacement reason. Apply, replace, clear and automatic refresh all create new snapshots; automatic refresh preserves an effective constituent upload, otherwise it uses CDB identity before loading FMP returns.
 
@@ -59,4 +59,4 @@ The first constituent CSV application uses **Use this data** and requires no rea
 
 CSV/XLSX ingestion selects exactly one approved `MappingProfile`. Profiles own header aliases, sheet/header scanning, explicit units, transforms and confirmed unlabelled columns. No unique profile results in `NEEDS_MAPPING`; the parser does not fall back to sheet names or fixed columns. Duplicate Bloomberg return groups are detected and only the group selected by the approved profile is imported.
 
-Import a formal report-date HSICS master through `POST /api/v1/industry-master/import` using `docs/templates/industry-master-template.csv`. Codes are text and restored to widths 2/4/6 for Industry/Sector/Subsector. Effective ranges cannot overlap. Uploaded production snapshots without a bound effective HSICS master cannot be calculated or finalized. The old Bloomberg GICS mapping and manual sector-override upload paths are retired.
+Import a formal report-date HSICS master through `POST /api/v1/industry-master/import` using `docs/templates/industry-master-template.csv`. Codes are text and restored to widths 2/4/6 for Industry/Sector/Subsector. Effective ranges cannot overlap. Uploaded production snapshots without a bound effective HSICS master cannot be calculated or finalized. Automatic holdings do not use that master: their `gics_sector` stays source-owned. The old Bloomberg workbook GICS mapping and manual sector-override upload paths are retired.

@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import date, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from app.integrations.datawarehouse import (
     load_fund_kpis,
     load_historical_performance,
     load_index_constituents,
+    load_portfolio_holdings,
     load_report_month_index_constituents,
 )
 from app.domain import snapshot_composer
@@ -28,6 +30,7 @@ def isolate_live_cdb_configuration(monkeypatch):
     monkeypatch.setattr(settings, "datawarehouse_mysql_ssl_ca", None)
     monkeypatch.setattr(settings, "datawarehouse_fund_aum_view", None)
     monkeypatch.setattr(settings, "datawarehouse_fund_kpi_view", None)
+    monkeypatch.setattr(settings, "datawarehouse_constituents_enabled", False)
     yield
     datawarehouse._clear_report_month_constituent_cache()
 
@@ -52,6 +55,12 @@ def build_performance_snapshot(path, *, include_returns: bool = True) -> None:
             stock_name_eng TEXT, ccy TEXT, index_weight NUMERIC, close_price NUMERIC,
             industry_code TEXT, industry_code2 TEXT, industry_code3 TEXT, sector TEXT
         );
+        CREATE TABLE view_ads_busi_valuation_holding_exposure_1_f_p (
+            trade_date TEXT, tradar_code TEXT, acct_holding_id INTEGER, seq_no INTEGER,
+            description TEXT, securities_desc_tch TEXT, ticker TEXT, price NUMERIC,
+            ccy TEXT, value_fc NUMERIC, value_percent NUMERIC,
+            asset_group TEXT, position_class TEXT, gics_sector TEXT
+        );
         CREATE TABLE approved_fund_kpi_daily (
             product_code TEXT, as_of_date TEXT, is_trading_day INTEGER,
             aum NUMERIC, aum_currency TEXT, aum_unit TEXT,
@@ -69,6 +78,13 @@ def build_performance_snapshot(path, *, include_returns: bool = True) -> None:
         INSERT INTO view_ads_busi_market_index_constituent_price_daily_f_p VALUES
             ('2025-03-28', 'HSTECH', '700 HK EQUITY', '騰訊控股', 'TENCENT', 'HKD', 0.6, 500, '', '', '', '7020'),
             ('2025-03-28', 'HSTECH', '1810 HK EQUITY', '小米集團', 'XIAOMI - W', 'HKD', 0.4, 40, '', '', '', '7010');
+        INSERT INTO view_ads_busi_valuation_holding_exposure_1_f_p VALUES
+            ('2025-03-28', 'CO-CHST', 1, 1, 'TENCENT HOLDINGS LTD', '騰訊控股',
+             '700 HK EQUITY', 490, 'HKD', 5500, 0.55, 'Equity', 'TRADING', 'Communication Services'),
+            ('2025-03-28', 'CO-CHST', 2, 1, 'XIAOMI CORP', '小米集團',
+             '1810 HK EQUITY', 38, 'HKD', 4496, 0.4496, 'Equity', 'TRADING', 'Information Technology'),
+            ('2025-03-28', 'CO-CHST', 3, 1, 'HKD CASH', '港元現金',
+             'HKD CASH', 1, 'HKD', 4, 0.0004, 'Cash', 'CASH', NULL);
     """)
     if include_returns:
         connection.executescript("""
@@ -351,6 +367,156 @@ def test_loads_cdb_index_constituents_for_the_performance_effective_date(tmp_pat
     assert result["datasets"]["index_constituents"]["lineage"]["effective_as_of"] == "2025-03-28"
 
 
+def test_loads_fund_portfolio_weights_and_gics_only_from_holdings(tmp_path, monkeypatch):
+    database = tmp_path / "warehouse.db"
+    build_performance_snapshot(database)
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_path", database)
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_sha256", None)
+
+    result = load_portfolio_holdings(
+        fund_ticker="3033.HK",
+        index_code="HSTECH",
+        report_date=date(2025, 3, 31),
+        effective_as_of=date(2025, 3, 28),
+    )
+
+    assert [row["security_code"] for row in result["constituents"]] == ["700", "1810"]
+    assert result["constituents"][0]["weight"] == "0.55"
+    assert result["constituents"][0]["close_price"] == "490"
+    assert result["constituents"][0]["source_codes"]["gics_sector"] == "Communication Services"
+    assert result["constituents"][0]["effective_industry_code"] == "50"
+    assert result["constituents"][1]["effective_industry_code"] == "45"
+    assert result["constituents"][1]["weight"] == "0.4496"
+    assert result["industry_master"]["taxonomy"] == "GICS"
+    metadata = result["datasets"]["index_constituents"]
+    assert metadata["mapping_version"] == "cdb-portfolio-holdings-gics-v2"
+    assert metadata["lineage"]["weight_field"] == "value_percent"
+    assert metadata["lineage"]["weight_basis"] == "PORTFOLIO_NAV_MARKET_VALUE"
+    assert metadata["lineage"]["industry_field"] == "gics_sector"
+    assert metadata["lineage"]["industry_basis"] == "PORTFOLIO_HOLDING_GICS_SECTOR"
+    assert Decimal(metadata["lineage"]["portfolio_total_weight"]) == Decimal("1")
+    assert metadata["lineage"]["selected_equity_weight"] == "0.9996"
+    assert result["datasets"]["industry_master"]["lineage"]["taxonomy"] == "GICS"
+    assert not result["_findings"]
+
+
+def test_portfolio_holdings_select_latest_available_date_inside_report_month(tmp_path, monkeypatch):
+    database = tmp_path / "warehouse.db"
+    build_performance_snapshot(database)
+    connection = sqlite3.connect(database)
+    connection.executemany(
+        "INSERT INTO view_ads_busi_valuation_holding_exposure_1_f_p VALUES "
+        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            (
+                "2025-03-30", "CO-CHST", 11, 1, "TENCENT HOLDINGS LTD", "騰訊控股",
+                "700 HK EQUITY", 501, "HKD", 6170, 0.617, "Equity", "TRADING",
+                "Communication Services",
+            ),
+            (
+                "2025-03-30", "CO-CHST", 12, 1, "XIAOMI CORP", "小米集團",
+                "1810 HK EQUITY", 41, "HKD", 3826, 0.3826, "Equity", "TRADING",
+                "Information Technology",
+            ),
+            (
+                "2025-03-30", "CO-CHST", 13, 1, "HKD CASH", "港元現金",
+                "HKD CASH", 1, "HKD", 4, 0.0004, "Cash", "CASH", None,
+            ),
+            # A following-month observation must never leak into a March report.
+            (
+                "2025-04-01", "CO-CHST", 21, 1, "TENCENT HOLDINGS LTD", "騰訊控股",
+                "700 HK EQUITY", 600, "HKD", 9996, 0.9996, "Equity", "TRADING",
+                "Communication Services",
+            ),
+            (
+                "2025-04-01", "CO-CHST", 22, 1, "HKD CASH", "港元現金",
+                "HKD CASH", 1, "HKD", 4, 0.0004, "Cash", "CASH", None,
+            ),
+        ],
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_path", database)
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_sha256", None)
+
+    result = load_portfolio_holdings(
+        fund_ticker="3033.HK",
+        index_code="HSTECH",
+        report_date=date(2025, 3, 31),
+    )
+
+    assert result["effective_as_of"] == "2025-03-30"
+    assert result["constituents"][0]["weight"] == "0.617"
+    assert result["constituents"][0]["close_price"] == "501"
+    lineage = result["datasets"]["index_constituents"]["lineage"]
+    assert lineage["holding_window_start"] == "2025-03-01"
+    assert lineage["holding_upper_bound"] == "2025-03-31"
+    assert lineage["selection_policy"] == "LATEST_AVAILABLE_HOLDINGS_IN_REPORT_MONTH"
+
+
+def test_portfolio_holding_rows_for_the_same_security_are_aggregated(tmp_path, monkeypatch):
+    database = tmp_path / "warehouse.db"
+    build_performance_snapshot(database)
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "UPDATE view_ads_busi_valuation_holding_exposure_1_f_p "
+        "SET value_fc=5000, value_percent=0.50 WHERE ticker='700 HK EQUITY'"
+    )
+    connection.execute(
+        "INSERT INTO view_ads_busi_valuation_holding_exposure_1_f_p VALUES "
+        "('2025-03-28','CO-CHST',4,2,'TENCENT HOLDINGS LTD','騰訊控股',"
+        "'700 HK EQUITY',490,'HKD',500,0.05,'Equity','TRADING','Communication Services')"
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_path", database)
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_sha256", None)
+
+    result = load_portfolio_holdings(
+        fund_ticker="3033.HK",
+        index_code="HSTECH",
+        report_date=date(2025, 3, 31),
+        effective_as_of=date(2025, 3, 28),
+    )
+
+    tencent = next(row for row in result["constituents"] if row["security_code"] == "700")
+    assert tencent["weight"] == "0.55"
+    assert tencent["portfolio_value_fc"] == "5500"
+    assert len(result["datasets"]["index_constituents"]["lineage"]["source_record_keys"]) == 3
+
+
+def test_missing_holding_gics_is_explicitly_unclassified_without_index_fallback(tmp_path, monkeypatch):
+    database = tmp_path / "warehouse.db"
+    build_performance_snapshot(database)
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "UPDATE view_ads_busi_valuation_holding_exposure_1_f_p "
+        "SET gics_sector=NULL WHERE ticker='1810 HK EQUITY'"
+    )
+    # If this row were still consulted, Xiaomi would silently receive the index's HSICS code.
+    connection.execute(
+        "UPDATE view_ads_busi_market_index_constituent_price_daily_f_p "
+        "SET industry_code='70' WHERE stock_code='1810 HK EQUITY'"
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_path", database)
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_sha256", None)
+
+    result = load_portfolio_holdings(
+        fund_ticker="3033.HK",
+        index_code="HSTECH",
+        report_date=date(2025, 3, 31),
+        effective_as_of=date(2025, 3, 28),
+    )
+
+    xiaomi = next(row for row in result["constituents"] if row["security_code"] == "1810")
+    assert xiaomi["effective_industry_code"] == "UNCLASSIFIED"
+    assert xiaomi["effective_industry_name"] == "Unclassified"
+    assert result["_findings"][0]["check_id"] == "PORTFOLIO_GICS_UNCLASSIFIED"
+    assert result["_findings"][0]["actual"] == {"security_codes": ["1810"]}
+
+
 def test_loads_and_caches_latest_index_constituents_inside_report_month(tmp_path, monkeypatch):
     database = tmp_path / "warehouse.db"
     build_performance_snapshot(database)
@@ -453,6 +619,7 @@ def test_composer_prefers_warehouse_period_returns_over_legacy_series(tmp_path, 
     monkeypatch.setattr(settings, "datawarehouse_sqlite_path", database)
     monkeypatch.setattr(settings, "datawarehouse_sqlite_sha256", None)
     monkeypatch.setattr(settings, "datawarehouse_performance_enabled", True)
+    monkeypatch.setattr(settings, "datawarehouse_constituents_enabled", True)
     monkeypatch.setattr(snapshot_composer, "load_monthly_data", lambda **kwargs: {
         "total_return_series": [{"instrument_code": "legacy"}],
         "fund_kpis": [],
@@ -479,7 +646,50 @@ def test_composer_prefers_warehouse_period_returns_over_legacy_series(tmp_path, 
     assert fragment["historical_performance"]["effective_as_of"] == "2025-03-28"
     assert fragment["datasets"]["historical_performance"]["source_type"] == "DATAWAREHOUSE_SQLITE"
     assert len(fragment["constituents"]) == 2
+    assert fragment["constituents"][0]["weight"] == "0.55"
+    assert fragment["constituents"][0]["close_price"] == "490"
     assert fragment["datasets"]["index_constituents"]["source_type"] == "DATAWAREHOUSE_SQLITE"
+    assert fragment["datasets"]["index_constituents"]["mapping_version"] == "cdb-portfolio-holdings-gics-v2"
+    assert fragment["industry_master"]["taxonomy"] == "GICS"
+
+
+def test_composer_keeps_report_month_holdings_when_page02_performance_is_unavailable(tmp_path, monkeypatch):
+    database = tmp_path / "warehouse.db"
+    build_performance_snapshot(database)
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_path", database)
+    monkeypatch.setattr(settings, "datawarehouse_sqlite_sha256", None)
+    monkeypatch.setattr(settings, "datawarehouse_performance_enabled", True)
+    monkeypatch.setattr(settings, "datawarehouse_constituents_enabled", True)
+    monkeypatch.setattr(snapshot_composer, "load_monthly_data", lambda **kwargs: {
+        "datasets": {},
+        "_findings": [],
+    })
+
+    def unavailable(**kwargs):
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_PERFORMANCE_NOT_FOUND", "performance unavailable", 422,
+        )
+
+    monkeypatch.setattr(snapshot_composer, "load_historical_performance", unavailable)
+    product = SimpleNamespace(
+        product_code="3033",
+        ticker="3033.HK",
+        benchmark_instrument_code="HSTECHN",
+        formula_profile="warehouse-period-return-v1",
+        fund_total_return_instrument_code="3033.HK",
+        fund_kpi_product_code="3033",
+        trading_calendar_code="HK",
+        constituent_index_code="HSTECH",
+    )
+
+    fragment, findings = snapshot_composer.compose_da_report_fragment(product, date(2025, 3, 31))
+
+    assert [item["check_id"] for item in findings] == ["DATAWAREHOUSE_PERFORMANCE_NOT_FOUND"]
+    assert fragment["effective_as_of"] == "2025-03-28"
+    assert [row["security_code"] for row in fragment["constituents"]] == ["700", "1810"]
+    assert fragment["datasets"]["index_constituents"]["lineage"]["selection_policy"] == (
+        "LATEST_AVAILABLE_HOLDINGS_IN_REPORT_MONTH"
+    )
 
 
 def test_composer_prefers_configured_cdb_kpis_over_legacy_da_report(monkeypatch):

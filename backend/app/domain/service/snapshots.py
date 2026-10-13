@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.integrations.fmp import FmpProviderError, load_constituent_returns
 from .. import ingestion
 from ..document import bind_snapshot, checksum
-from ..industry import map_effective_hsics
+from ..industry import map_effective_industries
 from ..metrics.historical_performance import historical_performance
 from ..metrics.quality_checks import snapshot_checks
 from ..models import (
@@ -217,19 +217,26 @@ def has_approved_constituent_bundle(payload: dict) -> bool:
 def has_final_analytics_inputs(payload: dict) -> bool:
     """Return whether module 05 can be calculated before the full report is complete.
 
-    Top 10, the HSICS breakdown, and the performer rankings depend only on the approved
-    constituent identity/return bundle and its report-date-effective industry mapping. Fund KPI
-    and trading-calendar gaps may keep the overall snapshot pending, but must not blank outputs
-    whose own dependencies have already passed their blocking checks.
+    Top 10, the sector breakdown, and the performer rankings depend only on the approved
+    constituent identity/return bundle and its effective industry mapping (automatic holding
+    GICS or uploaded HSICS). Fund KPI and trading-calendar gaps may keep the overall snapshot
+    pending, but must not blank outputs whose own dependencies have already passed their checks.
     """
     if not has_approved_constituent_bundle(payload) or not dataset_present(payload, "industry_master"):
         return False
     checks = {
         item["check_id"]: item["status"]
         for item in snapshot_checks(payload)
-        if item["check_id"] in {"QC-001", "QC-002", "QC-003", "QC-004"}
+        if item["check_id"] in {
+            "QC-001", "QC-002", "QC-003", "QC-004", "QC-AUTO-HOLDINGS-SOURCE",
+        }
     }
-    return all(checks.get(check_id) == "PASSED" for check_id in ("QC-001", "QC-002", "QC-003", "QC-004"))
+    return all(
+        checks.get(check_id) == "PASSED"
+        for check_id in (
+            "QC-001", "QC-002", "QC-003", "QC-004", "QC-AUTO-HOLDINGS-SOURCE",
+        )
+    )
 
 
 def _has_bound_final_analytics(db: Session, report: Report, snapshot: DataSnapshot) -> bool:
@@ -355,6 +362,17 @@ def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> li
             carried = existing.get(row["security_code"], {})
             # Preserve fields other slots already contributed for this security.
             item = {key: value for key, value in carried.items() if key not in spec.owns}
+            # Industry assignments are derived from the identity source.  When an uploaded
+            # identity replaces automatic holdings, never retain its holding-level GICS marker
+            # or labels; the uploaded source codes must be mapped through the HSICS path below.
+            for field in (
+                "source_industry_code", "effective_industry_code", "effective_industry_name",
+                "effective_industry_name_zh_hans", "effective_industry_name_zh_hant",
+                "effective_industry_name_zh_hans_source", "effective_industry_name_zh_hant_source",
+                "industry_taxonomy", "industry_taxonomy_version", "industry_mapping_source",
+                "sector", "sector_zh_hans", "sector_zh_hant",
+            ):
+                item.pop(field, None)
             item.update(row)
             merged.append(item)
         dropped = sorted(set(existing) - {row["security_code"] for row in incoming}, key=lambda code: int(code) if code.isdigit() else 0)
@@ -526,6 +544,8 @@ def _stage_auto_snapshot(
     if not upload_lineage and fragment.get("constituents"):
         payload["constituents"] = json.loads(json.dumps(fragment["constituents"]))
         payload["as_of_date"] = str(fragment.get("effective_as_of") or report.report_date.isoformat())
+        if fragment.get("industry_master"):
+            payload["industry_master"] = json.loads(json.dumps(fragment["industry_master"]))
     payload["datasets"].update({
         key: value
         for key, value in fragment.get("datasets", {}).items()
@@ -555,7 +575,7 @@ def _stage_auto_snapshot(
                 "threshold": "Common FUND and BENCHMARK endpoints for 1M, 3M, 6M and YTD",
                 "fix_hint": "Extend the DA-Report Total Return observations to every required common endpoint.",
             })
-    mapping_findings = map_effective_hsics(db, payload, report.report_date)
+    mapping_findings = map_effective_industries(db, payload, report.report_date)
     results = [*snapshot_checks(payload, product.expected_constituent_count), *provider_findings, *mapping_findings]
     missing = missing_required_slots(payload)
     blocked = [
@@ -621,7 +641,7 @@ def _stage_auto_snapshot(
         isinstance(constituent_metadata, dict)
         and constituent_metadata.get("source_type") in {"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"}
     ):
-        mapping_versions.append("cdb-index-constituents-v1")
+        mapping_versions.append(str(constituent_metadata.get("mapping_version") or "cdb-portfolio-holdings-gics-v2"))
     if has_fmp:
         mapping_versions.append("fmp-hk-ticker-v1")
     if not mapping_versions:
@@ -827,7 +847,7 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
             "fix_hint": "Upload the constituent-performance file for the report's configured index.",
         })
     base["constituent_index_code"] = report.constituent_index_code
-    findings.extend(map_effective_hsics(db, base, report.report_date))
+    findings.extend(map_effective_industries(db, base, report.report_date))
     if base.get("total_return_series"):
         try:
             base["historical_performance"] = historical_performance(

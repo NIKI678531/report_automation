@@ -52,6 +52,54 @@ def snapshot_checks(payload: dict, expected_constituent_count: int | None = None
     results: list[dict] = []
     codes = [str(row.get("security_code", "")) for row in rows]
     weight = sum((Decimal(str(row.get("weight", 0))) for row in rows), Decimal("0"))
+    datasets = payload.get("datasets") or {}
+    identity_metadata = datasets.get("index_constituents") or datasets.get("constituent_performance") or {}
+    identity_lineage = identity_metadata.get("lineage") or {} if isinstance(identity_metadata, dict) else {}
+    automatic_warehouse_identity = (
+        isinstance(identity_metadata, dict)
+        and identity_metadata.get("source_type") in {"CDB", "CDB_MYSQL", "DATAWAREHOUSE_SQLITE"}
+    )
+    automatic_holdings_source = (
+        identity_lineage.get("weight_basis") == "PORTFOLIO_NAV_MARKET_VALUE"
+        and identity_lineage.get("weight_field") == "value_percent"
+        and identity_lineage.get("industry_basis") == "PORTFOLIO_HOLDING_GICS_SECTOR"
+        and identity_lineage.get("industry_field") == "gics_sector"
+        and identity_lineage.get("selection_policy") == "LATEST_AVAILABLE_HOLDINGS_IN_REPORT_MONTH"
+    )
+    portfolio_nav_weight = identity_lineage.get("weight_basis") == "PORTFOLIO_NAV_MARKET_VALUE"
+    try:
+        source_total_weight = Decimal(str(identity_lineage.get("portfolio_total_weight")))
+        selected_equity_weight = Decimal(str(identity_lineage.get("selected_equity_weight")))
+    except (ArithmeticError, TypeError, ValueError):
+        source_total_weight = Decimal("NaN")
+        selected_equity_weight = Decimal("NaN")
+    if portfolio_nav_weight:
+        weight_check = {
+            "check_id": "QC-002",
+            "passed": (
+                source_total_weight.is_finite()
+                and abs(source_total_weight - Decimal("1")) <= Decimal("0.0001")
+                and selected_equity_weight.is_finite()
+                and abs(selected_equity_weight - weight) <= Decimal("0.0000001")
+                and Decimal("0") < weight <= Decimal("1.0001")
+            ),
+            "message": "Portfolio NAV weights reconcile to the complete fund valuation without renormalizing equities.",
+            "actual": {
+                "selected_equity_weight": str(weight),
+                "portfolio_total_weight": str(source_total_weight),
+            },
+            "threshold": "complete portfolio = 1.0000 ± 0.0001; selected equities retain source NAV weights",
+            "fix_hint": "Refresh the fund holding valuation; do not normalize the displayed equities to 100%.",
+        }
+    else:
+        weight_check = {
+            "check_id": "QC-002",
+            "passed": abs(weight - Decimal("1")) <= Decimal("0.0001"),
+            "message": "Constituent weights total 100%.",
+            "actual": str(weight),
+            "threshold": "1.0000 ± 0.0001",
+            "fix_hint": "Weights must total 100% ± 0.01 percentage points before rounding.",
+        }
     checks: list[dict] = [
         {
             "check_id": "QC-001",
@@ -61,14 +109,7 @@ def snapshot_checks(payload: dict, expected_constituent_count: int | None = None
             "threshold": "index_code + as_of_date + security_code unique",
             "fix_hint": "Security codes must be present and unique within the effective constituent snapshot.",
         },
-        {
-            "check_id": "QC-002",
-            "passed": abs(weight - Decimal("1")) <= Decimal("0.0001"),
-            "message": "Constituent weights total 100%.",
-            "actual": str(weight),
-            "threshold": "1.0000 ± 0.0001",
-            "fix_hint": "Weights must total 100% ± 0.01 percentage points before rounding.",
-        },
+        weight_check,
         {
             # Only the report-date-effective mapping counts. A raw source sector name is lineage,
             # not an approved taxonomy assignment, so it must not satisfy this check.
@@ -78,6 +119,28 @@ def snapshot_checks(payload: dict, expected_constituent_count: int | None = None
             "actual": sum(1 for row in rows if not row.get("effective_industry_code")),
             "threshold": 0,
             "fix_hint": "Every constituent requires a report-date-effective industry mapping.",
+        },
+        {
+            "check_id": "QC-AUTO-HOLDINGS-SOURCE",
+            "passed": not automatic_warehouse_identity or automatic_holdings_source,
+            "message": "Automatic constituent analysis uses the latest report-month physical fund holdings.",
+            "actual": {
+                "source_type": identity_metadata.get("source_type") if isinstance(identity_metadata, dict) else None,
+                "source_table": identity_lineage.get("source_table"),
+                "weight_basis": identity_lineage.get("weight_basis"),
+                "weight_field": identity_lineage.get("weight_field"),
+                "industry_basis": identity_lineage.get("industry_basis"),
+                "industry_field": identity_lineage.get("industry_field"),
+                "selection_policy": identity_lineage.get("selection_policy"),
+            },
+            "threshold": {
+                "weight_basis": "PORTFOLIO_NAV_MARKET_VALUE",
+                "weight_field": "value_percent",
+                "industry_basis": "PORTFOLIO_HOLDING_GICS_SECTOR",
+                "industry_field": "gics_sector",
+                "selection_policy": "LATEST_AVAILABLE_HOLDINGS_IN_REPORT_MONTH",
+            },
+            "fix_hint": "Refresh automatic data so Page 04, Performers and Portfolio Analysis use the report-month fund holding snapshot, not tracked-index constituents.",
         },
     ]
 

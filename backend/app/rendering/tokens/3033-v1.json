@@ -49,7 +49,19 @@
         "industry.hsics.70": "#223a8b",
         "industry.hsics.28": "#00b0f0",
         "industry.hsics.10": "#8064a2",
-        "industry.hsics.50": "#2f8f83"
+        "industry.hsics.50": "#2f8f83",
+        "industry.gics.10": "#d49a2a",
+        "industry.gics.15": "#c45f5f",
+        "industry.gics.20": "#6c7a89",
+        "industry.gics.25": "#5186bd",
+        "industry.gics.30": "#8064a2",
+        "industry.gics.35": "#2f8f83",
+        "industry.gics.40": "#d49a2a",
+        "industry.gics.45": "#223a8b",
+        "industry.gics.50": "#00b0f0",
+        "industry.gics.55": "#c45f5f",
+        "industry.gics.60": "#6c7a89",
+        "industry.gics.UNCLASSIFIED": "#2f8f83"
       },
       "palette": [
         "#5186bd",

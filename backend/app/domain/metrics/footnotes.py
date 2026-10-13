@@ -91,14 +91,20 @@ def build_lineage_footnotes(
             if starts.get(field) and return_periods.get("end")
         )
         taxonomy = payload.get("industry_master") or {}
+        taxonomy_name = str(taxonomy.get("taxonomy") or ("HSICS" if taxonomy.get("version") else "")).upper()
         taxonomy_text = (
-            f" HSICS {taxonomy.get('version')}." if taxonomy.get("version") else ""
+            f" Industry classification uses {taxonomy_name} {taxonomy.get('version')}."
+            if taxonomy_name and taxonomy.get("version") else ""
+        )
+        zh_taxonomy_text = (
+            f" 行业分类采用 {taxonomy_name} {taxonomy.get('version')}。"
+            if taxonomy_name and taxonomy.get("version") else ""
         )
         if is_chinese(language_mode):
             footnotes["constituents"] = _chinese((
                 f"成份股来源：{', '.join(sorted(set(constituent_sources)))}；截至 {as_of_date}。"
                 f" 回报来源：{return_source or return_periods.get('source') or '未记录'}。"
-                f"{f' {period_text}。' if period_text else ''}{taxonomy_text}"
+                f"{f' {period_text}。' if period_text else ''}{zh_taxonomy_text}"
                 " 价格、权重及回报沿用来源单位与期间。"
             ), language_mode)
         else:
@@ -135,11 +141,18 @@ def build_lineage_footnotes(
             if turnover_as_of_date and is_partial else ""
         )
         taxonomy = payload.get("industry_master") or {}
-        taxonomy_text = f" Industry aggregation uses HSICS {taxonomy.get('version')}." if taxonomy.get("version") else ""
+        taxonomy_name = str(taxonomy.get("taxonomy") or ("HSICS" if taxonomy.get("version") else "")).upper()
+        taxonomy_text = (
+            f" Industry aggregation uses {taxonomy_name} {taxonomy.get('version')}."
+            if taxonomy_name and taxonomy.get("version") else ""
+        )
         if is_chinese(language_mode):
             zh_turnover_date = f" 成交额截至 {turnover_as_of_date}；" if turnover_as_of_date and is_partial else ""
             zh_coverage = f" 成交额覆盖 {observed}/{expected}（{Decimal(str(coverage)) * Decimal('100'):.2f}%）" if coverage is not None else ""
-            zh_taxonomy = f" 行业汇总采用 HSICS {taxonomy.get('version')}。" if taxonomy.get("version") else ""
+            zh_taxonomy = (
+                f" 行业汇总采用 {taxonomy_name} {taxonomy.get('version')}。"
+                if taxonomy_name and taxonomy.get("version") else ""
+            )
             footnotes["analytics"] = _chinese((
                 f"来源：{sources}；资产管理规模截至 {aum_as_of_date}；{zh_turnover_date}{zh_coverage}。"
                 f"{zh_taxonomy} 持仓数量按权重大于零的唯一证券计算。"

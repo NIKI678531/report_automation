@@ -130,6 +130,33 @@ def test_financials_uses_the_confirmed_hstech_code_and_stable_color_token():
     assert chart["series"][0]["color_token"] == "industry.hsics.50"
 
 
+def test_holding_gics_sectors_use_portfolio_weight_order_and_gics_tokens():
+    rows = [
+        constituent("1", "25", "Consumer Discretionary", "0.402"),
+        constituent("2", "45", "Information Technology", "0.324"),
+        constituent("3", "50", "Communication Services", "0.253"),
+        constituent("4", "30", "Consumer Staples", "0.018"),
+        constituent("5", "UNCLASSIFIED", "Unclassified", "0.002"),
+    ]
+
+    chart = calculate_snapshot({
+        "constituents": rows,
+        "formula_version": HSTECH_PROFILE,
+        "industry_master": {"taxonomy": "GICS", "version": "CDB-HOLDINGS-GICS-v1"},
+    })[0]["sector_chart"]
+
+    assert [row["code"] for row in chart["series"]] == ["25", "45", "50", "30", "UNCLASSIFIED"]
+    assert [row["display_value"] for row in chart["series"]] == ["40.2%", "32.4%", "25.3%", "1.8%", "0.2%"]
+    assert [row["color_token"] for row in chart["series"]] == [
+        "industry.gics.25",
+        "industry.gics.45",
+        "industry.gics.50",
+        "industry.gics.30",
+        "industry.gics.UNCLASSIFIED",
+    ]
+    assert chart["alt_text"].startswith("Fund sector breakdown:")
+
+
 def test_unconfigured_industries_sort_after_configured_ones_deterministically():
     rows = [
         constituent("1", "99", "Utilities", "0.5"),

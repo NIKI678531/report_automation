@@ -103,7 +103,16 @@ def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
     ranked_weight = rank_by_weight(rows)
     ranked_return = rank_by_return(rows)
     bottom_selected = bottom_by_return(rows)
-    sectors = sector_breakdown(rows, INDUSTRY_DISPLAY_ORDER.get(str(payload.get("formula_version") or "")))
+    taxonomy = str((payload.get("industry_master") or {}).get("taxonomy") or "HSICS").upper()
+    # The HSTECH display order belongs to the legacy HSICS presentation only.  Holding-level
+    # GICS sectors are ordered by portfolio weight, otherwise the coincident GICS code ``50``
+    # would be mistaken for the configured HSICS Financials code and forced to the front.
+    display_order = (
+        INDUSTRY_DISPLAY_ORDER.get(str(payload.get("formula_version") or ""))
+        if taxonomy == "HSICS"
+        else None
+    )
+    sectors = sector_breakdown(rows, display_order)
     sector_chart = sector_chart_snapshot(sectors, payload)
     # Derived once, above the `if fund_kpis:` branch. These used to be bound only inside that
     # branch while the metrics block below read them unconditionally, so any snapshot carrying a

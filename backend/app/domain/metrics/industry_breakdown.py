@@ -82,6 +82,7 @@ def sector_chart_snapshot(sectors: list[dict], payload: dict | None = None) -> d
     """The `industry_breakdown` chart snapshot defined by the rules document §4.3."""
     payload = payload or {}
     master = payload.get("industry_master") or {}
+    color_taxonomy = str(master.get("taxonomy") or "HSICS").strip().lower()
     places = DISPLAY_FORMAT_V1["sector_weight_places"]
     # Zero-weight industries never reach the chart (rules document §4.3). This filter used to
     # live in the renderer, where HTML and DOCX each applied their own version of it.
@@ -124,12 +125,12 @@ def sector_chart_snapshot(sectors: list[dict], payload: dict | None = None) -> d
             "sort_order": index + 1,
             # Bound to the industry, not to the position in the list. A positional index made
             # an industry change colour whenever the constituent set changed.
-            "color_token": f"industry.hsics.{code}",
+            "color_token": f"industry.{color_taxonomy}.{code}",
             "start_angle": str(start),
             "end_angle": str(end),
         })
     summary = ", ".join(f"{row['label']} {row['display_value']}" for row in snapshot["series"])
-    snapshot["alt_text"] = f"Index sector breakdown: {summary}"
+    snapshot["alt_text"] = f"Fund sector breakdown: {summary}"
     return snapshot
 
 

@@ -195,12 +195,13 @@ def persist_calculation_records(
             )
 
     for row in derived_payload.get("analytics", {}).get("sectors", []):
+        taxonomy = (derived_payload.get("industry_master") or {}).get("taxonomy")
         add_metric(
             "industry.weight",
             row.get("weight"),
             "RATIO",
             str(row.get("code") or row.get("sector") or ""),
-            lineage={"label": row.get("sector"), "taxonomy": row.get("taxonomy")},
+            lineage={"label": row.get("sector"), "taxonomy": taxonomy},
             dataset_types=("constituent_snapshot", "industry_master"),
         )
 
@@ -380,6 +381,25 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
             "message": "Page 04 analysis requires approved constituent identity and return sources.",
             "severity": "BLOCKING",
             "fix_hint": "Apply the HSTECH constituent identity data and load returns from FMP or an approved upload.",
+        })
+    automatic_holdings_check = next(
+        (
+            item for item in snapshot_checks(snapshot.payload or {})
+            if item["check_id"] == "QC-AUTO-HOLDINGS-SOURCE"
+        ),
+        None,
+    )
+    if (
+        snapshot.lane == Lane.PRODUCTION.value
+        and automatic_holdings_check
+        and automatic_holdings_check["status"] != "PASSED"
+    ):
+        raise HTTPException(status_code=422, detail={
+            "error_code": "AUTO_HOLDINGS_SOURCE_REQUIRED",
+            "message": "Automatic constituent analysis must use the latest physical fund holdings in the report month.",
+            "severity": "BLOCKING",
+            "check": automatic_holdings_check,
+            "fix_hint": "Refresh automatic data before recalculating; tracked-index weights and sectors are not accepted.",
         })
     product = resolve_product(db, report.product_code, report.report_date)
     formula_version = product.formula_profile

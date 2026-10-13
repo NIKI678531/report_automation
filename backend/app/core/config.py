@@ -189,6 +189,13 @@ class Settings(BaseModel):
     datawarehouse_constituents_view: str = _env_str(
         "DATAWAREHOUSE_CONSTITUENTS_VIEW", "view_ads_busi_market_index_constituent_price_daily_f_p"
     )
+    # The enriched fund-holdings view owns the report's constituent universe, valuation price,
+    # portfolio weight and GICS sector.  Index constituents are not an industry-classification
+    # fallback: doing so would turn a fund sector chart back into an index sector chart.
+    datawarehouse_portfolio_holdings_view: str = _env_str(
+        "DATAWAREHOUSE_PORTFOLIO_HOLDINGS_VIEW",
+        "view_ads_busi_valuation_holding_exposure_1_f_p",
+    )
     # Existing approved fund-level valuation view. This can supply AUM independently while the
     # unified daily KPI/calendar contract below is being provisioned.
     datawarehouse_fund_aum_view: str | None = _env_str(
@@ -206,7 +213,7 @@ class Settings(BaseModel):
         _env_str("DATAWAREHOUSE_CACHE_DIR", str(Path(tempfile.gettempdir()) / "commentary-datawarehouse"))
     )
     datawarehouse_max_bytes: int = _env_int("DATAWAREHOUSE_MAX_BYTES", 1024 * 1024 * 1024)
-    datawarehouse_timeout_seconds: float = _env_float("DATAWAREHOUSE_TIMEOUT_SECONDS", 15)
+    datawarehouse_timeout_seconds: float = _env_float("DATAWAREHOUSE_TIMEOUT_SECONDS", 60)
     fmp_constituent_returns_enabled: bool = _env_bool("FMP_CONSTITUENT_RETURNS_ENABLED", True)
     fmp_api_key: str | None = Field(default=os.getenv("FMP_API_KEY"), repr=False)
     fmp_base_url: str = _env_str("FMP_BASE_URL", "https://financialmodelingprep.com/stable")

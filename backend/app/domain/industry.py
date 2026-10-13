@@ -187,3 +187,42 @@ def map_effective_hsics(db: Session, payload: dict[str, Any], report_date: date)
         "checksum": hashlib.sha256("".join(sorted(row.checksum for row in records)).encode()).hexdigest(),
     }
     return findings
+
+
+def map_effective_industries(db: Session, payload: dict[str, Any], report_date: date) -> list[dict[str, Any]]:
+    """Keep automatic holding GICS assignments, otherwise apply the approved HSICS master.
+
+    The automatic fund-holdings adapter has already resolved each row from its own ``gics_sector``
+    field and records that provenance on every constituent.  Uploaded constituent files retain
+    the existing effective-dated HSICS workflow.  This explicit branch prevents a later snapshot
+    stage from overwriting holding sectors with classifications borrowed from the tracked index.
+    """
+    rows = payload.get("constituents") or []
+    master = payload.get("industry_master") or {}
+    holdings_gics = (
+        bool(rows)
+        and str(master.get("taxonomy") or "").upper() == "GICS"
+        and all(row.get("industry_mapping_source") == "PORTFOLIO_HOLDINGS_GICS" for row in rows)
+    )
+    if holdings_gics:
+        findings: list[dict[str, Any]] = []
+        for row in rows:
+            if not row.get("effective_industry_code") or not row.get("effective_industry_name"):
+                findings.append({
+                    "error_code": "IND-002",
+                    "severity": "BLOCKING",
+                    "entity_id": str(row.get("security_code") or ""),
+                    "message": f"Security {row.get('security_code')} has no holding-level GICS sector mapping.",
+                    "fix_hint": "Refresh the enriched fund-holdings view; do not fall back to index classifications.",
+                })
+        return findings
+
+    # An identity upload replacing an automatic holdings snapshot must not inherit the old GICS
+    # taxonomy object.  Its own source codes are resolved through the centrally managed HSICS
+    # master below.
+    if str(master.get("taxonomy") or "").upper() == "GICS":
+        payload.pop("industry_master", None)
+        datasets = payload.get("datasets")
+        if isinstance(datasets, dict):
+            datasets.pop("industry_master", None)
+    return map_effective_hsics(db, payload, report_date)

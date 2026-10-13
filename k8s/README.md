@@ -51,6 +51,10 @@ webapp 为单副本 RollingUpdate，不配置会阻止节点排空的 PDB。
 UAT / Production 模板已移除未启用的统一基金 KPI 视图字段；当前 AUM 使用 CDB 基金估值视图，日均成交额使用 DA-Report 的月度成交额和交易日数（ADR-0019）。
 数仓 TLS 配置保留；Production 使用镜像内 `/app/backend/app/integrations/certs/aws-rds-ap-east-1.pem` 验证 RDS 证书，并保持主机名校验开启。
 MySQL、签名密钥和供应商凭据放 `.env.<env>`；不复用 UAT 和 PRD 的机密。
+Page 04 自动数据以 `DATAWAREHOUSE_PORTFOLIO_HOLDINGS_VIEW` 的基金持仓
+`price/value_percent/gics_sector` 为价格、组合权重和行业；行业图不得从
+`DATAWAREHOUSE_CONSTITUENTS_VIEW` 借用指数权重或 HSICS。PRD/UAT 默认使用增强持仓视图
+`view_ads_busi_valuation_holding_exposure_1_f_p`，查询超时配置为 60 秒。
 
 ```bash
 cp .env.uat.example .env.uat

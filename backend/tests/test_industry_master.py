@@ -1,8 +1,9 @@
 from pathlib import Path
+from datetime import date
 
 import pytest
 
-from app.domain.industry import normalize_hsics_code, parse_industry_master_csv
+from app.domain.industry import map_effective_industries, normalize_hsics_code, parse_industry_master_csv
 from conftest import require_fixtures
 
 
@@ -25,6 +26,25 @@ def test_hsics_codes_restore_level_width_and_validate_hierarchy():
     invalid = master_csv() + b"HSICS,HSICS-2026-112,SECTOR,7010,23,Bad,Bad,2026-01-01,2026-09-06,Official,bad\n"
     with pytest.raises(ValueError, match="parent_code"):
         parse_industry_master_csv(invalid)
+
+
+def test_holding_gics_mapping_is_not_overwritten_by_hsics():
+    payload = {
+        "industry_master": {"taxonomy": "GICS", "version": "CDB-HOLDINGS-GICS-v1"},
+        "constituents": [{
+            "security_code": "700",
+            "source_codes": {"gics_sector": "Communication Services", "hsics_industry": "70"},
+            "effective_industry_code": "50",
+            "effective_industry_name": "Communication Services",
+            "industry_mapping_source": "PORTFOLIO_HOLDINGS_GICS",
+        }],
+    }
+
+    findings = map_effective_industries(None, payload, date(2026, 9, 30))  # type: ignore[arg-type]
+
+    assert not findings
+    assert payload["constituents"][0]["effective_industry_code"] == "50"
+    assert payload["industry_master"]["taxonomy"] == "GICS"
 
 
 def test_imported_effective_hsics_maps_snapshot_source_codes(client):

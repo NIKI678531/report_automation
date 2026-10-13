@@ -71,6 +71,93 @@ def test_snapshot_checks_block_bad_weight_and_count():
     assert count_check["severity"] == "WARNING"
 
 
+def test_portfolio_nav_weights_keep_cash_residual_without_equity_renormalization():
+    payload = {
+        "constituents": [
+            {"security_code": "700", "weight": "0.55"},
+            {"security_code": "1810", "weight": "0.4496"},
+        ],
+        "datasets": {
+            "index_constituents": {
+                "source_type": "CDB_MYSQL",
+                "lineage": {
+                    "weight_basis": "PORTFOLIO_NAV_MARKET_VALUE",
+                    "weight_field": "value_percent",
+                    "industry_basis": "PORTFOLIO_HOLDING_GICS_SECTOR",
+                    "industry_field": "gics_sector",
+                    "selection_policy": "LATEST_AVAILABLE_HOLDINGS_IN_REPORT_MONTH",
+                    "portfolio_total_weight": "1.0",
+                    "selected_equity_weight": "0.9996",
+                },
+            },
+        },
+    }
+
+    check = next(item for item in snapshot_checks(payload) if item["check_id"] == "QC-002")
+
+    assert check["status"] == "PASSED"
+    assert check["actual"]["selected_equity_weight"] == "0.9996"
+
+    source_check = next(
+        item for item in snapshot_checks(payload)
+        if item["check_id"] == "QC-AUTO-HOLDINGS-SOURCE"
+    )
+    assert source_check["status"] == "PASSED"
+
+
+def test_automatic_index_weight_lineage_is_blocked_from_constituent_analysis():
+    payload = {
+        "constituents": [{"security_code": "700", "weight": "1", **IT}],
+        "datasets": {
+            "index_constituents": {
+                "source_type": "CDB_MYSQL",
+                "lineage": {
+                    "source_table": "view_ads_busi_market_index_constituent_price_daily_f_p",
+                    "weight_basis": "INDEX_WEIGHT",
+                    "weight_field": "index_weight",
+                },
+            },
+        },
+    }
+
+    check = next(
+        item for item in snapshot_checks(payload)
+        if item["check_id"] == "QC-AUTO-HOLDINGS-SOURCE"
+    )
+
+    assert check["status"] == "FAILED"
+
+
+def test_page04_performers_sector_and_holding_count_share_the_holding_rows():
+    holding_rows = [
+        {
+            "security_code": "700", "name_en": "Tencent", "weight": "0.55",
+            "return_1m": "-0.05", "effective_industry_code": "50",
+            "effective_industry_name": "Communication Services",
+        },
+        {
+            "security_code": "1810", "name_en": "Xiaomi", "weight": "0.4496",
+            "return_1m": "0.08", "effective_industry_code": "45",
+            "effective_industry_name": "Information Technology",
+        },
+    ]
+
+    analytics, metrics = calculate_snapshot({
+        "constituents": holding_rows,
+        "industry_master": {"taxonomy": "GICS"},
+    })
+
+    assert [row["security_code"] for row in analytics["top10"]] == ["700", "1810"]
+    assert [row["security_code"] for row in analytics["top"]] == ["1810", "700"]
+    assert [(row["code"], row["weight"]) for row in analytics["sectors"]] == [
+        ("50", "0.55"), ("45", "0.4496"),
+    ]
+    assert next(
+        row for row in analytics["portfolio"] if row["metric_code"] == "NUMBER_OF_HOLDINGS"
+    )["raw_value"] == "2"
+    assert metrics["constituent_count"] == 2
+
+
 def test_snapshot_checks_use_spec_ids_for_industry_dates_and_return_basis():
     payload = {
         "as_of_date": "2026-06-30",
