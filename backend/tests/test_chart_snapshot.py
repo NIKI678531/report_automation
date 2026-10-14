@@ -141,20 +141,44 @@ def test_holding_gics_sectors_use_portfolio_weight_order_and_gics_tokens():
 
     chart = calculate_snapshot({
         "constituents": rows,
+        "sector_exposures": [
+            {"code": "25", "sector": "Consumer Discretionary", "weight": "0.4028056112224448897795591182"},
+            {"code": "45", "sector": "Information Technology", "weight": "0.3236472945891783567134268537"},
+            {"code": "50", "sector": "Communication Services", "weight": "0.2545090180360721442885771543"},
+            {"code": "30", "sector": "Consumer Staples", "weight": "0.01903807615230460921843687375"},
+        ],
         "formula_version": HSTECH_PROFILE,
         "industry_master": {"taxonomy": "GICS", "version": "CDB-HOLDINGS-GICS-v1"},
     })[0]["sector_chart"]
 
-    assert [row["code"] for row in chart["series"]] == ["25", "45", "50", "30", "UNCLASSIFIED"]
-    assert [row["display_value"] for row in chart["series"]] == ["40.2%", "32.4%", "25.3%", "1.8%", "0.2%"]
+    assert [row["code"] for row in chart["series"]] == ["25", "45", "50", "30"]
+    assert [row["display_value"] for row in chart["series"]] == ["40.3%", "32.4%", "25.5%", "1.9%"]
     assert [row["color_token"] for row in chart["series"]] == [
         "industry.gics.25",
         "industry.gics.45",
         "industry.gics.50",
         "industry.gics.30",
-        "industry.gics.UNCLASSIFIED",
     ]
     assert chart["alt_text"].startswith("Fund sector breakdown:")
+
+
+def test_legacy_holding_snapshot_uses_rounded_classified_denominator_without_unclassified():
+    rows = [
+        constituent("1", "50", "Communication Services", "0.55"),
+        constituent("2", "45", "Information Technology", "0.4496"),
+        constituent("3", "UNCLASSIFIED", "Unclassified", "0.0004"),
+    ]
+
+    chart = calculate_snapshot({
+        "constituents": rows,
+        "formula_version": HSTECH_PROFILE,
+        "industry_master": {"taxonomy": "GICS", "version": "CDB-HOLDINGS-GICS-v1"},
+    })[0]["sector_chart"]
+
+    assert [(row["code"], row["raw_value"], row["display_value"]) for row in chart["series"]] == [
+        ("50", "0.55", "55.0%"),
+        ("45", "0.45", "45.0%"),
+    ]
 
 
 def test_unconfigured_industries_sort_after_configured_ones_deterministically():

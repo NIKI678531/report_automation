@@ -9,7 +9,7 @@ regroup, re-sort or recompute.
 
 import hashlib
 import json
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Iterable
 
 from .errors import CalculationError
@@ -27,6 +27,13 @@ SECTOR_CHART_FORMULA_VERSION = "sector-weight-v1"
 # tie-breaker (SORT-001), so a newly mapped industry still lands somewhere deterministic.
 INDUSTRY_DISPLAY_ORDER = {
     "hstech-2026.1": ["23", "70", "28", "10", "50"],
+    "hstech-2026.2": ["23", "70", "28", "10", "50"],
+}
+
+ROUNDED_SECTOR_NUMERATOR_PROFILES = {"hstech-2026.1", "hstech-2026.2"}
+_EXCLUDED_HOLDING_SECTORS = {
+    "mutual fund", "etf", "futures", "call option", "index futures", "unclassified",
+    "未分类", "未分類",
 }
 
 
@@ -76,6 +83,107 @@ def sector_breakdown(rows: Iterable[dict], display_order: list[str] | None = Non
         }
         for key, value in sorted(totals.items(), key=rank)
     ]
+
+
+def holding_sector_breakdown(
+    rows: Iterable[dict],
+    *,
+    round_group_numerator: bool,
+) -> list[dict]:
+    """Fallback implementation of the approved SECT query for holding snapshots.
+
+    New CDB snapshots carry ``sector_exposures`` calculated before duplicate positions are
+    collapsed.  This function keeps older snapshots and direct pure-calculation callers safe: it
+    excludes null/unclassified sectors and uses the same rounded classified denominator.  Its
+    input may already be grouped by security, so it is deliberately a compatibility path rather
+    than the primary source adapter.
+    """
+    grouped: dict[tuple[str, str], dict[str, Decimal]] = {}
+    localized_names_hans: dict[str, str] = {}
+    localized_names_hant: dict[str, str] = {}
+    denominator = Decimal("0")
+    for row in rows:
+        code = str(row.get("effective_industry_code") or "").strip()
+        label = str(row.get("effective_industry_name") or "").strip()
+        if code.upper() == "UNCLASSIFIED" or label.casefold() in _EXCLUDED_HOLDING_SECTORS:
+            continue
+        if not code or not label:
+            raise CalculationError(
+                "INDUSTRY_MAPPING_MISSING",
+                f"Security {row.get('security_code')} has no effective industry mapping to aggregate by.",
+                "constituents.effective_industry_code",
+                "Populate the holding sector in CDB; unclassified positions are excluded rather than inferred.",
+                str(row.get("security_code") or ""),
+            )
+        try:
+            weight = Decimal(str(row["weight"]))
+        except (InvalidOperation, KeyError, TypeError, ValueError) as error:
+            raise CalculationError(
+                "SECTOR_WEIGHT_INVALID",
+                f"Security {row.get('security_code')} has an invalid sector weight.",
+                "constituents.weight",
+                "Refresh the holding valuation before recalculating sector exposure.",
+                str(row.get("security_code") or ""),
+            ) from error
+        rounded = weight.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        denominator += rounded
+        bucket = grouped.setdefault((code, label), {"exact": Decimal("0"), "rounded": Decimal("0")})
+        bucket["exact"] += weight
+        bucket["rounded"] += rounded
+        localized_names_hans.setdefault(code, str(row.get("effective_industry_name_zh_hans") or ""))
+        localized_names_hant.setdefault(code, str(row.get("effective_industry_name_zh_hant") or ""))
+    if denominator <= 0:
+        return []
+    result = [
+        {
+            "code": code,
+            "sector": label,
+            "sector_zh_hans": localized_names_hans.get(code, ""),
+            "sector_zh_hant": localized_names_hant.get(code, ""),
+            "weight": format(values["rounded" if round_group_numerator else "exact"] / denominator, "f"),
+        }
+        for (code, label), values in grouped.items()
+    ]
+    return sorted(result, key=lambda row: (-Decimal(row["weight"]), row["code"]))
+
+
+def source_sector_exposures(rows: object) -> list[dict]:
+    """Validate and deterministically order source-calculated SECT rows."""
+    if not isinstance(rows, list):
+        raise CalculationError(
+            "SECTOR_EXPOSURE_INVALID", "The source sector exposure is not a row list.",
+            "sector_exposures", "Refresh the automatic holding snapshot.", "",
+        )
+    result: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code") or "").strip()
+        label = str(row.get("sector") or "").strip()
+        if code.upper() == "UNCLASSIFIED" or label.casefold() in _EXCLUDED_HOLDING_SECTORS:
+            continue
+        try:
+            weight = Decimal(str(row.get("weight")))
+        except (InvalidOperation, TypeError, ValueError) as error:
+            raise CalculationError(
+                "SECTOR_EXPOSURE_INVALID", f"Sector {code or label} has an invalid weight.",
+                "sector_exposures.weight", "Refresh the automatic holding snapshot.", code,
+            ) from error
+        if not code or not label or code in seen or not weight.is_finite() or weight <= 0:
+            raise CalculationError(
+                "SECTOR_EXPOSURE_INVALID", f"Sector {code or label} is missing, duplicated or non-positive.",
+                "sector_exposures", "Refresh the automatic holding snapshot.", code,
+            )
+        seen.add(code)
+        result.append({
+            "code": code,
+            "sector": label,
+            "sector_zh_hans": str(row.get("sector_zh_hans") or ""),
+            "sector_zh_hant": str(row.get("sector_zh_hant") or ""),
+            "weight": format(weight, "f"),
+        })
+    return sorted(result, key=lambda row: (-Decimal(row["weight"]), row["code"]))
 
 
 def sector_chart_snapshot(sectors: list[dict], payload: dict | None = None) -> dict:

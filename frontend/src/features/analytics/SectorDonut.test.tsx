@@ -62,6 +62,20 @@ describe("SectorDonut", () => {
     expect(sectorSlices({ series: [] })).toEqual([]);
   });
 
+  it("does not display an unclassified slice from a legacy snapshot", () => {
+    const chart = { series: [
+      CHART.series[0],
+      {
+        ...CHART.series[1], code: "UNCLASSIFIED", label: "Unclassified",
+        color_token: "industry.gics.UNCLASSIFIED",
+      },
+    ] };
+
+    expect(sectorSlices(chart).map((slice) => slice.code)).toEqual(["23"]);
+    render(<SectorDonut chart={chart} title="3033.HK Sectors Breakdown" />);
+    expect(screen.queryByText("Unclassified")).toBeNull();
+  });
+
   it("renders an accessible multi-slice SVG that shows the backend display value", () => {
     const { container } = render(<SectorDonut chart={CHART} title="3033.HK Sectors Breakdown" />);
 
