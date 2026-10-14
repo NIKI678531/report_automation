@@ -28,7 +28,8 @@ RUN pip install --no-cache-dir -r requirements.lock \
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini entrypoint.sh ./
-RUN chmod 0555 entrypoint.sh \
+RUN chmod -R a+rX app migrations \
+ && chmod 0555 entrypoint.sh \
  && python -c "import ssl; ssl.create_default_context(cafile='app/integrations/certs/aws-rds-ap-east-1.pem')"
 USER 10001:10001
 EXPOSE 8000
