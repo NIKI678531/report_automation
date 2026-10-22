@@ -1,5 +1,7 @@
 # Portfolio holdings own constituent prices, weights and sectors
 
+> Sector exposure normalization and blank-sector presentation are superseded by ADR-0040.
+
 Accepted 2026-10-13 following the user's clarification that report `Weighting` means the fund
 portfolio holding weight, not the tracked index weight. This supersedes ADR-0011 and the V2.1
 DS-03/QC-002 wording where it made the index constituent snapshot authoritative for the fund's

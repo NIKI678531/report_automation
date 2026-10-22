@@ -435,6 +435,7 @@ def apply_import_batch(
     replacing_returns = "constituent_returns" in incoming_types and not replacing_identity
     if replacing_identity:
         base["constituents"] = []
+        base.pop("sector_exposures", None)
         base.pop("return_periods", None)
         for key in ("constituent_performance", *_SPLIT_TYPES):
             datasets.pop(key, None)

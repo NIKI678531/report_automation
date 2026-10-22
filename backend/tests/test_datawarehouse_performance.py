@@ -59,7 +59,7 @@ def build_performance_snapshot(path, *, include_returns: bool = True) -> None:
             trade_date TEXT, tradar_code TEXT, acct_holding_id INTEGER, seq_no INTEGER,
             description TEXT, securities_desc_tch TEXT, ticker TEXT, price NUMERIC,
             ccy TEXT, value_fc NUMERIC, value_percent NUMERIC,
-            asset_group TEXT, position_class TEXT, gics_sector TEXT
+            class TEXT, asset_group TEXT, position_class TEXT, gics_sector TEXT
         );
         CREATE TABLE approved_fund_kpi_daily (
             product_code TEXT, as_of_date TEXT, is_trading_day INTEGER,
@@ -80,11 +80,11 @@ def build_performance_snapshot(path, *, include_returns: bool = True) -> None:
             ('2025-03-28', 'HSTECH', '1810 HK EQUITY', '小米集團', 'XIAOMI - W', 'HKD', 0.4, 40, '', '', '', '7010');
         INSERT INTO view_ads_busi_valuation_holding_exposure_1_f_p VALUES
             ('2025-03-28', 'CO-CHST', 1, 1, 'TENCENT HOLDINGS LTD', '騰訊控股',
-             '700 HK EQUITY', 490, 'HKD', 5500, 0.55, 'Equity', 'TRADING', 'Communication Services'),
+             '700 HK EQUITY', 490, 'HKD', 5500, 0.55, 'Net Assets', 'Equity', 'TRADING', 'Communication Services'),
             ('2025-03-28', 'CO-CHST', 2, 1, 'XIAOMI CORP', '小米集團',
-             '1810 HK EQUITY', 38, 'HKD', 4496, 0.4496, 'Equity', 'TRADING', 'Information Technology'),
+             '1810 HK EQUITY', 38, 'HKD', 4496, 0.4496, 'Net Assets', 'Equity', 'TRADING', 'Information Technology'),
             ('2025-03-28', 'CO-CHST', 3, 1, 'HKD CASH', '港元現金',
-             'HKD CASH', 1, 'HKD', 4, 0.0004, 'Cash', 'CASH', NULL);
+             'HKD CASH', 1, 'HKD', 4, 0.0004, 'Net Assets', 'Cash', 'CASH', NULL);
     """)
     if include_returns:
         connection.executescript("""
@@ -387,17 +387,38 @@ def test_loads_fund_portfolio_weights_and_gics_only_from_holdings(tmp_path, monk
     assert result["constituents"][0]["effective_industry_code"] == "50"
     assert result["constituents"][1]["effective_industry_code"] == "45"
     assert result["constituents"][1]["weight"] == "0.4496"
+    assert [(row["code"], row["weight"]) for row in result["sector_exposures"]] == [
+        ("50", "0.55"), ("45", "0.45"),
+    ]
     assert result["industry_master"]["taxonomy"] == "GICS"
     metadata = result["datasets"]["index_constituents"]
-    assert metadata["mapping_version"] == "cdb-portfolio-holdings-gics-v2"
+    assert metadata["mapping_version"] == "cdb-portfolio-holdings-sector-v3"
     assert metadata["lineage"]["weight_field"] == "value_percent"
     assert metadata["lineage"]["weight_basis"] == "PORTFOLIO_NAV_MARKET_VALUE"
     assert metadata["lineage"]["industry_field"] == "gics_sector"
     assert metadata["lineage"]["industry_basis"] == "PORTFOLIO_HOLDING_GICS_SECTOR"
+    assert metadata["lineage"]["sector_exposure"]["account_book_id"] == "1015945"
+    assert metadata["lineage"]["sector_exposure"]["rounded_denominator"] == "1.000"
     assert Decimal(metadata["lineage"]["portfolio_total_weight"]) == Decimal("1")
     assert metadata["lineage"]["selected_equity_weight"] == "0.9996"
     assert result["datasets"]["industry_master"]["lineage"]["taxonomy"] == "GICS"
     assert not result["_findings"]
+
+
+def test_sector_exposure_excludes_retired_non_sector_labels_before_taxonomy_validation():
+    sectors, lineage = datawarehouse._portfolio_sector_exposures([
+        {"gics_sector": "ETF", "value_percent": "0.01"},
+        {"gics_sector": "Information Technology", "value_percent": "0.99"},
+    ], fund_ticker="3033.HK")
+
+    assert sectors == [{
+        "code": "45",
+        "sector": "Information Technology",
+        "sector_zh_hans": "信息技术",
+        "sector_zh_hant": "資訊科技",
+        "weight": "1",
+    }]
+    assert lineage["excluded_row_count"] == 1
 
 
 def test_portfolio_holdings_select_latest_available_date_inside_report_month(tmp_path, monkeypatch):
@@ -406,31 +427,31 @@ def test_portfolio_holdings_select_latest_available_date_inside_report_month(tmp
     connection = sqlite3.connect(database)
     connection.executemany(
         "INSERT INTO view_ads_busi_valuation_holding_exposure_1_f_p VALUES "
-        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [
             (
                 "2025-03-30", "CO-CHST", 11, 1, "TENCENT HOLDINGS LTD", "騰訊控股",
-                "700 HK EQUITY", 501, "HKD", 6170, 0.617, "Equity", "TRADING",
+                "700 HK EQUITY", 501, "HKD", 6170, 0.617, "Net Assets", "Equity", "TRADING",
                 "Communication Services",
             ),
             (
                 "2025-03-30", "CO-CHST", 12, 1, "XIAOMI CORP", "小米集團",
-                "1810 HK EQUITY", 41, "HKD", 3826, 0.3826, "Equity", "TRADING",
+                "1810 HK EQUITY", 41, "HKD", 3826, 0.3826, "Net Assets", "Equity", "TRADING",
                 "Information Technology",
             ),
             (
                 "2025-03-30", "CO-CHST", 13, 1, "HKD CASH", "港元現金",
-                "HKD CASH", 1, "HKD", 4, 0.0004, "Cash", "CASH", None,
+                "HKD CASH", 1, "HKD", 4, 0.0004, "Net Assets", "Cash", "CASH", None,
             ),
             # A following-month observation must never leak into a March report.
             (
                 "2025-04-01", "CO-CHST", 21, 1, "TENCENT HOLDINGS LTD", "騰訊控股",
-                "700 HK EQUITY", 600, "HKD", 9996, 0.9996, "Equity", "TRADING",
+                "700 HK EQUITY", 600, "HKD", 9996, 0.9996, "Net Assets", "Equity", "TRADING",
                 "Communication Services",
             ),
             (
                 "2025-04-01", "CO-CHST", 22, 1, "HKD CASH", "港元現金",
-                "HKD CASH", 1, "HKD", 4, 0.0004, "Cash", "CASH", None,
+                "HKD CASH", 1, "HKD", 4, 0.0004, "Net Assets", "Cash", "CASH", None,
             ),
         ],
     )
@@ -465,7 +486,7 @@ def test_portfolio_holding_rows_for_the_same_security_are_aggregated(tmp_path, m
     connection.execute(
         "INSERT INTO view_ads_busi_valuation_holding_exposure_1_f_p VALUES "
         "('2025-03-28','CO-CHST',4,2,'TENCENT HOLDINGS LTD','騰訊控股',"
-        "'700 HK EQUITY',490,'HKD',500,0.05,'Equity','TRADING','Communication Services')"
+        "'700 HK EQUITY',490,'HKD',500,0.05,'Net Assets','Equity','TRADING','Communication Services')"
     )
     connection.commit()
     connection.close()
@@ -513,6 +534,13 @@ def test_missing_holding_gics_is_explicitly_unclassified_without_index_fallback(
     xiaomi = next(row for row in result["constituents"] if row["security_code"] == "1810")
     assert xiaomi["effective_industry_code"] == "UNCLASSIFIED"
     assert xiaomi["effective_industry_name"] == "Unclassified"
+    assert result["sector_exposures"] == [{
+        "code": "50",
+        "sector": "Communication Services",
+        "sector_zh_hans": "通讯服务",
+        "sector_zh_hant": "通訊服務",
+        "weight": "1",
+    }]
     assert result["_findings"][0]["check_id"] == "PORTFOLIO_GICS_UNCLASSIFIED"
     assert result["_findings"][0]["actual"] == {"security_codes": ["1810"]}
 
@@ -648,8 +676,11 @@ def test_composer_prefers_warehouse_period_returns_over_legacy_series(tmp_path, 
     assert len(fragment["constituents"]) == 2
     assert fragment["constituents"][0]["weight"] == "0.55"
     assert fragment["constituents"][0]["close_price"] == "490"
+    assert [(row["code"], row["weight"]) for row in fragment["sector_exposures"]] == [
+        ("50", "0.55"), ("45", "0.45"),
+    ]
     assert fragment["datasets"]["index_constituents"]["source_type"] == "DATAWAREHOUSE_SQLITE"
-    assert fragment["datasets"]["index_constituents"]["mapping_version"] == "cdb-portfolio-holdings-gics-v2"
+    assert fragment["datasets"]["index_constituents"]["mapping_version"] == "cdb-portfolio-holdings-sector-v3"
     assert fragment["industry_master"]["taxonomy"] == "GICS"
 
 

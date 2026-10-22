@@ -37,8 +37,13 @@ const INDUSTRY_COLOR_CLASS: Record<string, number> = {
   "industry.gics.50": 3,
   "industry.gics.55": 7,
   "industry.gics.60": 8,
-  "industry.gics.UNCLASSIFIED": 5,
 };
+
+function isUnclassified(row: Record<string, unknown>): boolean {
+  if (String(row.code ?? "").trim().toUpperCase() === "UNCLASSIFIED") return true;
+  return [row.label, row.label_zh_hans, row.label_zh_hant]
+    .some((value) => ["unclassified", "未分类", "未分類"].includes(String(value ?? "").trim().toLowerCase()));
+}
 
 /**
  * Read the `industry_breakdown` chart snapshot. Order, the zero-weight filter, the percentage
@@ -50,6 +55,9 @@ export function sectorSlices(chart?: SectorChartSnapshot, locale: Locale = "en")
   return chart.series.flatMap((value, index) => {
     if (!value || typeof value !== "object") return [];
     const row = value as Record<string, unknown>;
+    // Older saved snapshots can still contain the retired bucket. New snapshots omit it at the
+    // source calculation, while this guard ensures the product page never exposes stale data.
+    if (isUnclassified(row)) return [];
     const startAngle = Number(row.start_angle);
     const endAngle = Number(row.end_angle);
     if (!Number.isFinite(startAngle) || !Number.isFinite(endAngle) || endAngle <= startAngle) return [];

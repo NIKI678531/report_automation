@@ -54,7 +54,8 @@ MySQL、签名密钥和供应商凭据放 `.env.<env>`；不复用 UAT 和 PRD �
 Page 04 自动数据以 `DATAWAREHOUSE_PORTFOLIO_HOLDINGS_VIEW` 的基金持仓
 `price/value_percent/gics_sector` 为价格、组合权重和行业；行业图不得从
 `DATAWAREHOUSE_CONSTITUENTS_VIEW` 借用指数权重或 HSICS。PRD/UAT 默认使用增强持仓视图
-`view_ads_busi_valuation_holding_exposure_1_f_p`，查询超时配置为 60 秒。
+`view_ads_busi_valuation_holding_exposure_1_f_p`；行业暴露按 ADR-0040 使用已分类 Trading 持仓的舍入后分母，
+不展示 Unclassified。查询超时配置为 60 秒。
 
 ```bash
 cp .env.uat.example .env.uat

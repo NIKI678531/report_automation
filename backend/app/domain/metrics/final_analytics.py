@@ -28,7 +28,14 @@ from .fund_kpis import (
     turnover_days,
     turnover_rows,
 )
-from .industry_breakdown import INDUSTRY_DISPLAY_ORDER, sector_breakdown, sector_chart_snapshot
+from .industry_breakdown import (
+    INDUSTRY_DISPLAY_ORDER,
+    ROUNDED_SECTOR_NUMERATOR_PROFILES,
+    holding_sector_breakdown,
+    sector_breakdown,
+    sector_chart_snapshot,
+    source_sector_exposures,
+)
 
 
 PORTFOLIO_METRIC_ORDER = ("AUM", "AVERAGE_DAILY_TURNOVER", "NUMBER_OF_HOLDINGS")
@@ -112,7 +119,20 @@ def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
         if taxonomy == "HSICS"
         else None
     )
-    sectors = sector_breakdown(rows, display_order)
+    if taxonomy == "GICS":
+        sectors = (
+            source_sector_exposures(payload["sector_exposures"])
+            if "sector_exposures" in payload
+            else holding_sector_breakdown(
+                rows,
+                round_group_numerator=(
+                    str(payload.get("formula_version") or "")
+                    in ROUNDED_SECTOR_NUMERATOR_PROFILES
+                ),
+            )
+        )
+    else:
+        sectors = sector_breakdown(rows, display_order)
     sector_chart = sector_chart_snapshot(sectors, payload)
     # Derived once, above the `if fund_kpis:` branch. These used to be bound only inside that
     # branch while the metrics block below read them unconditionally, so any snapshot carrying a

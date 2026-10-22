@@ -10,7 +10,7 @@ import threading
 import time
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -45,7 +45,7 @@ REQUIRED_COLUMNS = {
     "portfolio_holdings": {
         "trade_date", "tradar_code", "acct_holding_id", "seq_no", "description",
         "securities_desc_tch", "ticker", "price", "ccy", "value_fc", "value_percent",
-        "asset_group", "position_class", "gics_sector",
+        "class", "asset_group", "position_class", "gics_sector",
     },
     "fund_kpis": {
         "product_code", "as_of_date", "is_trading_day", "aum", "aum_currency", "aum_unit",
@@ -74,6 +74,16 @@ _GICS_SECTORS = {
     "real estate": ("60", "Real Estate", "房地产", "房地產"),
 }
 _UNCLASSIFIED_GICS = ("UNCLASSIFIED", "Unclassified", "未分类", "未分類")
+# The source query supplied for sector exposure has one account-book exception: account book
+# 1015945 rounds every position to one decimal percentage point before both grouping and
+# normalization.  CDB exposes the corresponding product ticker rather than ``acct_book_id``, so
+# keep the audited cross-system identity explicit instead of pretending ``fund_id`` is the same
+# key.
+_ROUNDED_SECTOR_ACCOUNT_BOOKS = {"3033.HK": "1015945"}
+_EXCLUDED_SECTOR_LABELS = {
+    "mutual fund", "etf", "futures", "call option", "index futures", "unclassified",
+    "未分类", "未分類",
+}
 _MATERIALIZE_LOCK = threading.Lock()
 _REPORT_MONTH_CONSTITUENT_CACHE_TTL_SECONDS = 300.0
 _REPORT_MONTH_CONSTITUENT_CACHE_LOCK = threading.Lock()
@@ -425,9 +435,9 @@ def _clean_text(raw: Any) -> str | None:
 def _portfolio_gics_sector(raw: Any) -> tuple[str, str, str, str]:
     """Return the stable GICS sector identity supplied by the fund-holdings view.
 
-    Blank vendor classifications remain visible as ``Unclassified``.  A non-blank unknown label
-    is rejected instead of being silently merged into that bucket, because it may indicate a
-    provider taxonomy change that needs an explicit mapping decision.
+    Blank vendor classifications remain explicit on the constituent and in quality findings, but
+    are excluded from sector exposure. A non-blank unknown label is rejected instead of being
+    silently merged into that bucket because it may indicate a provider taxonomy change.
     """
     value = _clean_text(raw)
     if not value:
@@ -441,6 +451,74 @@ def _portfolio_gics_sector(raw: Any) -> tuple[str, str, str, str]:
             422,
         )
     return sector
+
+
+def _portfolio_sector_exposures(
+    rows: list[dict[str, Any]],
+    *,
+    fund_ticker: str,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """Apply the approved SECT branch to raw holding-position rows.
+
+    ``value_percent`` in the CDB view is a ratio, while the supplied operational query stores it
+    in percentage points.  Quantizing the ratio to ``0.001`` is therefore the same one-decimal-
+    percentage-point rounding used by ``ROUND(value_percent, 1)`` in that query.
+    """
+    grouped: dict[tuple[str, str, str, str], dict[str, Decimal]] = {}
+    denominator = Decimal("0")
+    excluded_row_count = 0
+    for row in rows:
+        source_sector = _clean_text(row.get("gics_sector"))
+        if not source_sector or source_sector.casefold() in _EXCLUDED_SECTOR_LABELS:
+            excluded_row_count += 1
+            continue
+        code, name, name_zh_hans, name_zh_hant = _portfolio_gics_sector(source_sector)
+        weight = Decimal(str(row.get("value_percent")))
+        rounded_weight = weight.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        denominator += rounded_weight
+        bucket = grouped.setdefault(
+            (code, name, name_zh_hans, name_zh_hant),
+            {"exact": Decimal("0"), "rounded": Decimal("0")},
+        )
+        bucket["exact"] += weight
+        bucket["rounded"] += rounded_weight
+
+    if grouped and denominator <= 0:
+        raise DataWarehouseProviderError(
+            "DATAWAREHOUSE_SECTOR_EXPOSURE_INVALID",
+            "The classified trading holdings have no positive rounded sector denominator.",
+            422,
+        )
+
+    account_book_id = _ROUNDED_SECTOR_ACCOUNT_BOOKS.get(fund_ticker.upper())
+    use_rounded_numerator = account_book_id is not None
+    sectors = [
+        {
+            "code": code,
+            "sector": name,
+            "sector_zh_hans": name_zh_hans,
+            "sector_zh_hant": name_zh_hant,
+            "weight": format(
+                values["rounded" if use_rounded_numerator else "exact"] / denominator,
+                "f",
+            ),
+        }
+        for (code, name, name_zh_hans, name_zh_hant), values in grouped.items()
+    ]
+    sectors.sort(key=lambda row: (-Decimal(row["weight"]), row["code"]))
+    return sectors, {
+        "method": "SECT_CLASSIFIED_TRADING_HOLDINGS_V1",
+        "denominator": "SUM_ROUND_POSITION_WEIGHT_0_1_PERCENT",
+        "numerator": (
+            "SUM_ROUND_POSITION_WEIGHT_0_1_PERCENT"
+            if use_rounded_numerator
+            else "SUM_POSITION_WEIGHT"
+        ),
+        "account_book_id": account_book_id,
+        "excluded_sector_values": sorted(_EXCLUDED_SECTOR_LABELS),
+        "excluded_row_count": excluded_row_count,
+        "rounded_denominator": format(denominator, "f"),
+    }
 
 
 def _hsics_codes(record: dict[str, Any]) -> dict[str, str | None]:
@@ -1051,7 +1129,7 @@ def load_portfolio_holdings(
                 SELECT
                     trade_date, tradar_code, acct_holding_id, seq_no, description,
                     securities_desc_tch, ticker, price, ccy, value_fc, value_percent,
-                    asset_group, position_class, gics_sector
+                    class, asset_group, position_class, gics_sector
                 FROM {views['portfolio_holdings']}
                 WHERE tradar_code = :tradar_code
                   AND trade_date = (
@@ -1125,8 +1203,9 @@ def load_portfolio_holdings(
         )
 
     holding_rows = [
-        row for row in all_holding_rows
-        if str(row.get("asset_group") or "").strip().upper() == "EQUITY"
+        dict(row) for row in all_holding_rows
+        if str(row.get("class") or "").strip().upper() == "NET ASSETS"
+        and str(row.get("asset_group") or "").strip().upper() == "EQUITY"
         and str(row.get("position_class") or "").strip().upper() == "TRADING"
         and Decimal(str(row.get("value_percent"))) > 0
     ]
@@ -1137,6 +1216,11 @@ def load_portfolio_holdings(
             f"{holding_effective_as_of.isoformat()}.",
             422,
         )
+
+    sector_exposures, sector_exposure_lineage = _portfolio_sector_exposures(
+        holding_rows,
+        fund_ticker=fund_ticker,
+    )
 
     grouped: dict[str, dict[str, Any]] = {}
     source_record_keys: list[str] = []
@@ -1237,10 +1321,10 @@ def load_portfolio_holdings(
             "error_code": "PORTFOLIO_GICS_UNCLASSIFIED",
             "severity": "WARNING",
             "status": "FAILED",
-            "message": "Some physical fund holdings have no GICS sector in the holding source and are shown as Unclassified.",
+            "message": "Some physical fund holdings have no GICS sector in the holding source and are excluded from sector exposure.",
             "actual": {"security_codes": unclassified_codes},
             "threshold": "Every positive trading-equity holding has a source-supplied GICS sector",
-            "fix_hint": "Ask the CDB data owner to populate gics_sector; do not infer a sector from the tracked index.",
+            "fix_hint": "Ask the CDB data owner to populate gics_sector; the chart will not display an Unclassified bucket or infer a sector from the tracked index.",
         })
 
     sector_rows = sorted({
@@ -1264,6 +1348,7 @@ def load_portfolio_holdings(
     }
     payload = {
         "constituents": constituents,
+        "sector_exposures": sector_exposures,
         "constituent_index_code": index_code,
         "effective_as_of": holding_effective_as_of.isoformat(),
         "industry_master": industry_master,
@@ -1277,7 +1362,7 @@ def load_portfolio_holdings(
         "source_object": source_object,
         "row_count": len(constituents),
         "checksum": payload_checksum,
-        "mapping_version": "cdb-portfolio-holdings-gics-v2",
+        "mapping_version": "cdb-portfolio-holdings-sector-v3",
         "lineage": {
             "source_system": source["source_system"],
             "source_table": views["portfolio_holdings"],
@@ -1292,8 +1377,9 @@ def load_portfolio_holdings(
             "weight_field": "value_percent",
             "industry_basis": "PORTFOLIO_HOLDING_GICS_SECTOR",
             "industry_field": "gics_sector",
-            "unclassified_policy": "EXPLICIT_UNCLASSIFIED",
+            "unclassified_policy": "EXCLUDE_FROM_SECTOR_EXPOSURE_WITH_WARNING",
             "unclassified_security_codes": unclassified_codes,
+            "sector_exposure": sector_exposure_lineage,
             "portfolio_total_weight": format(source_total_weight, "f"),
             "selected_equity_weight": format(selected_weight, "f"),
             "source_field_map": {
@@ -1320,7 +1406,7 @@ def load_portfolio_holdings(
         "source_object": source_object,
         "row_count": len(sector_rows),
         "checksum": industry_master["checksum"],
-        "mapping_version": "cdb-portfolio-holdings-gics-v2",
+        "mapping_version": "cdb-portfolio-holdings-sector-v3",
         "lineage": {
             "source_system": source["source_system"],
             "source_table": views["portfolio_holdings"],
@@ -1328,8 +1414,9 @@ def load_portfolio_holdings(
             "taxonomy": "GICS",
             "taxonomy_version": industry_master["version"],
             "effective_as_of": holding_effective_as_of.isoformat(),
-            "unclassified_policy": "EXPLICIT_UNCLASSIFIED",
+            "unclassified_policy": "EXCLUDE_FROM_SECTOR_EXPOSURE_WITH_WARNING",
             "unclassified_security_codes": unclassified_codes,
+            "sector_exposure": sector_exposure_lineage,
         },
     }
     return {

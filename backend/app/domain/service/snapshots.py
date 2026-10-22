@@ -351,10 +351,12 @@ def overlay_slot(base: dict, spec: "ingestion.DatasetSpec", payload: dict) -> li
     if spec.key == "constituent_performance":
         incoming = json.loads(json.dumps(payload.get("constituents", [])))
         base["constituents"] = incoming
+        base.pop("sector_exposures", None)
         base["return_periods"] = json.loads(json.dumps(payload.get("return_periods", {})))
         base["as_of_date"] = incoming[0]["as_of_date"] if incoming else base.get("as_of_date")
         return findings
     if spec.key == "index_constituents":
+        base.pop("sector_exposures", None)
         incoming = payload.get("constituents", [])
         existing = {row["security_code"]: row for row in base.get("constituents", [])}
         merged = []
@@ -543,6 +545,8 @@ def _stage_auto_snapshot(
             payload[payload_key] = fragment[payload_key]
     if not upload_lineage and fragment.get("constituents"):
         payload["constituents"] = json.loads(json.dumps(fragment["constituents"]))
+        if "sector_exposures" in fragment:
+            payload["sector_exposures"] = json.loads(json.dumps(fragment["sector_exposures"]))
         payload["as_of_date"] = str(fragment.get("effective_as_of") or report.report_date.isoformat())
         if fragment.get("industry_master"):
             payload["industry_master"] = json.loads(json.dumps(fragment["industry_master"]))
@@ -641,7 +645,7 @@ def _stage_auto_snapshot(
         isinstance(constituent_metadata, dict)
         and constituent_metadata.get("source_type") in {"CDB_MYSQL", "DATAWAREHOUSE_SQLITE"}
     ):
-        mapping_versions.append(str(constituent_metadata.get("mapping_version") or "cdb-portfolio-holdings-gics-v2"))
+        mapping_versions.append(str(constituent_metadata.get("mapping_version") or "cdb-portfolio-holdings-sector-v3"))
     if has_fmp:
         mapping_versions.append("fmp-hk-ticker-v1")
     if not mapping_versions:
@@ -1047,9 +1051,11 @@ def clear_dataset(
         base.pop("return_periods", None)
     elif dataset_type == "constituent_performance":
         base["constituents"] = []
+        base.pop("sector_exposures", None)
         base.pop("return_periods", None)
     else:
         base["constituents"] = []
+        base.pop("sector_exposures", None)
 
     base["analytics"] = {"top10": [], "sectors": [], "top": [], "bottom": [], "portfolio": []}
     base.pop("metrics", None)

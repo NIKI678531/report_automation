@@ -230,6 +230,7 @@ def compose_da_report_fragment(product: ProductCatalog, report_date: date) -> tu
         else:
             findings.extend(constituent_fragment.pop("_findings", []))
             fragment["constituents"] = constituent_fragment["constituents"]
+            fragment["sector_exposures"] = constituent_fragment["sector_exposures"]
             fragment["constituent_index_code"] = constituent_fragment["constituent_index_code"]
             fragment["effective_as_of"] = constituent_fragment["effective_as_of"]
             fragment["industry_master"] = constituent_fragment["industry_master"]
