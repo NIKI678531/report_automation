@@ -637,7 +637,7 @@ def test_unsaved_preview_is_canonical_but_does_not_create_a_version_or_audit(cli
     assert after_events == before_events
 
 
-def test_draft_preview_is_version_tolerant_and_first_save_upgrades_to_v4_atomically(client):
+def test_draft_preview_is_version_tolerant_and_first_save_upgrades_to_v5_atomically(client):
     report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     content = detail["latest_document"]["content"]
@@ -653,10 +653,10 @@ def test_draft_preview_is_version_tolerant_and_first_save_upgrades_to_v4_atomica
         json={"version": detail["latest_document"]["version"], "content": content},
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["content"]["template_version"] == "3033-v4"
-    assert saved.json()["content"]["presentation"]["schema_version"] == 2
+    assert saved.json()["content"]["template_version"] == "3033-v5"
+    assert saved.json()["content"]["presentation"]["schema_version"] == 3
     refreshed = client.get(f"/api/v1/reports/{report['id']}").json()
-    assert refreshed["template_version"] == "3033-v4"
+    assert refreshed["template_version"] == "3033-v5"
 
 
 def test_v2_submission_without_presentation_reports_nested_shape_errors_as_422(client):

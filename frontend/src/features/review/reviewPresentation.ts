@@ -4,6 +4,9 @@ export const MIN_VERTICAL_NUDGE_STEPS = -200;
 export const MAX_VERTICAL_NUDGE_STEPS = 200;
 export const MIN_OFFSET_Y_PT = -720;
 export const MAX_OFFSET_Y_PT = 720;
+export const FOOTNOTE_BASELINE_BOTTOM_MM = 20;
+export const FOOTNOTE_MIN_BOTTOM_MM = 16;
+export const FOOTNOTE_MAX_BOTTOM_MM = 36;
 // Keep all eight v3 bottom-nudge positions distinct within v4's non-negative gap range.
 export const LEGACY_FOOTNOTE_GAP_BASE_PT = 16;
 export const LEGACY_FOOTNOTE_NUDGE_STEP_PT = 4;
@@ -58,8 +61,8 @@ export interface FootnoteParagraphStyle {
 
 export interface PageOneElement {
   id: string;
-  row: number;
-  row_span: number;
+  row?: number;
+  row_span?: number;
   x: number;
   w: number;
   vertical_nudge_steps?: number;
@@ -68,6 +71,7 @@ export interface PageOneElement {
   page?: number;
   offset_y_pt?: number;
   gap_pt?: number;
+  footer_bottom_mm?: number;
   header_style?: TextStyle;
   cell_padding_y_pt?: number;
   content_html?: string;
@@ -79,7 +83,7 @@ export interface PageOneElement {
 }
 
 export interface PageOnePresentation {
-  schema_version: 2;
+  schema_version: 3;
   page_one: {
     review_page_count: number;
     elements: PageOneElement[];
@@ -127,7 +131,7 @@ export const HISTORY_TITLE_STYLE: TextStyle = {
   font_size_pt: 12,
   text_align: "center",
 };
-export const FOOTNOTE_BODY_STYLE: TextStyle = { ...REVIEW_BODY_STYLE, font_size_pt: 9 };
+export const FOOTNOTE_BODY_STYLE: TextStyle = { ...REVIEW_BODY_STYLE, font_size_pt: 8 };
 
 const ALIGNMENTS: ReviewTextAlign[] = ["left", "center", "right", "justify"];
 const SAFE_FONT_FAMILY = /^[\p{L}\p{N}\s.,'_+()&\/-]+$/u;
@@ -178,6 +182,17 @@ export function normalizeTextStyle(value: unknown, fallback: TextStyle): TextSty
   };
 }
 
+export function normalizeFootnoteStyle(value: unknown): TextStyle {
+  const source = isRecord(value) ? value : {};
+  return {
+    ...FOOTNOTE_BODY_STYLE,
+    line_height: boundedNumber(source.line_height, FOOTNOTE_BODY_STYLE.line_height, TYPOGRAPHY_LIMITS.lineHeight.min, TYPOGRAPHY_LIMITS.lineHeight.max),
+    space_before_pt: boundedNumber(source.space_before_pt, FOOTNOTE_BODY_STYLE.space_before_pt, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max),
+    space_after_pt: boundedNumber(source.space_after_pt, FOOTNOTE_BODY_STYLE.space_after_pt, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max),
+    text_align: ALIGNMENTS.includes(source.text_align as ReviewTextAlign) ? source.text_align as ReviewTextAlign : FOOTNOTE_BODY_STYLE.text_align,
+  };
+}
+
 function normalizeLockedTitleStyle(value: unknown, fallback: TextStyle): TextStyle {
   const source = isRecord(value) ? value : {};
   return {
@@ -215,11 +230,16 @@ export function plainTextToRichHtml(value: string): string {
 export function richHtmlToPlainText(value: string): string {
   if (!value) return "";
   const document = new DOMParser().parseFromString(value, "text/html");
+  const textWithBreaks = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+    if (node instanceof HTMLBRElement) return "\n";
+    return [...node.childNodes].map(textWithBreaks).join("");
+  };
   const blocks = [...document.body.querySelectorAll("p, li, h2, h3, blockquote")]
     .filter((node) => !node.querySelector("p, li, h2, h3, blockquote"))
-    .map((node) => node.textContent?.trim() ?? "")
+    .map((node) => textWithBreaks(node).trim())
     .filter(Boolean);
-  return blocks.length ? blocks.join("\n\n") : (document.body.textContent ?? "").trim();
+  return blocks.length ? blocks.join("\n\n") : textWithBreaks(document.body).trim();
 }
 
 function wrapInlineContentsWithFontSize(element: Element, size: string): void {
@@ -352,24 +372,23 @@ export function pageOnePresentation(value: unknown, blocks: ReviewBlock[], histo
     },
     {
       id: "footnote:historical",
-      row: lastReviewRow + 3,
-      row_span: 4,
       x: 0,
       w: GRID_COLUMNS,
       page: 1,
-      gap_pt: 6,
+      footer_bottom_mm: FOOTNOTE_BASELINE_BOTTOM_MM,
       content_html: plainTextToRichHtml(historicalFootnote),
       body_style: { ...FOOTNOTE_BODY_STYLE },
     },
   ];
   const source = isRecord(value) && isRecord(value.page_one) && Array.isArray(value.page_one.elements) ? value : null;
-  if (!source) return { schema_version: 2, page_one: { review_page_count: 1, elements: defaults } };
+  if (!source) return { schema_version: 3, page_one: { review_page_count: 1, elements: defaults } };
 
   const pageOne = source.page_one as Record<string, unknown>;
   const stored = new Map<string, Record<string, unknown>>(
     (pageOne.elements as unknown[]).filter(isRecord).map((element): [string, Record<string, unknown>] => [String(element.id ?? ""), element]),
   );
-  const isV4 = source.schema_version === 2;
+  const isControlled = source.schema_version === 2 || source.schema_version === 3;
+  const isV5 = source.schema_version === 3;
   const hasStoredReviewGeometry = [...stored.keys()].some((id) => id.startsWith("review:"));
   const storedHistory = stored.get("historical_performance");
   const storedFootnote = stored.get("footnote:historical");
@@ -382,8 +401,8 @@ export function pageOnePresentation(value: unknown, blocks: ReviewBlock[], histo
     if (fallback.id.startsWith("review:")) {
       return {
         ...fallback,
-        row: useStoredGeometry ? boundedInteger(element.row, fallback.row, 0, 200) : fallback.row,
-        row_span: useStoredGeometry ? boundedInteger(element.row_span, fallback.row_span, 1, 40) : fallback.row_span,
+        row: useStoredGeometry ? boundedInteger(element.row, fallback.row ?? 0, 0, 200) : fallback.row,
+        row_span: useStoredGeometry ? boundedInteger(element.row_span, fallback.row_span ?? 1, 1, 40) : fallback.row_span,
         x: useStoredGeometry ? boundedInteger(element.x, fallback.x, 0, GRID_COLUMNS - 1) : fallback.x,
         w: useStoredGeometry ? boundedInteger(element.w, fallback.w, 1, GRID_COLUMNS) : fallback.w,
         vertical_nudge_steps: boundedInteger(element.vertical_nudge_steps, 0, MIN_VERTICAL_NUDGE_STEPS, MAX_VERTICAL_NUDGE_STEPS),
@@ -396,12 +415,12 @@ export function pageOnePresentation(value: unknown, blocks: ReviewBlock[], histo
       const legacyLineHeight = legacyRoleLineHeight(element.table_line_height_role, HISTORY_BODY_STYLE.line_height);
       return {
         ...fallback,
-        row: isV4 ? boundedInteger(element.row, fallback.row, 0, 200) : fallback.row,
-        row_span: isV4 ? boundedInteger(element.row_span, fallback.row_span, 1, 40) : fallback.row_span,
-        x: isV4 ? boundedInteger(element.x, fallback.x, 0, GRID_COLUMNS - 1) : fallback.x,
-        w: isV4 ? boundedInteger(element.w, fallback.w, 1, GRID_COLUMNS) : fallback.w,
+        row: isControlled ? boundedInteger(element.row, fallback.row ?? 0, 0, 200) : fallback.row,
+        row_span: isControlled ? boundedInteger(element.row_span, fallback.row_span ?? 1, 1, 40) : fallback.row_span,
+        x: isControlled ? boundedInteger(element.x, fallback.x, 0, GRID_COLUMNS - 1) : fallback.x,
+        w: isControlled ? boundedInteger(element.w, fallback.w, 1, GRID_COLUMNS) : fallback.w,
         page: requestedPage,
-        offset_y_pt: isV4
+        offset_y_pt: isControlled
           ? boundedNumber(element.offset_y_pt, 0, MIN_OFFSET_Y_PT, MAX_OFFSET_Y_PT)
           : boundedInteger(
             element.vertical_nudge_steps,
@@ -415,32 +434,36 @@ export function pageOnePresentation(value: unknown, blocks: ReviewBlock[], histo
         cell_padding_y_pt: boundedNumber(element.cell_padding_y_pt, 2, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max),
       };
     }
-    const footnoteHtml = !isV4
+    const footnoteHtml = !isControlled
       ? legacyFootnoteRichHtml(historicalFootnote, element.paragraph_styles)
       : typeof element.content_html === "string" && element.content_html.trim()
         ? migrateLegacyRichText(element.content_html)
         : plainTextToRichHtml(historicalFootnote);
     return {
       ...fallback,
-      row: isV4 ? boundedInteger(element.row, fallback.row, 0, 200) : fallback.row,
-      row_span: isV4 ? boundedInteger(element.row_span, fallback.row_span, 1, 40) : fallback.row_span,
-      x: isV4 ? boundedInteger(storedHistory?.x ?? element.x, fallback.x, 0, GRID_COLUMNS - 1) : fallback.x,
-      w: isV4 ? boundedInteger(storedHistory?.w ?? element.w, fallback.w, 1, GRID_COLUMNS) : fallback.w,
+      x: boundedInteger(
+        isV5 ? element.x : storedHistory?.x ?? element.x,
+        fallback.x, 0, GRID_COLUMNS - 1,
+      ),
+      w: boundedInteger(
+        isV5 ? element.w : storedHistory?.w ?? element.w,
+        fallback.w, 1, GRID_COLUMNS,
+      ),
       page: requestedPage,
-      gap_pt: isV4
-        ? boundedNumber(element.gap_pt, 6, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max)
-        : legacyFootnoteGapPt(element.bottom_nudge_steps),
-      content_html: footnoteHtml,
-      body_style: normalizeTextStyle(element.body_style, FOOTNOTE_BODY_STYLE),
+      footer_bottom_mm: isV5
+        ? boundedNumber(element.footer_bottom_mm, FOOTNOTE_BASELINE_BOTTOM_MM, FOOTNOTE_MIN_BOTTOM_MM, FOOTNOTE_MAX_BOTTOM_MM)
+        : FOOTNOTE_BASELINE_BOTTOM_MM,
+      content_html: plainTextToRichHtml(richHtmlToPlainText(footnoteHtml)),
+      body_style: normalizeFootnoteStyle(element.body_style),
     };
   });
 
   const history = elements.find((element) => element.id === "historical_performance");
   return {
-    schema_version: 2,
+    schema_version: 3,
     page_one: {
       review_page_count: requestedPageCount,
-      elements: elements.map((element) => element.id === "footnote:historical" && history ? { ...element, page: history.page, x: history.x, w: history.w } : element),
+      elements: elements.map((element) => element.id === "footnote:historical" && history ? { ...element, page: history.page } : element),
     },
   };
 }

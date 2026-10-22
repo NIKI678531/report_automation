@@ -284,6 +284,9 @@ def _footer_table(
     *,
     footnote_paragraphs: list[dict[str, Any]] | None = None,
     footnote_bottom_nudge_pt: float = 0,
+    footnote_font_size_pt: float = 10,
+    footnote_x: int = 0,
+    footnote_w: int = 12,
     dynamic_page_number: bool = False,
     profile_page_number: int | None = None,
 ) -> None:
@@ -295,7 +298,14 @@ def _footer_table(
     _clear_paragraph(anchor)
     profile_page_number = profile_page_number or page_number
     footnote_spacing_after = {1: 5.25, 3: 3.5, 4: 3.6}.get(profile_page_number, 2.5)
-    footnote_line_spacing = Pt(13.7) if profile_page_number == 3 and footnote else 1.0
+    footnote_line_spacing = (
+        Pt(footnote_font_size_pt * 1.2)
+        if footnote and footnote_font_size_pt == 8
+        else Pt(13.7) if profile_page_number == 3 and footnote
+        else 1.0
+    )
+    footnote_left_pt = 521.6 * max(0, footnote_x) / 12
+    footnote_right_pt = 521.6 * max(0, 12 - footnote_x - footnote_w) / 12
     if footnote_paragraphs is not None and footnote:
         for index, item in enumerate(footnote_paragraphs):
             paragraph = anchor if index == 0 else footer.add_paragraph()
@@ -308,15 +318,18 @@ def _footer_table(
             _format_paragraph(
                 paragraph,
                 alignment=alignment,
-                after=footnote_spacing_after
-                if index == len(footnote_paragraphs) - 1 else 1,
+                before=float(item.get("space_before_pt") or 0),
+                after=(
+                    float(item.get("space_after_pt") or 0)
+                    + (footnote_spacing_after if index == len(footnote_paragraphs) - 1 else 0)
+                ),
                 line_spacing=Pt(
                     float(item.get("font_size_pt") or 8)
                     * float(item.get("line_height") or 1.2)
                 ),
             )
-            paragraph.paragraph_format.left_indent = Pt(0.5)
-            paragraph.paragraph_format.right_indent = Pt(-7.5)
+            paragraph.paragraph_format.left_indent = Pt(footnote_left_pt + 0.5)
+            paragraph.paragraph_format.right_indent = Pt(footnote_right_pt - 7.5)
             run = paragraph.add_run(str(item.get("text") or ""))
             _set_run_font(
                 run,
@@ -331,10 +344,13 @@ def _footer_table(
             after=footnote_spacing_after if footnote else 0,
             line_spacing=footnote_line_spacing,
         )
-        anchor.paragraph_format.left_indent = Pt(0.5)
-        anchor.paragraph_format.right_indent = Pt(-7.5)
+        anchor.paragraph_format.left_indent = Pt(footnote_left_pt + 0.5)
+        anchor.paragraph_format.right_indent = Pt(footnote_right_pt - 7.5)
         if footnote:
-            _set_run_font(anchor.add_run(footnote), font_name, size=10, color=RGBColor(0, 0, 0))
+            _set_run_font(
+                anchor.add_run(footnote), font_name,
+                size=footnote_font_size_pt, color=RGBColor(0, 0, 0),
+            )
         else:
             anchor.paragraph_format.line_spacing = Pt(1)
             _set_run_font(anchor.add_run("\u200b"), font_name, size=1, color=RGBColor(255, 255, 255))
@@ -383,6 +399,9 @@ def _page_setup(
     footnote: str = "",
     footnote_paragraphs: list[dict[str, Any]] | None = None,
     footnote_bottom_nudge_pt: float = 0,
+    footnote_font_size_pt: float = 10,
+    footnote_x: int = 0,
+    footnote_w: int = 12,
     banner: dict | None = None,
     dynamic_page_number: bool = False,
     profile_page_number: int | None = None,
@@ -433,6 +452,9 @@ def _page_setup(
         font_name,
         footnote_paragraphs=footnote_paragraphs,
         footnote_bottom_nudge_pt=footnote_bottom_nudge_pt,
+        footnote_font_size_pt=footnote_font_size_pt,
+        footnote_x=footnote_x,
+        footnote_w=footnote_w,
         dynamic_page_number=dynamic_page_number,
         profile_page_number=profile_page_number,
     )
@@ -1246,11 +1268,11 @@ def _render_historical_docx(
 ) -> None:
     """Render the indivisible History/footnote group on its assigned opening page."""
 
-    is_v4 = bool(page_one and page_one.get("schema_version") == 2)
+    is_controlled = bool(page_one and page_one.get("schema_version") in {2, 3})
     historical = page_one["historical"] if page_one else {}
     content_parent = document
     content_width = usable_width
-    if is_v4:
+    if is_controlled:
         group_x = int(historical.get("x") or 0)
         group_w = int(historical.get("w") or 12)
         if group_x != 0 or group_w != 12:
@@ -1265,7 +1287,7 @@ def _render_historical_docx(
                 wrapper.rows[0].cells[group_x + group_w - 1]
             )
             content_width = sum(column_widths[group_x:group_x + group_w])
-    title_style = historical.get("title_style") if is_v4 else {}
+    title_style = historical.get("title_style") if is_controlled else {}
     if content_parent is document:
         history_heading = document.add_paragraph(style="Heading 1")
     else:
@@ -1292,10 +1314,10 @@ def _render_historical_docx(
             else 4
         ),
         line_spacing=Pt(title_size * float(title_style.get("line_height") or 1.0))
-        if is_v4 else 1.0,
+        if is_controlled else 1.0,
         keep_with_next=True,
     )
-    if is_v4:
+    if is_controlled:
         for run in history_heading.runs:
             _set_run_font(
                 run,
@@ -1336,15 +1358,15 @@ def _render_historical_docx(
         font_size=history_font_size,
         header_font_size=history_font_size,
         alignments=[WD_ALIGN_PARAGRAPH.LEFT] + [WD_ALIGN_PARAGRAPH.CENTER] * 4,
-        header_height_cm=None if is_v4 else 0.78 * history_height_scale,
-        row_height_cm=None if is_v4 else 0.62 * history_height_scale,
+        header_height_cm=None if is_controlled else 0.78 * history_height_scale,
+        row_height_cm=None if is_controlled else 0.62 * history_height_scale,
         line_height=history_line_height if page_one else None,
-        header_style=historical.get("header_style") if is_v4 else None,
-        body_style=historical.get("body_style") if is_v4 else None,
+        header_style=historical.get("header_style") if is_controlled else None,
+        body_style=historical.get("body_style") if is_controlled else None,
         cell_padding_y_pt=float(historical.get("cell_padding_y_pt") or 0)
-        if is_v4 else None,
+        if is_controlled else None,
     )
-    if is_v4:
+    if page_one and page_one.get("schema_version") == 2:
         footnote = page_one["footnote"]
         footnote_style = dict(footnote["body_style"])
         footnote_style["space_before_pt"] = (
@@ -1371,7 +1393,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     tokens = _render_tokens(str(content.get("design_token_version") or "3033-v1"))
     page_one = (
         page_one_presentation.resolve_for_render(content, tokens)
-        if content.get("template_version") in {"3033-v3", "3033-v4"}
+        if content.get("template_version") in {"3033-v3", "3033-v4", "3033-v5"}
         else None
     )
     if page_one is not None:
@@ -1389,23 +1411,43 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _configure_styles(document, tokens, language_mode)
     review = sections["month_in_review"]
     footnotes = sections.get("footnotes") or {}
-    is_v4 = bool(page_one and page_one.get("schema_version") == 2)
-    review_page_count = int(page_one.get("review_page_count") or 1) if is_v4 else 1
-    historical_page = int(page_one["historical"].get("page") or 1) if is_v4 else 1
-    if is_v4:
+    is_controlled = bool(page_one and page_one.get("schema_version") in {2, 3})
+    is_v5 = bool(page_one and page_one.get("schema_version") == 3)
+    review_page_count = int(page_one.get("review_page_count") or 1) if is_controlled else 1
+    historical_page = int(page_one["historical"].get("page") or 1) if is_controlled else 1
+    if is_controlled:
         update_fields = document.settings.element.find(qn("w:updateFields"))
         if update_fields is None:
             update_fields = OxmlElement("w:updateFields")
             document.settings.element.append(update_fields)
         update_fields.set(qn("w:val"), "true")
+    def opening_footnote_kwargs(page_number: int) -> dict[str, Any]:
+        if page_number == 1 and not is_controlled:
+            return {
+                "footnote": str(footnotes.get("historical") or ""),
+                "footnote_paragraphs": page_one["footnote"]["paragraphs"] if page_one else None,
+                "footnote_bottom_nudge_pt": page_one["footnote"]["bottom_nudge_pt"] if page_one else 0,
+            }
+        if not is_v5 or page_number != historical_page or page_one is None:
+            return {}
+        footnote = page_one["footnote"]
+        return {
+            "footnote": str(footnotes.get("historical") or ""),
+            "footnote_paragraphs": footnote["paragraphs"],
+            "footnote_bottom_nudge_pt": (
+                float(footnote["footer_bottom_mm"]) - 20.0
+            ) * 72 / 25.4,
+            "footnote_font_size_pt": 8,
+            "footnote_x": int(footnote["x"]),
+            "footnote_w": int(footnote["w"]),
+        }
+
     _page_setup(
         document.sections[0], 1, report, language_mode, tokens,
-        footnote="" if is_v4 else str(footnotes.get("historical") or ""),
-        footnote_paragraphs=(page_one["footnote"]["paragraphs"] if page_one and not is_v4 else None),
-        footnote_bottom_nudge_pt=(page_one["footnote"]["bottom_nudge_pt"] if page_one and not is_v4 else 0),
         banner=banner,
-        dynamic_page_number=is_v4,
+        dynamic_page_number=is_controlled,
         profile_page_number=1,
+        **opening_footnote_kwargs(1),
     )
     usable_width = _usable_width_twips(document.sections[0])
     title = document.add_heading((content.get("terminology_overrides") or {}).get("product_name") or report.product_name, 0)
@@ -1448,7 +1490,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
             blue_hex=blue_hex,
             deep=deep,
         )
-    if is_v4:
+    if is_controlled:
         for opening_page in range(2, review_page_count + 1):
             continuation = document.add_section(WD_SECTION.NEW_PAGE)
             _page_setup(
@@ -1460,6 +1502,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
                 banner=banner,
                 dynamic_page_number=True,
                 profile_page_number=2,
+                **opening_footnote_kwargs(opening_page),
             )
             if opening_page == historical_page:
                 _render_historical_docx(
@@ -1478,7 +1521,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     page2 = document.add_section(WD_SECTION.NEW_PAGE)
     _page_setup(
         page2, company_page_number, report, language_mode, tokens, banner=banner,
-        dynamic_page_number=is_v4, profile_page_number=2,
+        dynamic_page_number=is_controlled, profile_page_number=2,
     )
     news_heading = document.add_heading(titles["company_news"], 1)
     _format_paragraph(news_heading, before=3, after=5, keep_with_next=True)
@@ -1501,7 +1544,8 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _page_setup(
         page3, constituent_page_number, report, language_mode, tokens,
         footnote=str(footnotes.get("constituents") or ""), banner=banner,
-        dynamic_page_number=is_v4, profile_page_number=3,
+        footnote_font_size_pt=8 if is_v5 else 10,
+        dynamic_page_number=is_controlled, profile_page_number=3,
     )
     heading = document.add_heading(titles["constituent_performance"], 1)
     _format_paragraph(heading, alignment=WD_ALIGN_PARAGRAPH.CENTER, before=8, after=3, keep_with_next=True)
@@ -1535,7 +1579,8 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _page_setup(
         page4, analytics_page_number, report, language_mode, tokens,
         footnote=str(footnotes.get("analytics") or ""), banner=banner,
-        dynamic_page_number=is_v4, profile_page_number=4,
+        footnote_font_size_pt=8 if is_v5 else 10,
+        dynamic_page_number=is_controlled, profile_page_number=4,
     )
     analytics = sections["analytics"]
     outer = document.add_table(rows=1, cols=2)
@@ -1644,7 +1689,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     page5 = document.add_section(WD_SECTION.NEW_PAGE)
     _page_setup(
         page5, disclaimer_page_number, report, "EN", tokens, banner=banner,
-        dynamic_page_number=is_v4, profile_page_number=5,
+        dynamic_page_number=is_controlled, profile_page_number=5,
     )
     disclaimer_font = _font_name(tokens, "EN")
     disclaimer_heading = document.add_heading(disclaimer.title, 1)
@@ -1822,7 +1867,7 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
     editor provides its own immediate markers.
     """
 
-    if content.get("template_version") != "3033-v4":
+    if content.get("template_version") not in {"3033-v4", "3033-v5"}:
         return _inspect_legacy_page_one_layout(report, content)
 
     from playwright.sync_api import sync_playwright
@@ -1889,12 +1934,22 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
                         const pageRect = reportPage.getBoundingClientRect();
                         const bodyRect = pageBody.getBoundingClientRect();
                         const footerTop = footer.getBoundingClientRect().top;
-                        const softBottom = footerTop - minorToleranceMm * pxPerMm;
+                        const historicalFootnote = reportPage.querySelector(
+                            '[data-layout-id="footnote:historical"]'
+                        );
+                        const historicalFootnoteTop = historicalFootnote
+                            ? historicalFootnote.getBoundingClientRect().top
+                            : footerTop;
+                        const bodySafeBottom = Math.min(footerTop, historicalFootnoteTop);
                         const layoutNodes = Array.from(reportPage.querySelectorAll('[data-layout-id]'));
                         const measuredNodes = layoutNodes.length ? layoutNodes : [pageBody];
                         for (const node of measuredNodes) {
                             const elementId = node.dataset.layoutId || `page:${pageNumber}`;
                             const rect = node.getBoundingClientRect();
+                            const safeBottom = node === historicalFootnote
+                                ? footerTop
+                                : bodySafeBottom;
+                            const softBottom = safeBottom - minorToleranceMm * pxPerMm;
                             const horizontalBounds = node.closest('.page-body') ? bodyRect : pageRect;
                             const leftOverflow = horizontalBounds.left - rect.left;
                             const rightOverflow = rect.right - horizontalBounds.right;
@@ -1926,7 +1981,7 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
                             if (rect.bottom > softBottom + pixelTolerance) {
                                 const overflowMm = toMm(rect.bottom - softBottom);
                                 const withinTolerance = overflowMm <= minorToleranceMm + 0.001
-                                    && rect.bottom <= footerTop + pixelTolerance;
+                                    && rect.bottom <= safeBottom + pixelTolerance;
                                 findings.push(finding(
                                     withinTolerance ? 'PAGE_LAYOUT_TOLERANCE_USED' : 'PAGE_LAYOUT_VERTICAL_OVERFLOW',
                                     withinTolerance ? 'WARNING' : 'BLOCKING',
@@ -1970,12 +2025,12 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
                 }""", MINOR_LAYOUT_OVERFLOW_TOLERANCE_MM)
             finally:
                 browser.close()
-    if content.get("template_version") == "3033-v4" and isinstance(
+    if content.get("template_version") in {"3033-v4", "3033-v5"} and isinstance(
         content.get("presentation"), Mapping
     ):
         resolved = page_one_presentation.resolve_for_render(
             content,
-            _render_tokens(str(content.get("design_token_version") or "3033-v4")),
+            _render_tokens(str(content.get("design_token_version") or content.get("template_version"))),
         )
         style_owners: list[tuple[int, str, Mapping[str, Any]]] = []
         for block in resolved.get("review_blocks") or []:

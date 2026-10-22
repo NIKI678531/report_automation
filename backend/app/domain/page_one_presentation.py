@@ -38,7 +38,8 @@ from .rich_text import (
 
 
 LEGACY_PRESENTATION_SCHEMA_VERSION = 1
-PRESENTATION_SCHEMA_VERSION = 2
+V4_PRESENTATION_SCHEMA_VERSION = 2
+PRESENTATION_SCHEMA_VERSION = 3
 PAGE_COLUMNS = 12
 MAX_ROW = 200
 MAX_ROW_SPAN = 40
@@ -49,6 +50,9 @@ MIN_VERTICAL_NUDGE_STEPS = -200
 MAX_VERTICAL_NUDGE_STEPS = 200
 MIN_FOOTNOTE_BOTTOM_NUDGE_STEPS = -3
 MAX_FOOTNOTE_BOTTOM_NUDGE_STEPS = 4
+FOOTNOTE_BASELINE_BOTTOM_MM = 20.0
+FOOTNOTE_MIN_BOTTOM_MM = 16.0
+FOOTNOTE_MAX_BOTTOM_MM = 36.0
 
 # v3 positioned its historical footnote from the bottom of the page in 4pt steps. v4
 # expresses the same editor intent as a non-negative gap below the table. A 16pt migration
@@ -90,6 +94,9 @@ _V2_HISTORICAL_ELEMENT_KEYS = frozenset({
 })
 _V2_FOOTNOTE_ELEMENT_KEYS = frozenset({
     "id", "row", "row_span", "x", "w", "page", "gap_pt", "content_html", "body_style",
+})
+_V3_FOOTNOTE_ELEMENT_KEYS = frozenset({
+    "id", "x", "w", "page", "footer_bottom_mm", "content_html", "body_style",
 })
 
 
@@ -137,7 +144,8 @@ DEFAULT_HISTORY_BODY_STYLE = {
     "font_family": "Calibri",
     "text_align": "center",
 }
-DEFAULT_FOOTNOTE_BODY_STYLE = {**_style_defaults(9.0), "font_family": "Calibri"}
+DEFAULT_V4_FOOTNOTE_BODY_STYLE = {**_style_defaults(9.0), "font_family": "Calibri"}
+DEFAULT_FOOTNOTE_BODY_STYLE = {**_style_defaults(8.0), "font_family": "Calibri"}
 
 
 @dataclass(frozen=True)
@@ -277,6 +285,36 @@ def _normalize_locked_title_style(
     return result
 
 
+def _normalize_footnote_style(raw: object, *, field: str) -> dict[str, Any]:
+    """Lock shared footnote typography while retaining paragraph layout controls."""
+
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping) or set(raw) - _STYLE_KEYS:
+        raise PageOnePresentationError(
+            f"{field} must be an object containing only supported typography fields.", field
+        )
+    result = deepcopy(DEFAULT_FOOTNOTE_BODY_STYLE)
+    for key in ("line_height", "space_before_pt", "space_after_pt"):
+        if key in raw:
+            minimum, maximum = (
+                (LINE_HEIGHT_MIN, LINE_HEIGHT_MAX)
+                if key == "line_height"
+                else (SPACING_MIN_PT, SPACING_MAX_PT)
+            )
+            result[key] = _number(
+                raw.get(key), field=f"{field}.{key}", minimum=minimum, maximum=maximum
+            )
+    if "text_align" in raw:
+        alignment = str(raw.get("text_align") or "").casefold()
+        if alignment not in TEXT_ALIGNMENTS:
+            raise PageOnePresentationError(
+                f"Unsupported paragraph alignment: {alignment}.", f"{field}.text_align"
+            )
+        result["text_align"] = alignment
+    return result
+
+
 def _sanitize_footnote_html(value: object, field: str) -> str:
     html = str(value or "")
     if len(html) > 50_000:
@@ -292,6 +330,14 @@ def _sanitize_footnote_html(value: object, field: str) -> str:
         legacy_font_roles=FOOTNOTE_FONT_SIZE_ROLES,
         legacy_line_roles=LINE_HEIGHT_ROLES,
     )
+
+
+def _canonical_footnote_html(value: object, field: str) -> str:
+    """Keep paragraph text and Unicode markers but remove local typography overrides."""
+
+    sanitized = _sanitize_footnote_html(value, field)
+    plain = rich_text_plain_text(sanitized, preserve_paragraphs=True)
+    return plain_text_to_rich_text(plain)
 
 
 def _paragraph_count(value: object) -> int:
@@ -590,7 +636,9 @@ class PageOnePresentationResolver:
 
     @staticmethod
     def supports(content: Mapping[str, Any]) -> bool:
-        return content.get("template_version") in {"3033-v2", "3033-v3", "3033-v4"} or "presentation" in content
+        return content.get("template_version") in {
+            "3033-v2", "3033-v3", "3033-v4", "3033-v5",
+        } or "presentation" in content
 
     def adapt_document(self, content: Mapping[str, Any]) -> dict[str, Any]:
         """Return a canonical copy without mutating or persisting the source document."""
@@ -616,17 +664,24 @@ class PageOnePresentationResolver:
                 "sections.month_in_review.blocks",
             )
         if "presentation" not in result:
+            template_version = result.get("template_version")
             schema_version = (
                 PRESENTATION_SCHEMA_VERSION
-                if result.get("template_version") == "3033-v4"
+                if template_version == "3033-v5"
+                else V4_PRESENTATION_SCHEMA_VERSION
+                if template_version == "3033-v4"
                 else LEGACY_PRESENTATION_SCHEMA_VERSION
             )
             result["presentation"] = {
                 "schema_version": schema_version,
                 "page_one": {"elements": _legacy_elements(result)},
             }
-            if schema_version == PRESENTATION_SCHEMA_VERSION:
-                result = self._upgrade_v1_shape(result)
+            if schema_version in {V4_PRESENTATION_SCHEMA_VERSION, PRESENTATION_SCHEMA_VERSION}:
+                result = self._upgrade_v1_shape(
+                    result, target_schema=V4_PRESENTATION_SCHEMA_VERSION
+                )
+                if schema_version == PRESENTATION_SCHEMA_VERSION:
+                    result = self._upgrade_v2_shape(result)
         result["presentation"] = self._normalize_presentation(result)
         self._sync_v2_footnote_plain_text(result)
         self._sync_legacy_block_geometry(result)
@@ -656,7 +711,9 @@ class PageOnePresentationResolver:
             result["template_version"] = original_template
         presentation = result.get("presentation") or {}
         if presentation.get("schema_version") == LEGACY_PRESENTATION_SCHEMA_VERSION:
-            result = self._upgrade_v1_shape(result)
+            result = self._upgrade_v1_shape(
+                result, target_schema=V4_PRESENTATION_SCHEMA_VERSION
+            )
         if stamp_template:
             result["template_version"] = "3033-v4"
             result["design_token_version"] = "3033-v4"
@@ -665,7 +722,12 @@ class PageOnePresentationResolver:
         self._sync_legacy_block_geometry(result)
         return result
 
-    def _upgrade_v1_shape(self, content: Mapping[str, Any]) -> dict[str, Any]:
+    def _upgrade_v1_shape(
+        self,
+        content: Mapping[str, Any],
+        *,
+        target_schema: int = V4_PRESENTATION_SCHEMA_VERSION,
+    ) -> dict[str, Any]:
         result = deepcopy(dict(content))
         migrating_legacy_document = result.get("template_version") != "3033-v4"
         presentation = result.get("presentation") or {}
@@ -737,12 +799,70 @@ class PageOnePresentationResolver:
                         if migrating_legacy_document
                         else plain_text_to_rich_text(footnote_plain)
                     ),
-                    "body_style": deepcopy(DEFAULT_FOOTNOTE_BODY_STYLE),
+                    "body_style": deepcopy(DEFAULT_V4_FOOTNOTE_BODY_STYLE),
                 })
         result["presentation"] = {
-            "schema_version": PRESENTATION_SCHEMA_VERSION,
+            "schema_version": target_schema,
             "page_one": {"review_page_count": 1, "elements": upgraded},
         }
+        return result
+
+    def _upgrade_v2_shape(self, content: Mapping[str, Any]) -> dict[str, Any]:
+        """Move the v4 body footnote into the v5 footer positioning contract."""
+
+        result = deepcopy(dict(content))
+        presentation = result.get("presentation") or {}
+        page_one = presentation.get("page_one") or {}
+        upgraded: list[dict[str, Any]] = []
+        for raw in page_one.get("elements") or []:
+            if not isinstance(raw, Mapping) or raw.get("id") != HISTORICAL_FOOTNOTE_ID:
+                upgraded.append(deepcopy(raw))
+                continue
+            upgraded.append({
+                "id": HISTORICAL_FOOTNOTE_ID,
+                "x": raw.get("x", 0),
+                "w": raw.get("w", PAGE_COLUMNS),
+                "page": raw.get("page", 1),
+                "footer_bottom_mm": FOOTNOTE_BASELINE_BOTTOM_MM,
+                "content_html": _canonical_footnote_html(
+                    raw.get("content_html"),
+                    "presentation.page_one.elements.footnote:historical.content_html",
+                ),
+                "body_style": _normalize_footnote_style(
+                    raw.get("body_style"),
+                    field="presentation.page_one.elements.footnote:historical.body_style",
+                ),
+            })
+        result["presentation"] = {
+            "schema_version": PRESENTATION_SCHEMA_VERSION,
+            "page_one": {
+                "review_page_count": page_one.get("review_page_count", 1),
+                "elements": upgraded,
+            },
+        }
+        return result
+
+    def upgrade_document_to_v5(
+        self,
+        content: Mapping[str, Any],
+        *,
+        stamp_template: bool = True,
+    ) -> dict[str, Any]:
+        """Adapt an editable v1-v4 draft to the footer-footnote v5 contract."""
+
+        source = deepcopy(dict(content))
+        original_template = str(source.get("template_version") or "")
+        if original_template == "3033-v5":
+            result = self.adapt_document(source)
+        else:
+            result = self.upgrade_document_to_v4(source, stamp_template=False)
+            result = self._upgrade_v2_shape(result)
+        if stamp_template:
+            result["template_version"] = "3033-v5"
+            result["design_token_version"] = "3033-v5"
+        result["presentation"] = self._normalize_presentation(result)
+        self._sync_v2_footnote_plain_text(result)
+        self._sync_legacy_block_geometry(result)
         return result
 
     def reconcile_submission(
@@ -759,7 +879,7 @@ class PageOnePresentationResolver:
 
         result = deepcopy(dict(submitted))
         current_template = str((current or {}).get("template_version") or "")
-        current_is_controlled = current_template in {"3033-v3", "3033-v4"}
+        current_is_controlled = current_template in {"3033-v3", "3033-v4", "3033-v5"}
         if current_is_controlled and not isinstance(result.get("presentation"), Mapping):
             raise PageOnePresentationError(
                 "A controlled-layout document must include its page-one presentation.",
@@ -767,9 +887,16 @@ class PageOnePresentationResolver:
             )
         if current_template == "3033-v4" and result["presentation"].get(
             "schema_version"
+        ) not in {V4_PRESENTATION_SCHEMA_VERSION, PRESENTATION_SCHEMA_VERSION}:
+            raise PageOnePresentationError(
+                "An editable v4 document must use the v4 or adapted v5 presentation schema.",
+                "presentation.schema_version",
+            )
+        if current_template == "3033-v5" and result["presentation"].get(
+            "schema_version"
         ) != PRESENTATION_SCHEMA_VERSION:
             raise PageOnePresentationError(
-                f"A v4 document must use presentation.schema_version={PRESENTATION_SCHEMA_VERSION}.",
+                f"A v5 document must use presentation.schema_version={PRESENTATION_SCHEMA_VERSION}.",
                 "presentation.schema_version",
             )
         if not self.supports(result):
@@ -786,18 +913,20 @@ class PageOnePresentationResolver:
             if isinstance(result.get("presentation"), Mapping)
             else None
         )
-        if incoming_schema == LEGACY_PRESENTATION_SCHEMA_VERSION or not isinstance(
+        if incoming_schema in {
+            LEGACY_PRESENTATION_SCHEMA_VERSION, V4_PRESENTATION_SCHEMA_VERSION,
+        } or not isinstance(
             result.get("presentation"), Mapping
         ):
-            result = self.upgrade_document_to_v4(result)
-        elif current_template in {"3033-v1", "3033-v2", "3033-v3"}:
+            result = self.upgrade_document_to_v5(result)
+        elif current_template in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}:
             # The read adapter already gave this client a v2 presentation.  Do not normalize it
             # before the compatibility reconciliation below has removed unchanged legacy orphans.
-            result["template_version"] = "3033-v4"
-            result["design_token_version"] = "3033-v4"
+            result["template_version"] = "3033-v5"
+            result["design_token_version"] = "3033-v5"
         baseline = (
-            self.upgrade_document_to_v4(current)
-            if current_template in {"3033-v1", "3033-v2", "3033-v3"}
+            self.upgrade_document_to_v5(current)
+            if current_template in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}
             else self.adapt_document(current)
         )
         incoming_presentation = result.get("presentation")
@@ -872,7 +1001,7 @@ class PageOnePresentationResolver:
         # carrying the untouched presentation returned by the read adapter.  Preserve that
         # one-time migration path by rebuilding only the Review elements from the submitted block
         # geometry.  Once the document is v4, identities stay fixed as before.
-        if current_template in {"3033-v1", "3033-v2", "3033-v3"}:
+        if current_template in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}:
             baseline_review_element_ids = {
                 element_id for element_id in baseline_elements
                 if element_id.startswith(REVIEW_ID_PREFIX)
@@ -1055,10 +1184,7 @@ class PageOnePresentationResolver:
                 (sum(_layout_geometry(element)[:2]) for element in review_elements),
                 default=0,
             )
-            for element_id, row in (
-                (HISTORICAL_PERFORMANCE_ID, max_bottom),
-                (HISTORICAL_FOOTNOTE_ID, max_bottom + 1),
-            ):
+            for element_id, row in ((HISTORICAL_PERFORMANCE_ID, max_bottom),):
                 incoming_element = incoming_elements.get(element_id)
                 baseline_element = baseline_elements.get(element_id)
                 if (
@@ -1105,7 +1231,9 @@ class PageOnePresentationResolver:
         elements = page_one.get("elements") if isinstance(page_one, Mapping) else None
         if not isinstance(elements, list):
             return result
-        if presentation.get("schema_version") == PRESENTATION_SCHEMA_VERSION:
+        if presentation.get("schema_version") in {
+            V4_PRESENTATION_SCHEMA_VERSION, PRESENTATION_SCHEMA_VERSION,
+        }:
             footnote_text = str(
                 (((result.get("sections") or {}).get("footnotes") or {}).get("historical")) or ""
             )
@@ -1161,7 +1289,7 @@ class PageOnePresentationResolver:
 
         document = self.adapt_document(content)
         schema_version = document["presentation"]["schema_version"]
-        if schema_version == PRESENTATION_SCHEMA_VERSION:
+        if schema_version in {V4_PRESENTATION_SCHEMA_VERSION, PRESENTATION_SCHEMA_VERSION}:
             return self._resolve_v2_for_render(document)
         raw_elements = document["presentation"]["page_one"]["elements"]
         review_tokens = tokens.get("review") if isinstance(tokens.get("review"), Mapping) else {}
@@ -1366,6 +1494,8 @@ class PageOnePresentationResolver:
                 "font_size_pt": footnote["body_style"]["font_size_pt"],
                 "line_height": footnote["body_style"]["line_height"],
                 "text_align": footnote["body_style"]["text_align"],
+                "space_before_pt": footnote["body_style"]["space_before_pt"],
+                "space_after_pt": footnote["body_style"]["space_after_pt"],
             }
             for index, text in enumerate(paragraphs)
         ]
@@ -1379,7 +1509,7 @@ class PageOnePresentationResolver:
             for page in range(1, page_count + 1)
         ]
         return {
-            "schema_version": PRESENTATION_SCHEMA_VERSION,
+            "schema_version": document["presentation"]["schema_version"],
             "document": deepcopy(dict(document)),
             "review_page_count": page_count,
             "review_pages": review_pages,
@@ -1406,14 +1536,15 @@ class PageOnePresentationResolver:
             raise PageOnePresentationError("presentation must be an object.", "presentation")
         schema_version = raw.get("schema_version")
         if type(schema_version) is not int or schema_version not in {
-            LEGACY_PRESENTATION_SCHEMA_VERSION, PRESENTATION_SCHEMA_VERSION,
+            LEGACY_PRESENTATION_SCHEMA_VERSION,
+            V4_PRESENTATION_SCHEMA_VERSION,
+            PRESENTATION_SCHEMA_VERSION,
         }:
             raise PageOnePresentationError(
-                f"presentation.schema_version must be {LEGACY_PRESENTATION_SCHEMA_VERSION} or "
-                f"{PRESENTATION_SCHEMA_VERSION}.",
+                "presentation.schema_version must be 1, 2, or 3.",
                 "presentation.schema_version",
             )
-        if schema_version == PRESENTATION_SCHEMA_VERSION:
+        if schema_version in {V4_PRESENTATION_SCHEMA_VERSION, PRESENTATION_SCHEMA_VERSION}:
             return self._normalize_presentation_v2(content)
         return self._normalize_presentation_v1(content)
 
@@ -1673,6 +1804,8 @@ class PageOnePresentationResolver:
             raise PageOnePresentationError(
                 "presentation contains unsupported fields.", "presentation"
             )
+        schema_version = raw.get("schema_version")
+        is_v5 = schema_version == PRESENTATION_SCHEMA_VERSION
         page_one = raw.get("page_one")
         if not isinstance(page_one, Mapping) or set(page_one) - {"review_page_count", "elements"}:
             raise PageOnePresentationError(
@@ -1741,26 +1874,31 @@ class PageOnePresentationResolver:
                 _V2_REVIEW_ELEMENT_KEYS if is_review
                 else _V2_HISTORICAL_ELEMENT_KEYS
                 if element_id == HISTORICAL_PERFORMANCE_ID
+                else _V3_FOOTNOTE_ELEMENT_KEYS if is_v5
                 else _V2_FOOTNOTE_ELEMENT_KEYS
             )
             if set(raw_element) - allowed:
                 raise PageOnePresentationError(
                     f"Page-one element {element_id} contains unsupported fields.", field, element_id
                 )
-            row = _int(raw_element.get("row"), field=f"{field}.row", minimum=0, maximum=MAX_ROW)
-            row_span = _int(
-                raw_element.get("row_span"), field=f"{field}.row_span",
-                minimum=1, maximum=MAX_ROW_SPAN,
-            )
             x = _int(raw_element.get("x"), field=f"{field}.x", minimum=0, maximum=PAGE_COLUMNS - 1)
             width = _int(raw_element.get("w"), field=f"{field}.w", minimum=1, maximum=PAGE_COLUMNS)
             if x + width > PAGE_COLUMNS:
                 raise PageOnePresentationError(
                     f"Page-one element {element_id} exceeds the 12-column canvas.", field, element_id
                 )
-            normalized: dict[str, Any] = {
-                "id": element_id, "row": row, "row_span": row_span, "x": x, "w": width,
-            }
+            normalized: dict[str, Any] = {"id": element_id, "x": x, "w": width}
+            if not (is_v5 and element_id == HISTORICAL_FOOTNOTE_ID):
+                normalized.update({
+                    "row": _int(
+                        raw_element.get("row"), field=f"{field}.row",
+                        minimum=0, maximum=MAX_ROW,
+                    ),
+                    "row_span": _int(
+                        raw_element.get("row_span"), field=f"{field}.row_span",
+                        minimum=1, maximum=MAX_ROW_SPAN,
+                    ),
+                })
             if is_review:
                 normalized.update({
                     "vertical_nudge_steps": _int(
@@ -1816,18 +1954,38 @@ class PageOnePresentationResolver:
                         raw_element.get("page"), field=f"{field}.page",
                         minimum=1, maximum=MAX_REVIEW_PAGES,
                     ),
-                    "gap_pt": _number(
-                        raw_element.get("gap_pt", 6), field=f"{field}.gap_pt",
-                        minimum=SPACING_MIN_PT, maximum=SPACING_MAX_PT,
+                    "content_html": (
+                        _canonical_footnote_html(
+                            raw_element.get("content_html"), f"{field}.content_html"
+                        )
+                        if is_v5 else
+                        _sanitize_footnote_html(
+                            raw_element.get("content_html"), f"{field}.content_html"
+                        )
                     ),
-                    "content_html": _sanitize_footnote_html(
-                        raw_element.get("content_html"), f"{field}.content_html"
-                    ),
-                    "body_style": _normalize_style(
-                        raw_element.get("body_style"), field=f"{field}.body_style",
-                        defaults=DEFAULT_FOOTNOTE_BODY_STYLE,
+                    "body_style": (
+                        _normalize_footnote_style(
+                            raw_element.get("body_style"), field=f"{field}.body_style"
+                        )
+                        if is_v5 else
+                        _normalize_style(
+                            raw_element.get("body_style"), field=f"{field}.body_style",
+                            defaults=DEFAULT_V4_FOOTNOTE_BODY_STYLE,
+                        )
                     ),
                 })
+                if is_v5:
+                    normalized["footer_bottom_mm"] = _number(
+                        raw_element.get("footer_bottom_mm", FOOTNOTE_BASELINE_BOTTOM_MM),
+                        field=f"{field}.footer_bottom_mm",
+                        minimum=FOOTNOTE_MIN_BOTTOM_MM,
+                        maximum=FOOTNOTE_MAX_BOTTOM_MM,
+                    )
+                else:
+                    normalized["gap_pt"] = _number(
+                        raw_element.get("gap_pt", 6), field=f"{field}.gap_pt",
+                        minimum=SPACING_MIN_PT, maximum=SPACING_MAX_PT,
+                    )
             normalized_elements.append(normalized)
             ids.add(element_id)
 
@@ -1860,7 +2018,7 @@ class PageOnePresentationResolver:
                 "The Historical Performance page must exist in review_page_count.",
                 "presentation.page_one.review_page_count", HISTORICAL_PERFORMANCE_ID,
             )
-        if (historical["x"], historical["w"]) != (footnote["x"], footnote["w"]):
+        if not is_v5 and (historical["x"], historical["w"]) != (footnote["x"], footnote["w"]):
             raise PageOnePresentationError(
                 "Historical Performance and its footnote must share x and w alignment.",
                 "presentation.page_one.elements", HISTORICAL_FOOTNOTE_ID,
@@ -1874,7 +2032,7 @@ class PageOnePresentationResolver:
                 "Historical Performance must follow all Review blocks when placed on page 1.",
                 "presentation.page_one.elements", HISTORICAL_PERFORMANCE_ID,
             )
-        if footnote["row"] < historical["row"] + historical["row_span"]:
+        if not is_v5 and footnote["row"] < historical["row"] + historical["row_span"]:
             raise PageOnePresentationError(
                 "The historical footnote must follow Historical Performance.",
                 "presentation.page_one.elements", HISTORICAL_FOOTNOTE_ID,
@@ -1884,7 +2042,7 @@ class PageOnePresentationResolver:
             normalized_elements,
             key=lambda item: (
                 1 if item["id"].startswith(REVIEW_ID_PREFIX) else item["page"],
-                item["row"], item["x"], item["id"],
+                item.get("row", MAX_ROW + 1), item["x"], item["id"],
             ),
         )
         for index, left in enumerate(ordered):
@@ -1892,6 +2050,8 @@ class PageOnePresentationResolver:
             for right in ordered[index + 1:]:
                 right_page = 1 if right["id"].startswith(REVIEW_ID_PREFIX) else right["page"]
                 if right_page != left_page:
+                    continue
+                if is_v5 and HISTORICAL_FOOTNOTE_ID in {left["id"], right["id"]}:
                     continue
                 horizontal = left["x"] < right["x"] + right["w"] and right["x"] < left["x"] + left["w"]
                 vertical = left["row"] < right["row"] + right["row_span"] and right["row"] < left["row"] + left["row_span"]
@@ -1901,7 +2061,7 @@ class PageOnePresentationResolver:
                         "presentation.page_one.elements", left["id"],
                     )
         return {
-            "schema_version": PRESENTATION_SCHEMA_VERSION,
+            "schema_version": schema_version,
             "page_one": {"review_page_count": page_count, "elements": ordered},
         }
 
@@ -1996,7 +2156,9 @@ class PageOnePresentationResolver:
     @staticmethod
     def _sync_v2_footnote_plain_text(content: dict[str, Any]) -> None:
         presentation = content.get("presentation") or {}
-        if presentation.get("schema_version") != PRESENTATION_SCHEMA_VERSION:
+        if presentation.get("schema_version") not in {
+            V4_PRESENTATION_SCHEMA_VERSION, PRESENTATION_SCHEMA_VERSION,
+        }:
             return
         elements = ((presentation.get("page_one") or {}).get("elements") or [])
         footnote = next(
@@ -2040,9 +2202,12 @@ class PageOnePresentationResolver:
                     "w": element["w"],
                     "h": element["row_span"],
                 })
+        presentation_schema_version = content["presentation"].get("schema_version")
         review["layout_schema_version"] = (
-            4
-            if content["presentation"].get("schema_version") == PRESENTATION_SCHEMA_VERSION
+            5
+            if presentation_schema_version == PRESENTATION_SCHEMA_VERSION
+            else 4
+            if presentation_schema_version == V4_PRESENTATION_SCHEMA_VERSION
             else 3
         )
 

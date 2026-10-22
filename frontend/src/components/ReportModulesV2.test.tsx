@@ -523,7 +523,7 @@ describe("report module data responsibilities", () => {
           }),
         }),
         presentation: expect.objectContaining({
-          schema_version: 2,
+          schema_version: 3,
           page_one: expect.objectContaining({
             elements: expect.arrayContaining([expect.objectContaining({
               id: "review:summary",
@@ -536,7 +536,7 @@ describe("report module data responsibilities", () => {
     ));
   });
 
-  it("keeps migrated v3 footnote paragraph styles and nudges in the Review save payload", async () => {
+  it("migrates a v3 footnote into the locked v5 footer save payload", async () => {
     const legacyReport = structuredClone(report);
     const content = legacyReport.latest_document!.content as Record<string, unknown>;
     const sections = content.sections as Record<string, Record<string, unknown>>;
@@ -585,11 +585,12 @@ describe("report module data responsibilities", () => {
     const history = presentation.page_one.elements.find((element) => element.id === "historical_performance");
     const footnote = presentation.page_one.elements.find((element) => element.id === "footnote:historical");
 
-    expect(presentation.schema_version).toBe(2);
+    expect(presentation.schema_version).toBe(3);
     expect(history).toMatchObject({ offset_y_pt: 15 });
     expect(footnote).toMatchObject({
-      gap_pt: 8,
-      content_html: '<p data-line-height="1" data-text-align="left"><span data-font-size-pt="8">First paragraph.</span></p><p data-line-height="1.4" data-text-align="justify"><span data-font-size-pt="10">Second paragraph.</span></p>',
+      footer_bottom_mm: 20,
+      body_style: expect.objectContaining({ font_size_pt: 8 }),
+      content_html: "<p>First paragraph.</p><p>Second paragraph.</p>",
     });
     expect((saved.sections as Record<string, Record<string, unknown>>).footnotes.historical)
       .toBe("First paragraph.\n\nSecond paragraph.");
@@ -679,7 +680,7 @@ describe("report module data responsibilities", () => {
       sections: expect.objectContaining({
         footnotes: expect.objectContaining({ historical: "Unsaved footnote draft." }),
       }),
-      presentation: expect.objectContaining({ schema_version: 2 }),
+      presentation: expect.objectContaining({ schema_version: 3 }),
     }));
 
     pending[1].resolve('<html><body data-preview="new"></body></html>');

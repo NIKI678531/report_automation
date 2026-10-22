@@ -44,7 +44,7 @@ def lock_report(db: Session, report: Report) -> None:
 
 
 def document_content_for_read(report: Report, document: ReportDocument) -> dict[str, Any]:
-    """Return an in-memory v4 adapter for editable legacy documents.
+    """Return an in-memory v5 adapter for editable legacy documents.
 
     Finalized and archived documents keep their exact locked layout.  No ORM JSON value is
     mutated: callers receive a deep copy even when no adaptation is needed.
@@ -52,17 +52,17 @@ def document_content_for_read(report: Report, document: ReportDocument) -> dict[
 
     content = deepcopy(document.content)
     if (
-        document.template_version in {"3033-v1", "3033-v2", "3033-v3"}
+        document.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}
         and report.status not in {ReportStatus.FINALIZED, ReportStatus.ARCHIVED}
     ):
         # v1 has no presentation-aware renderer, so never expose the invalid hybrid
         # ``template_version=v1`` + ``presentation.schema_version=2``.  This is still an
         # in-memory read adapter; persistence and the report identity change on first save.
-        return page_one_presentation.upgrade_document_to_v4(
+        return page_one_presentation.upgrade_document_to_v5(
             content,
             stamp_template=document.template_version == "3033-v1",
         )
-    return page_one_presentation.adapt_document(content) if document.template_version == "3033-v4" else content
+    return page_one_presentation.adapt_document(content) if document.template_version == "3033-v5" else content
 
 
 def canonicalize_document_content(
@@ -75,13 +75,13 @@ def canonicalize_document_content(
     """Purely restamp, reconcile and validate submitted document content.
 
     Persistence and audit stay with :func:`update_document`; draft preview calls this same seam
-    without creating a version. Editable v1-v3 reports are upgraded to v4 in the returned value,
+    without creating a version. Editable v1-v4 reports are upgraded to v5 in the returned value,
     allowing the caller to persist report/document/template identities atomically afterwards.
     """
 
     target_template_version = (
-        "3033-v4"
-        if report.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}
+        "3033-v5"
+        if report.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4", "3033-v5"}
         else report.template_version
     )
     canonical = page_one_presentation.reconcile_submission(
@@ -95,7 +95,7 @@ def canonicalize_document_content(
         "benchmark_name": product.benchmark_instrument_name or product.benchmark_instrument_code,
         "template_version": target_template_version,
         "design_token_version": (
-            "3033-v4" if target_template_version == "3033-v4" else product.design_token_version
+            "3033-v5" if target_template_version == "3033-v5" else product.design_token_version
         ),
         "language_mode": report.language_mode,
         "snapshot_id": report.active_snapshot_id,
@@ -244,7 +244,7 @@ def ai_assisted_draft(db: Session, report: Report, expected_version: int, user_p
         outlook = user_prompt or "Complete the outlook using approved investment commentary."
     review = content["sections"]["month_in_review"]
     replace_placeholder_blocks = (
-        content.get("template_version") in {"3033-v3", "3033-v4"}
+        content.get("template_version") in {"3033-v3", "3033-v4", "3033-v5"}
         and not has_substantive_review_blocks(review)
     )
     review["summary"] = summary

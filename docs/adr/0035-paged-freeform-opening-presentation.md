@@ -3,6 +3,7 @@
 - 日期：2026-09-29
 - 状态：已接受
 - 取代部分：[ADR-0033](0033-controlled-page-one-presentation.md)
+- 后续修订：Historical Performance 与脚注必须作为正文同宽组合的规定已由 [ADR-0039](0039-review-footer-footnote.md) 在 `3033-v5` 中取代
 - 关联：[ADR-0014](0014-advisory-release-checks-and-direct-downloads.md)、[ADR-0017](0017-continuous-html-and-paged-documents.md)、[ADR-0032](0032-fixed-fifth-page-compliance-disclaimer.md)
 
 ## 背景
@@ -17,6 +18,7 @@
 - `3033-v4` 使用 `presentation.schema_version=2`。四个 Review 模块仍在 opening 第 1 页，保存
   十二列拓扑、可调高度与正文样式。Historical Performance 和历史脚注组成同页、同宽、
   不可拆分的布局组；组可位于 opening 第 1 至 96 页，报告总页数因此最多为 100 页。
+  此组合规则仅描述 v4；v5 起两者只保持同页，脚注改由可调的安全页脚带承载，详见 ADR-0039。
 - 续页只由明确的移动操作创建。正文溢出只显示诊断，不自动分页。每个 opening 页重复正式页眉、
   Logo、页脚和连续页码；Company News、Constituents、Analytics 与免责声明顺次后移，免责声明仍
   是最后一页。连续 HTML 继续遵循 ADR-0017，不显示运行页眉页脚。

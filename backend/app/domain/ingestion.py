@@ -29,10 +29,10 @@ from app.domain.models import MappingProfile
 from app.domain.validation import BLOCKING, INFO, WARNING, FindingCollector
 
 # Fields the constituent-identity slot is authoritative for.
-IDENTITY_FIELDS = ("security_code", "ticker", "name_en", "name_zh_hans", "name_zh_hant", "close_price", "currency", "weight", "as_of_date", "source_codes")
+IDENTITY_FIELDS = ("security_code", "ticker", "name_en", "name_zh_hant", "close_price", "currency", "weight", "as_of_date", "source_codes")
 RETURN_FIELDS = ("return_1m", "return_3m", "return_6m", "return_ytd")
 CONSTITUENT_PERFORMANCE_COLUMNS = (
-    "index_code", "as_of_date", "security_code", "ticker", "name_en", "name_zh_hans", "name_zh_hant",
+    "index_code", "as_of_date", "security_code", "ticker", "name_en", "name_zh_hant",
     "close_price", "currency", "weight_pct", "source_industry_code", "period_end",
     "period_start_1m", "return_1m_pct", "return_1m_missing_reason",
     "period_start_3m", "return_3m_pct", "return_3m_missing_reason",
@@ -40,7 +40,6 @@ CONSTITUENT_PERFORMANCE_COLUMNS = (
     "period_start_ytd", "return_ytd_pct", "return_ytd_missing_reason",
     "constituent_source", "return_source",
 )
-OPTIONAL_CONSTITUENT_PERFORMANCE_COLUMNS = frozenset({"name_zh_hans"})
 
 
 @dataclass(frozen=True)
@@ -105,10 +104,6 @@ def _normalize_header(value: Any) -> str:
 def _field_aliases(profile: MappingProfile, field: str) -> tuple[str, ...]:
     config = (profile.field_map or {}).get(field, {})
     aliases = config.get("aliases", []) if isinstance(config, dict) else []
-    # Simplified Chinese was added after the first approved HSI mapping profile.  Keep that
-    # immutable profile valid while accepting the canonical source/export column directly.
-    if field == "name_zh_hans":
-        aliases = [*aliases, "name_zh_hans", "Stk Name_SC"]
     return tuple(_normalize_header(value) for value in aliases if str(value).strip())
 
 
@@ -205,9 +200,6 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
     records = imports._records_from_csv(data)
     rows: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
-    index_codes: set[str] = set()
-    as_of_dates: set[date] = set()
-    reported_date_findings: set[tuple[str, date]] = set()
     for index, row in enumerate(records, start=2):
         raw_code = _mapped_value(row, "security_code", profile)
         if raw_code in (None, ""):
@@ -231,73 +223,15 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
         elif weight_unit != "RATIO":
             collector.add("MAP-003", "Weight unit is not explicit in the mapping profile.", row=index, field="weight", entity_id=code, fix_hint="Set weight to PERCENT or RATIO in unit_map.")
             continue
-        product_date = _row_date(_mapped_value(row, "as_of_date", profile), index, collector)
-        trade_date = _row_date(_mapped_value(row, "trade_date", profile), index, collector)
-        if product_date and trade_date and product_date != trade_date:
-            collector.add(
-                "CONSTITUENT_DATE_MISMATCH",
-                f"Prod Dt {product_date.isoformat()} differs from Tradate {trade_date.isoformat()}.",
-                row=index,
-                field="Tradate",
-                entity_id=code,
-                fix_hint="Export one end-of-day constituent file whose production and trade dates agree.",
-            )
-            continue
-        as_of = product_date or trade_date or report_date
+        as_of = _row_date(_mapped_value(row, "as_of_date", profile) or _mapped_value(row, "trade_date", profile), index, collector) or report_date
         if as_of > report_date:
-            finding_key = ("AS_OF_AFTER_REPORT_DATE", as_of)
-            if finding_key not in reported_date_findings:
-                collector.add(
-                    "AS_OF_AFTER_REPORT_DATE",
-                    f"Constituent file date {as_of.isoformat()} is later than the selected report date {report_date.isoformat()}.",
-                    field="Prod Dt",
-                    fix_hint=f"Select or create the {as_of:%Y-%m} report before uploading this file.",
-                )
-                reported_date_findings.add(finding_key)
-            continue
-        if not _same_report_month(as_of, report_date):
-            finding_key = ("REPORT_MONTH_MISMATCH", as_of)
-            if finding_key not in reported_date_findings:
-                collector.add(
-                    "REPORT_MONTH_MISMATCH",
-                    f"Constituent file date {as_of.isoformat()} does not match selected report month {report_date:%Y-%m}.",
-                    field="Prod Dt",
-                    fix_hint=f"Select or create the {as_of:%Y-%m} report before uploading this file.",
-                )
-                reported_date_findings.add(finding_key)
-            continue
-        incoming_index = str(_direct_value(row, "Idx Cde") or "").strip().upper()
-        if not incoming_index:
-            collector.add(
-                "CONSTITUENT_INDEX_MISSING",
-                "Idx Cde is required on every HSI constituent row.",
-                row=index,
-                field="Idx Cde",
-                entity_id=code,
-                fix_hint="Export the constituent file with its index-code column intact.",
-            )
-            continue
-        index_codes.add(incoming_index)
-        as_of_dates.add(as_of)
-        name_en = _text(_mapped_value(row, "name_en", profile))
-        name_zh_hans = _text(_mapped_value(row, "name_zh_hans", profile))
-        name_zh_hant = _text(_mapped_value(row, "name_zh_hant", profile))
-        if not name_en and not name_zh_hans and not name_zh_hant:
-            collector.add(
-                "CONSTITUENT_NAME_MISSING",
-                f"Security {code} has no English or Traditional Chinese name.",
-                row=index,
-                field="Stk Name_E",
-                entity_id=code,
-                fix_hint="Provide at least one approved constituent display name.",
-            )
+            collector.add("AS_OF_AFTER_REPORT_DATE", f"Row date {as_of.isoformat()} is later than the report date {report_date.isoformat()}.", row=index, field="Prod Dt", entity_id=code, fix_hint="Upload the end-of-day file for the report month.")
             continue
         rows.append({
             "security_code": code,
             "ticker": f"{code.zfill(4)}.HK",
-            "name_en": name_en or "",
-            "name_zh_hans": name_zh_hans or "",
-            "name_zh_hant": name_zh_hant or "",
+            "name_en": str(_mapped_value(row, "name_en", profile) or code).strip(),
+            "name_zh_hant": str(_mapped_value(row, "name_zh_hant", profile) or "").strip(),
             "close_price": str(value) if (value := _profile_number(row, "close_price", index, collector, profile, code)) is not None else None,
             "currency": str(_mapped_value(row, "currency", profile) or "").strip().upper(),
             "weight": str(weight),
@@ -310,36 +244,13 @@ def parse_index_constituents(filename: str, data: bytes, report_date: date, coll
             },
         })
     if not rows:
-        if not reported_date_findings:
-            collector.add("DATASET_EMPTY", "No usable constituent rows were found.", fix_hint="Check that the file is the HSTECH end-of-day constituent export.")
+        collector.add("DATASET_EMPTY", "No usable constituent rows were found.", fix_hint="Check that the file is the HSTECH end-of-day constituent export.")
         return {}
-    if len(index_codes) != 1:
-        collector.add(
-            "CONSTITUENT_INDEX_INCONSISTENT",
-            f"The file contains multiple index codes: {', '.join(sorted(index_codes))}.",
-            field="Idx Cde",
-            fix_hint="Upload one index constituent export per file.",
-        )
-    if len(as_of_dates) != 1:
-        collector.add(
-            "CONSTITUENT_AS_OF_INCONSISTENT",
-            "All constituent rows must have the same Prod Dt/Tradate.",
-            field="Prod Dt",
-            fix_hint="Upload one end-of-day constituent export per file.",
-        )
-    # The weight total is QC-002's job, not the parser's. It used to be raised here as a WARNING
-    # as well, which contradicted the spec (CAL-001: blocking) and put two findings of different
-    # severity on the same import record for one fact.
+    total = sum((Decimal(row["weight"]) for row in rows), Decimal("0"))
+    if abs(total - Decimal("1")) > Decimal("0.0001"):
+        collector.add("WEIGHT_SUM_OFF", f"Weights total {total:.6f} instead of 1.000000.", severity=WARNING, field="Pct Idx Wgt", fix_hint="Confirm the export covers the full index and uses percent weights.")
     rows.sort(key=lambda item: (-Decimal(item["weight"]), item["security_code"]))
-    return {
-        "constituents": rows,
-        "constituent_index_code": next(iter(index_codes)) if len(index_codes) == 1 else None,
-    }
-
-
-def _direct_value(row: dict[str, Any], header: str) -> Any:
-    expected = _normalize_header(header)
-    return next((value for key, value in row.items() if _normalize_header(key) == expected), None)
+    return {"constituents": rows}
 
 
 def _text(value: Any) -> str | None:
@@ -371,31 +282,6 @@ def _row_date(value: Any, index: int, collector: FindingCollector) -> date | Non
 # --------------------------------------------------------------------------------------
 
 _RETURN_FIELDS = ("return_1m", "return_3m", "return_6m", "return_ytd")
-_RETURN_MISSING_TOKENS = frozenset({"", "n/a", "#n/a", "na"})
-
-
-def _is_approved_return_missing(value: Any) -> bool:
-    normalized = unicodedata.normalize("NFKC", str(value or "")).strip().casefold()
-    return normalized in _RETURN_MISSING_TOKENS
-
-
-def _return_value(value: Any, field: str, row: int) -> tuple[Decimal | None, str]:
-    """Classify a return cell without guessing whether arbitrary text means missing.
-
-    Blank/NA vendor tokens are legitimate missing observations. Excel/Bloomberg calculation
-    errors such as ``#NAME?`` or ``#REF!`` stay invalid unless another detected return group
-    supplies a numeric value for the same field.
-    """
-    if _is_approved_return_missing(value):
-        return None, "MISSING"
-    try:
-        return imports._decimal(value, field, row), "VALUE"
-    except ValueError:
-        return None, "INVALID"
-
-
-def _same_report_month(value: date, report_date: date) -> bool:
-    return (value.year, value.month) == (report_date.year, report_date.month)
 
 
 def parse_constituent_returns(filename: str, data: bytes, report_date: date, collector: FindingCollector, profile: MappingProfile | None = None) -> dict[str, Any]:
@@ -408,7 +294,6 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
     if Path(filename).suffix.lower() == ".csv":
         records = imports._records_from_csv(data)
         rows: list[dict[str, Any]] = []
-        numeric_return_count = 0
         seen: set[str] = set()
         starts: dict[str, str] = {}
         period_end: str | None = None
@@ -439,29 +324,11 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
                 item["_source_name"] = name
             for return_field, start_field in period_fields.items():
                 raw_value = _mapped_value(record, return_field, profile)
-                value, value_state = _return_value(raw_value, return_field, index)
-                if value_state == "MISSING":
-                    collector.add(
-                        "RETURN_MISSING",
-                        f"{return_field} is missing for security {code}.",
-                        severity=WARNING,
-                        row=index,
-                        field=return_field,
-                        entity_id=code,
-                        fix_hint="Supply the approved Total Return value when it becomes available; the report will display N/A meanwhile.",
-                    )
-                    item[f"{return_field}_missing_reason"] = "SOURCE_BLANK" if raw_value in (None, "") else "SOURCE_NA"
-                elif value_state == "INVALID":
-                    collector.add(
-                        "IMPORT_ROW_INVALID",
-                        f"Row {index}: {return_field} must be numeric or an approved N/A token",
-                        row=index,
-                        field=return_field,
-                        entity_id=code,
-                        fix_hint="Use a numeric return, blank, N/A, #N/A or NA; calculation errors and arbitrary text are not accepted.",
-                    )
-                else:
-                    numeric_return_count += 1
+                try:
+                    value = imports._decimal(raw_value, return_field, index)
+                except ValueError as error:
+                    collector.add("IMPORT_ROW_INVALID", str(error), row=index, field=return_field, entity_id=code, fix_hint="Use a numeric return value.")
+                    value = None
                 item[return_field] = str(value / 100 if return_unit == "PERCENT" and value is not None else value) if value is not None else None
                 parsed_start = _row_date(_mapped_value(record, start_field, profile), index, collector)
                 if parsed_start:
@@ -473,15 +340,6 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
             if parsed_end:
                 if parsed_end > report_date:
                     collector.add("AS_OF_AFTER_REPORT_DATE", f"Period end {parsed_end.isoformat()} is later than the report date.", row=index, field="period_end", entity_id=code, fix_hint="Use returns ending no later than the report date.")
-                if not _same_report_month(parsed_end, report_date):
-                    collector.add(
-                        "REPORT_MONTH_MISMATCH",
-                        f"Period end {parsed_end.isoformat()} is outside report month {report_date:%Y-%m}.",
-                        row=index,
-                        field="period_end",
-                        entity_id=code,
-                        fix_hint="Upload the constituent-return file for the report month.",
-                    )
                 if period_end and period_end != parsed_end.isoformat():
                     collector.add("PERIOD_INCONSISTENT", "period_end differs across rows.", row=index, field="period_end", entity_id=code, fix_hint="Use one common period end for the complete file.")
                 period_end = parsed_end.isoformat()
@@ -494,16 +352,7 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
         if not rows:
             collector.add("DATASET_EMPTY", "No constituent return rows were found.", fix_hint="Use the standard constituent-return CSV template.")
             return {}
-        if numeric_return_count == 0:
-            collector.add(
-                "RETURN_DATASET_NO_NUMERIC_VALUES",
-                "The return file contains no numeric 1M, 3M, 6M or YTD value.",
-                fix_hint="Upload a recognized Total Return file with at least one valid numeric return.",
-            )
-        return {
-            "constituent_returns": rows,
-            "return_periods": {"starts": starts, "end": period_end, "source": source, "series_type": "TOTAL_RETURN"},
-        }
+        return {"constituent_returns": rows, "return_periods": {"starts": starts, "end": period_end, "source": source}}
     candidates = mapping_candidates(profile, filename, data)
     if len(candidates) != 1:
         collector.add("MAP-001", f"Expected one return-table candidate; found {len(candidates)}.", fix_hint="Confirm the intended sheet/header row or create a new mapping profile.")
@@ -516,58 +365,24 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
     finally:
         workbook.close()
 
-    code_column = int(((profile.field_map or {}).get("security_code") or {}).get("confirmed_column", 0)) - 1
-    name_column = int(((profile.field_map or {}).get("name_en") or {}).get("confirmed_column", 0)) - 1
-    if code_column < 0:
-        collector.add("MAP-002", "The unlabelled security-code column has not been confirmed.", fix_hint="Set field_map.security_code.confirmed_column in the approved profile.")
-        return {}
-    first_data_row = candidate.header_row + 1
+    # Row 2 carries the period boundaries the Bloomberg formulas were pulled against. They are
+    # stored so a return can be traced back to the window it was computed over.
+    period_starts: dict[str, str] = {}
+    selected_columns = {field: candidate.columns[field][0] for field in _RETURN_FIELDS}
     duplicate_count = min(len(candidate.columns.get(field, ())) for field in _RETURN_FIELDS)
-    column_groups = [
-        {field: candidate.columns[field][group_index] for field in _RETURN_FIELDS}
-        for group_index in range(duplicate_count)
-    ]
-    if not column_groups:
-        collector.add("MAP-001", "No complete four-period return group was found.", fix_hint="Use a workbook with 1M, 3M, 6M and YTD headers in one aligned group.")
-        return {}
-
-    def group_score(columns: dict[str, int]) -> tuple[int, int, int]:
-        numeric = missing = invalid = 0
-        for row_number, values in enumerate(grid[first_data_row - 1:], start=first_data_row):
-            raw_code = values[code_column] if code_column < len(values) else None
-            if raw_code in (None, ""):
-                continue
-            for field, column in columns.items():
-                raw = values[column] if column < len(values) else None
-                _value, state = _return_value(raw, field, row_number)
-                numeric += state == "VALUE"
-                missing += state == "MISSING"
-                invalid += state == "INVALID"
-        return numeric, -invalid, -missing
-
-    scores = [group_score(columns) for columns in column_groups]
-    selected_group_index = max(range(len(column_groups)), key=lambda index: scores[index])
-    selected_columns = column_groups[selected_group_index]
     if duplicate_count > 1:
         collector.add(
             "IGNORED_DUPLICATE_RETURN_GROUP",
-            f"Found {duplicate_count} complete return column groups; selected group {selected_group_index + 1} with {scores[selected_group_index][0]} numeric values and ignored the others.",
+            f"Found {duplicate_count} complete return column groups; the approved profile selects the first group only.",
             severity=INFO,
-            fix_hint="The parser selects the header-aligned group with the highest numeric coverage; review the preview before applying.",
+            fix_hint="Review the mapping profile if the vendor changes which group is authoritative.",
         )
-
-    # Row 2 carries the period boundaries used by the Bloomberg formulas. A static-value group
-    # may leave its own boundary cells blank, so boundaries fall back across equivalent headers.
-    period_starts: dict[str, str] = {}
     period_row_offset = int((profile.selector or {}).get("period_row_offset", -2))
     period_row_index = candidate.header_row - 1 + period_row_offset
     if 0 <= period_row_index < len(grid):
         header_dates = grid[period_row_index]
-        for field, selected_column in selected_columns.items():
-            equivalent_columns = (selected_column, *(
-                column for column in candidate.columns[field] if column != selected_column
-            ))
-            raw = next((header_dates[column] for column in equivalent_columns if column < len(header_dates) and header_dates[column] not in (None, "")), None)
+        for field, column in selected_columns.items():
+            raw = header_dates[column] if column < len(header_dates) else None
             parsed = _row_date(raw, period_row_index + 1, collector)
             if parsed:
                 period_starts[field] = parsed.isoformat()
@@ -575,25 +390,15 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
         period_end = _row_date(header_dates[period_end_column] if period_end_column < len(header_dates) else None, period_row_index + 1, collector)
     else:
         period_end = None
-    if period_end:
-        if period_end > report_date:
-            collector.add(
-                "AS_OF_AFTER_REPORT_DATE",
-                f"Period end {period_end.isoformat()} is later than report date {report_date.isoformat()}.",
-                field="period_end",
-                fix_hint="Upload returns ending no later than the report date.",
-            )
-        if not _same_report_month(period_end, report_date):
-            collector.add(
-                "REPORT_MONTH_MISMATCH",
-                f"Period end {period_end.isoformat()} is outside report month {report_date:%Y-%m}.",
-                field="period_end",
-                fix_hint="Upload the Bloomberg return workbook for the report month.",
-            )
 
     rows: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
-    numeric_return_count = 0
+    code_column = int(((profile.field_map or {}).get("security_code") or {}).get("confirmed_column", 0)) - 1
+    name_column = int(((profile.field_map or {}).get("name_en") or {}).get("confirmed_column", 0)) - 1
+    if code_column < 0:
+        collector.add("MAP-002", "The unlabelled security-code column has not been confirmed.", fix_hint="Set field_map.security_code.confirmed_column in the approved profile.")
+        return {}
+    first_data_row = candidate.header_row + 1
     return_unit = str((profile.unit_map or {}).get("returns") or "").upper()
     if return_unit not in {"PERCENT", "RATIO"}:
         collector.add("MAP-003", "Return unit is not explicit in the mapping profile.", fix_hint="Set returns to PERCENT or RATIO in unit_map.")
@@ -610,18 +415,17 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
         item: dict[str, Any] = {"security_code": code}
         for field, column in selected_columns.items():
             raw = values[column] if column < len(values) else None
-            value, value_state = _return_value(raw, field, offset)
-            if value_state == "MISSING":
-                collector.add("RETURN_MISSING", f"{field} is missing for security {code}.", severity=WARNING, row=offset, field=field, entity_id=code, fix_hint="Refresh the Bloomberg source when the Total Return value becomes available; the report will display N/A meanwhile.")
+            if raw in (None, ""):
+                collector.add("RETURN_MISSING", f"{field} is empty for security {code}.", severity=WARNING, row=offset, field=field, entity_id=code, fix_hint="Refresh the Bloomberg formula so every period returns a value.")
                 item[field] = None
-                item[f"{field}_missing_reason"] = "SOURCE_BLANK" if raw in (None, "") else "SOURCE_NA"
                 continue
-            if value_state == "INVALID":
-                collector.add("IMPORT_ROW_INVALID", f"Row {offset}: {field} must be numeric or an approved N/A token", row=offset, field=field, entity_id=code, fix_hint="Use a numeric return, blank, N/A, #N/A or NA; #NAME?, #REF!, #VALUE! and arbitrary text are not accepted.")
+            try:
+                value = imports._decimal(raw, field, offset)
+            except ValueError as error:
+                collector.add("IMPORT_ROW_INVALID", str(error), row=offset, field=field, entity_id=code, fix_hint="The cell must resolve to a number; check for #N/A from the Bloomberg add-in.")
                 item[field] = None
                 continue
             # Bloomberg CUST_TRR_RETURN_HOLDING_PER returns percent; canonical storage is 0-1.
-            numeric_return_count += 1
             normalized_value = value / 100 if return_unit == "PERCENT" else value
             item[field] = str(normalized_value) if value is not None else None
         name = values[name_column] if 0 <= name_column < len(values) else None
@@ -632,21 +436,9 @@ def parse_constituent_returns(filename: str, data: bytes, report_date: date, col
     if not rows:
         collector.add("DATASET_EMPTY", "No return rows were found on the Formula sheet.", fix_hint="Check that the workbook is the monthly Bloomberg constituent update.")
         return {}
-    if numeric_return_count == 0:
-        collector.add(
-            "RETURN_DATASET_NO_NUMERIC_VALUES",
-            "The return workbook contains no numeric 1M, 3M, 6M or YTD value.",
-            fix_hint="Refresh the Bloomberg workbook or include its valid static-value return group before uploading.",
-        )
     return {
         "constituent_returns": rows,
-        "return_periods": {
-            "starts": period_starts,
-            "end": period_end.isoformat() if period_end else None,
-            "source": "Bloomberg CUST_TRR_RETURN_HOLDING_PER",
-            "series_type": "TOTAL_RETURN",
-            "selected_group": selected_group_index + 1,
-        },
+        "return_periods": {"starts": period_starts, "end": period_end.isoformat() if period_end else None, "source": "Bloomberg CUST_TRR_RETURN_HOLDING_PER"},
     }
 
 
@@ -663,10 +455,7 @@ def parse_constituent_performance(
         return {}
     reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig")))
     actual_columns = tuple(reader.fieldnames or ())
-    missing_columns = [
-        column for column in spec.template_columns
-        if column not in actual_columns and column not in OPTIONAL_CONSTITUENT_PERFORMANCE_COLUMNS
-    ]
+    missing_columns = [column for column in spec.template_columns if column not in actual_columns]
     if missing_columns:
         collector.add(
             "DATASET_COLUMNS_MISSING",
@@ -690,7 +479,6 @@ def parse_constituent_performance(
     period_starts: dict[str, str] = {}
     constituent_sources: set[str] = set()
     return_sources: set[str] = set()
-    numeric_return_count = 0
     for row_number, record in enumerate(reader, start=2):
         try:
             incoming_index = imports._required(record, "index_code", row_number).upper()
@@ -701,10 +489,6 @@ def parse_constituent_performance(
                 raise ValueError(f"Row {row_number}: duplicate security_code {code}; first seen on row {seen[code]}")
             if incoming_as_of > report_date or incoming_period_end > report_date:
                 raise ValueError(f"Row {row_number}: as_of_date and period_end cannot be later than report_date")
-            if not _same_report_month(incoming_as_of, report_date) or not _same_report_month(incoming_period_end, report_date):
-                raise ValueError(f"Row {row_number}: as_of_date and period_end must belong to report month {report_date:%Y-%m}")
-            if incoming_as_of != incoming_period_end:
-                raise ValueError(f"Row {row_number}: as_of_date must equal period_end")
             if index_code and incoming_index != index_code:
                 raise ValueError(f"Row {row_number}: index_code differs from {index_code}")
             if as_of_date and incoming_as_of != as_of_date:
@@ -717,17 +501,11 @@ def parse_constituent_performance(
                 raise ValueError(f"Row {row_number}: close_price must be greater than zero")
             if weight_pct is None or weight_pct < 0 or weight_pct > 100:
                 raise ValueError(f"Row {row_number}: weight_pct must be between 0 and 100")
-            name_en = _text(record.get("name_en"))
-            name_zh_hans = _text(record.get("name_zh_hans"))
-            name_zh_hant = _text(record.get("name_zh_hant"))
-            if not name_en and not name_zh_hans and not name_zh_hant:
-                raise ValueError(f"Row {row_number}: name_en, name_zh_hans or name_zh_hant is required")
             item: dict[str, Any] = {
                 "security_code": code,
                 "ticker": imports._required(record, "ticker", row_number).upper(),
-                "name_en": name_en or "",
-                "name_zh_hans": name_zh_hans or "",
-                "name_zh_hant": name_zh_hant or "",
+                "name_en": imports._required(record, "name_en", row_number),
+                "name_zh_hant": _text(record.get("name_zh_hant")) or "",
                 "close_price": str(close_price),
                 "currency": imports._required(record, "currency", row_number).upper(),
                 "weight": str(weight_pct / Decimal("100")),
@@ -762,18 +540,13 @@ def parse_constituent_performance(
                 if existing_start and existing_start != start.isoformat():
                     raise ValueError(f"Row {row_number}: {start_column} differs from {existing_start}")
                 period_starts[field] = start.isoformat()
-                raw_value = record.get(value_column)
-                value, value_state = _return_value(raw_value, value_column, row_number)
+                value = imports._decimal(record.get(value_column), value_column, row_number)
                 missing_reason = _text(record.get(reason_column))
-                if value_state == "INVALID":
-                    raise ValueError(f"Row {row_number}: {value_column} must be numeric or an approved N/A token")
-                if value_state == "MISSING" and not missing_reason:
-                    missing_reason = "SOURCE_BLANK" if raw_value in (None, "") else "SOURCE_NA"
+                if value is None and not missing_reason:
+                    raise ValueError(f"Row {row_number}: {value_column} or {reason_column} is required")
                 if value is not None and missing_reason:
                     raise ValueError(f"Row {row_number}: {value_column} and {reason_column} are mutually exclusive")
                 item[field] = str(value / Decimal("100")) if value is not None else None
-                if value is not None:
-                    numeric_return_count += 1
                 if missing_reason:
                     item[f"{field}_missing_reason"] = missing_reason
             except ValueError as error:
@@ -790,19 +563,21 @@ def parse_constituent_performance(
     if not rows:
         collector.add("DATASET_EMPTY", "No usable constituent rows were found.", fix_hint="Populate the constituent-performance template and upload it again.")
         return {}
-    if numeric_return_count == 0:
-        collector.add(
-            "RETURN_DATASET_NO_NUMERIC_VALUES",
-            "The canonical file contains no numeric 1M, 3M, 6M or YTD value.",
-            fix_hint="Provide at least one valid Total Return value; individual unavailable periods may remain N/A.",
-        )
     if len(constituent_sources) != 1 or len(return_sources) != 1:
         collector.add(
             "SOURCE_INCONSISTENT",
             "constituent_source and return_source must each name one authoritative source for the complete file.",
             fix_hint="Split mixed sources into separately reviewed files and upload the one effective source.",
         )
-    # See the note in the index-constituent parser: the weight total belongs to QC-002 alone.
+    total = sum((Decimal(row["weight"]) for row in rows), Decimal("0"))
+    if abs(total - Decimal("1")) > Decimal("0.0001"):
+        collector.add(
+            "WEIGHT_SUM_OFF",
+            f"Weights total {total:.6f} instead of 1.000000.",
+            severity=WARNING,
+            field="weight_pct",
+            fix_hint="Confirm the file covers the full index and uses percent weights.",
+        )
     rows.sort(key=lambda item: (-Decimal(item["weight"]), item["security_code"]))
     return {
         "constituents": rows,
@@ -811,7 +586,6 @@ def parse_constituent_performance(
             "starts": period_starts,
             "end": period_end.isoformat() if period_end else None,
             "source": ", ".join(sorted(return_sources)),
-            "series_type": "TOTAL_RETURN",
         },
     }
 
@@ -860,8 +634,8 @@ REGISTRY: dict[str, DatasetSpec] = {
     ),
     "total_return_series": DatasetSpec(
         key="total_return_series",
-        title="Historical performance source",
-        description="Automatically loaded warehouse period returns; an official Total Return CSV remains a fallback when the warehouse route is disabled.",
+        title="Total Return series",
+        description="Official FUND and BENCHMARK daily Total Return observations.",
         required=True,
         accepts=(".csv",),
         owns=("total_return_series",),

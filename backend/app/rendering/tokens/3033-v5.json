@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "id": "3033-v5",
+  "extends": "3033-v4",
+  "change": "Shared 8pt data-footnote typography and an adjustable Review footer band",
+  "footnote": {
+    "fontFamily": "Calibri",
+    "pdfFontFamily": "Carlito",
+    "fontSizePt": 8,
+    "color": "#000000",
+    "lineHeight": 1.2,
+    "baselineBottomMm": 20,
+    "minBottomMm": 16,
+    "maxBottomMm": 36,
+    "columns": 12
+  },
+  "rules": {
+    "pages": "review_page_count + 4",
+    "maxPages": 100,
+    "reviewFootnote": "footer-band"
+  }
+}

@@ -403,7 +403,7 @@ def render_html(
     tokens = _render_tokens(design_token_version)
     page_one = (
         page_one_presentation.resolve_for_render(document, tokens)
-        if template_version in {"3033-v3", "3033-v4"}
+        if template_version in {"3033-v3", "3033-v4", "3033-v5"}
         else None
     )
     if page_one is not None:
@@ -430,7 +430,11 @@ def render_html(
                 row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
     for row in portfolio:
         row["label"] = titles[f"portfolio.{row['metric_code']}"]
-    template_name = "3033-v4.html.j2" if template_version == "3033-v4" else "3033.html.j2"
+    template_name = (
+        "3033-v5.html.j2" if template_version == "3033-v5"
+        else "3033-v4.html.j2" if template_version == "3033-v4"
+        else "3033.html.j2"
+    )
     return env.get_template(template_name).render(
         report=report,
         doc=document,

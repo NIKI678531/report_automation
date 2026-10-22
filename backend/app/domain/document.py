@@ -213,7 +213,7 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
     # Validate the authoritative v3 topology before the compatibility block fields. This keeps
     # all page-one geometry failures on the PAGE_ONE_PRESENTATION_INVALID contract instead of
     # leaking the legacy REVIEW_LAYOUT_INVALID fallback from an x/y/w/h check below.
-    if result.get("template_version") in {"3033-v3", "3033-v4"} or "presentation" in result:
+    if result.get("template_version") in {"3033-v3", "3033-v4", "3033-v5"} or "presentation" in result:
         result = page_one_presentation.canonicalize_document(result)
     sections = result.get("sections")
     if not isinstance(sections, dict):
@@ -461,7 +461,7 @@ def initial_document(
     }
     return (
         page_one_presentation.adapt_document(document)
-        if template_version in {"3033-v3", "3033-v4"}
+        if template_version in {"3033-v3", "3033-v4", "3033-v5"}
         else document
     )
 
@@ -499,7 +499,7 @@ def bind_snapshot(
             "note": "Transcribed from the approved reference report. Not generated, not derived.",
         }
         result["sections"]["month_in_review"] = incoming_review
-        if result.get("template_version") in {"3033-v3", "3033-v4"} and not preserve_blocks:
+        if result.get("template_version") in {"3033-v3", "3033-v4", "3033-v5"} and not preserve_blocks:
             result = page_one_presentation.adapt_document(result)
     result["sections"]["analytics"] = snapshot_payload.get("analytics", result["sections"]["analytics"])
     result["sections"]["footnotes"] = snapshot_payload.get("footnotes", {})

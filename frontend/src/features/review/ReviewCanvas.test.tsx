@@ -158,7 +158,7 @@ describe("Review page-one layout controls", () => {
     const footnote = retargeted.page_one.elements.find((element) => element.id === "footnote:historical");
 
     expect(footnote?.content_html).toBe("<p>Only one paragraph.</p>");
-    expect(footnote?.body_style?.font_size_pt).toBe(9);
+    expect(footnote?.body_style?.font_size_pt).toBe(8);
   });
 
   it("marks horizontal bounds and nested scroll overflow in the paged preview", () => {
@@ -217,10 +217,12 @@ describe("Review page-one layout controls", () => {
     const previewDocument = document.implementation.createHTMLDocument("preview");
     previewDocument.body.innerHTML = `
       <section class="report-page">
+        <div data-layout-id="historical_performance">Historical</div>
         <div data-layout-id="footnote:historical">Footnote</div>
         <footer class="page-footer"></footer>
       </section>`;
     const page = previewDocument.querySelector<HTMLElement>(".report-page")!;
+    const historical = previewDocument.querySelector<HTMLElement>('[data-layout-id="historical_performance"]')!;
     const footnote = previewDocument.querySelector<HTMLElement>('[data-layout-id="footnote:historical"]')!;
     const footer = previewDocument.querySelector<HTMLElement>(".page-footer")!;
     const a4HeightPt = (297 / 25.4) * 72;
@@ -229,6 +231,7 @@ describe("Review page-one layout controls", () => {
       x: 0, y: top, toJSON: () => ({}),
     });
     vi.spyOn(page, "getBoundingClientRect").mockReturnValue(rect(0, a4HeightPt));
+    vi.spyOn(historical, "getBoundingClientRect").mockReturnValue(rect(700, 774));
     vi.spyOn(footnote, "getBoundingClientRect").mockReturnValue(rect(780, 794));
     vi.spyOn(footer, "getBoundingClientRect").mockReturnValue(rect(800, 820));
 
@@ -258,15 +261,13 @@ describe("Review page-one layout controls", () => {
       },
     }, blocks, "First <source>.\ncontinuation\n\nSecond & final.");
 
-    expect(presentation).toMatchObject({ schema_version: 2, page_one: { review_page_count: 1 } });
+    expect(presentation).toMatchObject({ schema_version: 3, page_one: { review_page_count: 1 } });
     expect(presentation.page_one.elements.find((element) => element.id === "historical_performance")).toMatchObject({ row: 2, row_span: 3, page: 1, offset_y_pt: 10 });
     expect(presentation.page_one.elements.find((element) => element.id === "footnote:historical")).toMatchObject({
-      row: 5,
-      row_span: 4,
       page: 1,
-      gap_pt: 12,
-      body_style: { font_size_pt: 9, line_height: 1.2, text_align: "left" },
-      content_html: '<p data-line-height="1" data-text-align="left"><span data-font-size-pt="8">First &lt;source&gt;.<br>continuation</span></p><p data-line-height="1.4" data-text-align="justify"><span data-font-size-pt="10">Second &amp; final.</span></p>',
+      footer_bottom_mm: 20,
+      body_style: { font_size_pt: 8, line_height: 1.2, text_align: "left" },
+      content_html: '<p>First &lt;source&gt;.<br>continuation</p><p>Second &amp; final.</p>',
     });
   });
 
@@ -298,6 +299,42 @@ describe("Review page-one layout controls", () => {
       header_style: { font_size_pt: 11, line_height: 1.4 },
       body_style: { font_size_pt: 11, line_height: 1.4 },
     });
+  });
+
+  it("upgrades a v4 footnote to the independent v5 footer contract", () => {
+    const normalized = pageOnePresentation({
+      schema_version: 2,
+      page_one: {
+        review_page_count: 2,
+        elements: [
+          { id: "historical_performance", row: 4, row_span: 3, x: 2, w: 8, page: 2 },
+          {
+            id: "footnote:historical",
+            row: 7,
+            row_span: 2,
+            x: 2,
+            w: 8,
+            page: 2,
+            gap_pt: 18,
+            content_html: '<p><span data-font-size-pt="10">Source¹</span></p>',
+            body_style: { font_size_pt: 10, line_height: 1.4, text_align: "right" },
+          },
+        ],
+      },
+    }, blocks, "Source¹");
+    const footnote = normalized.page_one.elements.find((element) => element.id === "footnote:historical");
+
+    expect(normalized.schema_version).toBe(3);
+    expect(footnote).toMatchObject({
+      x: 2,
+      w: 8,
+      page: 2,
+      footer_bottom_mm: 20,
+      content_html: "<p>Source¹</p>",
+      body_style: { font_size_pt: 8, line_height: 1.4, text_align: "right" },
+    });
+    expect(footnote).not.toHaveProperty("row");
+    expect(footnote).not.toHaveProperty("gap_pt");
   });
 
   it("preserves only the editable title-to-content spacing for every titled Review-page module", () => {
@@ -387,7 +424,7 @@ describe("Review page-one layout controls", () => {
     expect(onPresentationChange).not.toHaveBeenCalled();
   });
 
-  it("stores precise default typography for the controlled footnote", () => {
+  it("locks footnote inline typography while retaining paragraph controls", () => {
     const onPresentationChange = vi.fn();
     const initial = pageOnePresentation(undefined, blocks);
 
@@ -404,13 +441,14 @@ describe("Review page-one layout controls", () => {
     render(<StatefulCanvas />);
     fireEvent.click(screen.getByRole("button", { name: "Open Historical performance footnote editor" }));
     const inspector = screen.getByRole("dialog", { name: "Historical performance footnote detailed editor" });
-    fireEvent.change(within(inspector).getByLabelText("Historical performance footnote Font size"), { target: { value: "9.5" } });
+    expect(within(inspector).queryByLabelText("Historical performance footnote Font size")).toBeNull();
+    expect(within(inspector).queryByLabelText("Historical performance footnote Font color")).toBeNull();
     fireEvent.change(screen.getByLabelText("Historical performance footnote Line spacing"), { target: { value: "1.4" } });
     fireEvent.change(screen.getByLabelText("Historical performance footnote Alignment"), { target: { value: "justify" } });
 
     const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
     expect(updated.page_one.elements.find((element) => element.id === "footnote:historical")?.body_style).toMatchObject({
-      font_size_pt: 9.5,
+      font_size_pt: 8,
       line_height: 1.4,
       text_align: "justify",
     });

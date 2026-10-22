@@ -29,7 +29,10 @@ import { useLocale } from "../../i18n";
 import { MarkerInput, MarkerTextarea } from "../../components/SuperscriptMarkerControl";
 import { BoundedNumberInput, RichTypographyEditor, TextStyleControls, textStyleProperties } from "./RichTypographyEditor";
 import {
+  FOOTNOTE_BASELINE_BOTTOM_MM,
   FOOTNOTE_BODY_STYLE,
+  FOOTNOTE_MAX_BOTTOM_MM,
+  FOOTNOTE_MIN_BOTTOM_MM,
   GRID_COLUMNS,
   HISTORY_BODY_STYLE,
   HISTORY_HEADER_STYLE,
@@ -88,7 +91,9 @@ const GRID_GAP = 16;
 const LAYOUT_PT_STEP = 6;
 
 function overlaps(a: PageOneElement, b: PageOneElement): boolean {
-  return a.row < b.row + b.row_span && b.row < a.row + a.row_span && a.x < b.x + b.w && b.x < a.x + a.w;
+  const aRow = a.row ?? 0; const bRow = b.row ?? 0;
+  const aSpan = a.row_span ?? 1; const bSpan = b.row_span ?? 1;
+  return aRow < bRow + bSpan && bRow < aRow + aSpan && a.x < b.x + b.w && b.x < a.x + a.w;
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -301,18 +306,14 @@ function HistoricalFootnoteEditor({ element, disabled, selected, expanded, onSel
     }}
   >
     <ModuleHeader title={t("historicalFootnote")} width={element.w} disabled={disabled} expanded={expanded} onExpand={(event) => { event.stopPropagation(); onExpand(event.currentTarget); }} trailing={<span className="read-only-badge">{t("sharedWithFootnotes")}</span>} />
-    {expanded ? <RichTypographyEditor
-      label={t("historicalFootnote")}
-      value={element.content_html ?? "<p></p>"}
-      defaultStyle={style}
+    {expanded && <TextStyleControls
+      idPrefix={t("historicalFootnote")}
+      value={style}
       disabled={disabled}
-      showAdvanced
-      onChange={(content_html) => {
-        onChange({ content_html });
-        onTextChange(richHtmlToPlainText(content_html));
-      }}
-      onDefaultStyleChange={(change) => onChange({ body_style: { ...style, ...change } })}
-    /> : <MarkerTextarea
+      showInline={false}
+      onChange={(change) => onChange({ body_style: { ...style, ...change } })}
+    />}
+    <MarkerTextarea
       aria-label={t("historicalFootnote")}
       value={richHtmlToPlainText(element.content_html ?? "")}
       disabled={disabled}
@@ -320,7 +321,7 @@ function HistoricalFootnoteEditor({ element, disabled, selected, expanded, onSel
         onChange({ content_html: plainTextToRichHtml(text) });
         onTextChange(text);
       }}
-    />}
+    />
   </section>;
 }
 
@@ -459,14 +460,19 @@ export function markPreviewOverflows(document: Document): void {
 
 export function historicalGroupDownRoomPt(document: Document): number | null {
   const footnote = document.querySelector<HTMLElement>('[data-layout-id="footnote:historical"]');
-  const page = footnote?.closest<HTMLElement>(".report-page");
-  if (!footnote || !page) return null;
+  const historical = document.querySelector<HTMLElement>('[data-layout-id="historical_performance"]');
+  const page = historical?.closest<HTMLElement>(".report-page");
+  if (!historical || !page) return null;
   const pageHeightPx = page.getBoundingClientRect().height;
   if (pageHeightPx <= 0) return null;
   const footer = page.querySelector<HTMLElement>(".page-footer");
-  const safeBottom = footer?.getBoundingClientRect().top ?? page.getBoundingClientRect().bottom;
+  const footerTop = footer?.getBoundingClientRect().top ?? page.getBoundingClientRect().bottom;
+  const footnoteTop = footnote?.closest<HTMLElement>(".report-page") === page
+    ? footnote.getBoundingClientRect().top
+    : footerTop;
+  const safeBottom = Math.min(footerTop, footnoteTop);
   const pxPerPoint = pageHeightPx / A4_HEIGHT_PT;
-  return (safeBottom - footnote.getBoundingClientRect().bottom) / pxPerPoint;
+  return (safeBottom - historical.getBoundingClientRect().bottom) / pxPerPoint;
 }
 
 function PreviewPane({ html, busy, error, collapsed, onToggle, selectedId, onSelect, onArrow, onGroupDownRoomChange }: {
@@ -646,10 +652,9 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
       if (delta > 0 && groupDownRoomPt !== null && groupDownRoomPt < LAYOUT_PT_STEP) return historyPage < MAX_REVIEW_PAGES;
       return (next >= MIN_OFFSET_Y_PT && next <= MAX_OFFSET_Y_PT) || (delta > 0 ? historyPage < MAX_REVIEW_PAGES : historyPage > 1);
     }
-    const next = (footnoteElement?.gap_pt ?? 6) + delta * LAYOUT_PT_STEP;
-    if (delta > 0 && groupDownRoomPt !== null && groupDownRoomPt < LAYOUT_PT_STEP) return historyPage < MAX_REVIEW_PAGES;
-    return (next >= TYPOGRAPHY_LIMITS.spacing.min && next <= TYPOGRAPHY_LIMITS.spacing.max) || (delta > 0 ? historyPage < MAX_REVIEW_PAGES : historyPage > 1);
-  }, [footnoteElement?.gap_pt, groupDownRoomPt, historicalElement?.offset_y_pt, historyPage, selectedElement]);
+    const next = (footnoteElement?.footer_bottom_mm ?? FOOTNOTE_BASELINE_BOTTOM_MM) - delta;
+    return next >= FOOTNOTE_MIN_BOTTOM_MM && next <= FOOTNOTE_MAX_BOTTOM_MM;
+  }, [footnoteElement?.footer_bottom_mm, groupDownRoomPt, historicalElement?.offset_y_pt, historyPage, selectedElement]);
 
   const moveHistoryGroupToPage = useCallback((requested: number, resetSpacing = false) => {
     const page = clamp(Math.round(requested), 1, MAX_REVIEW_PAGES);
@@ -658,7 +663,6 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
       ...element,
       page,
       ...(resetSpacing && element.id === "historical_performance" ? { offset_y_pt: 0 } : {}),
-      ...(resetSpacing && element.id === "footnote:historical" ? { gap_pt: 6 } : {}),
     }));
     setGroupDownRoomPt(null);
     onPresentationChange({ ...moved, page_one: { ...moved.page_one, review_page_count: nextCount } });
@@ -680,11 +684,7 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
     const verticalDelta = direction === "up" ? -1 : direction === "down" ? 1 : 0;
     if (horizontalDelta) {
       if (!canMoveHorizontal(horizontalDelta as -1 | 1)) return;
-      if (selectedElement.id === "historical_performance" || selectedElement.id === "footnote:historical") {
-        onPresentationChange(updateHistoricalGroup(presentation, (element) => ({ ...element, x: element.x + horizontalDelta })));
-      } else {
-        onPresentationChange(updateElement(presentation, selectedElement.id, (element) => ({ ...element, x: element.x + horizontalDelta })));
-      }
+      onPresentationChange(updateElement(presentation, selectedElement.id, (element) => ({ ...element, x: element.x + horizontalDelta })));
       return;
     }
     if (!verticalDelta || !canMoveVertical(verticalDelta as -1 | 1)) return;
@@ -703,15 +703,13 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
       }
       return;
     }
-    const gap = (footnoteElement?.gap_pt ?? 6) + verticalDelta * LAYOUT_PT_STEP;
-    const crossesRenderedPageBottom = verticalDelta > 0 && groupDownRoomPt !== null && groupDownRoomPt < LAYOUT_PT_STEP;
-    if (!crossesRenderedPageBottom && gap >= TYPOGRAPHY_LIMITS.spacing.min && gap <= TYPOGRAPHY_LIMITS.spacing.max) {
-      onPresentationChange(updateElement(presentation, selectedElement.id, (element) => ({ ...element, gap_pt: gap })));
-      setGroupDownRoomPt((room) => room === null ? null : room - verticalDelta * LAYOUT_PT_STEP);
-    } else {
-      moveHistoryGroupToPage(historyPage + verticalDelta, true);
-    }
-  }, [canMoveHorizontal, canMoveVertical, disabled, footnoteElement?.gap_pt, groupDownRoomPt, historicalElement?.offset_y_pt, historyPage, moveHistoryGroupToPage, onPresentationChange, presentation, selectedElement]);
+    const footerBottom = clamp(
+      (footnoteElement?.footer_bottom_mm ?? FOOTNOTE_BASELINE_BOTTOM_MM) - verticalDelta,
+      FOOTNOTE_MIN_BOTTOM_MM,
+      FOOTNOTE_MAX_BOTTOM_MM,
+    );
+    onPresentationChange(updateElement(presentation, selectedElement.id, (element) => ({ ...element, footer_bottom_mm: footerBottom })));
+  }, [canMoveHorizontal, canMoveVertical, disabled, footnoteElement?.footer_bottom_mm, groupDownRoomPt, historicalElement?.offset_y_pt, historyPage, moveHistoryGroupToPage, onPresentationChange, presentation, selectedElement]);
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (isEditableTarget(event.target)) return;
@@ -731,42 +729,45 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
   };
 
   const historySpan = Math.max(2, historicalElement?.row_span ?? 3);
-  const footnoteSpan = Math.max(3, footnoteElement?.row_span ?? 4);
-  const gapRows = Math.max(1, Math.ceil((footnoteElement?.gap_pt ?? 6) / LAYOUT_PT_STEP));
-  const groupLayout: Layout[] = [
+  const historicalLayout: Layout[] = [
     { i: "historical_performance", x: historicalElement?.x ?? 0, y: 0, w: historicalElement?.w ?? GRID_COLUMNS, h: historySpan, minW: 4, minH: 2 },
-    { i: "footnote:historical", x: historicalElement?.x ?? 0, y: historySpan + gapRows, w: historicalElement?.w ?? GRID_COLUMNS, h: footnoteSpan, minW: 4, minH: 3 },
   ];
-  const commitGroupLayout = (_layout: Layout[], oldItem: Layout, item: Layout, resized: boolean) => {
-    if (!historicalElement || !footnoteElement) return;
-    const x = item.x;
-    const w = item.w;
-    let next = updateHistoricalGroup(presentation, (element) => ({ ...element, x, w }));
-    if (item.i === "historical_performance") {
-      const rowDelta = item.y - oldItem.y;
-      const nextHistoryRow = historicalElement.row + rowDelta;
-      const nextHistorySpan = resized ? item.h : historicalElement.row_span;
-      next = updateElement(next, "historical_performance", (element) => ({
-        ...element,
-        row: nextHistoryRow,
-        row_span: nextHistorySpan,
-        offset_y_pt: clamp((element.offset_y_pt ?? 0) + rowDelta * LAYOUT_PT_STEP, MIN_OFFSET_Y_PT, MAX_OFFSET_Y_PT),
-      }));
-      next = updateElement(next, "footnote:historical", (element) => ({
-        ...element,
-        row: nextHistoryRow + nextHistorySpan + gapRows,
-      }));
-    } else {
-      const gap = clamp((footnoteElement.gap_pt ?? 6) + (item.y - oldItem.y) * LAYOUT_PT_STEP, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max);
-      next = updateElement(next, "footnote:historical", (element) => ({
-        ...element,
-        row: historicalElement.row + historicalElement.row_span + Math.max(1, Math.ceil(gap / LAYOUT_PT_STEP)),
-        row_span: resized ? item.h : element.row_span,
-        gap_pt: gap,
-      }));
-    }
+  const footnoteLayout: Layout[] = [{
+    i: "footnote:historical",
+    x: footnoteElement?.x ?? 0,
+    y: Math.round(FOOTNOTE_MAX_BOTTOM_MM - (footnoteElement?.footer_bottom_mm ?? FOOTNOTE_BASELINE_BOTTOM_MM)),
+    w: footnoteElement?.w ?? GRID_COLUMNS,
+    h: 3,
+    minW: 2,
+    minH: 3,
+    maxH: 3,
+  }];
+  const commitHistoricalLayout = (_layout: Layout[], oldItem: Layout, item: Layout, resized: boolean) => {
+    if (!historicalElement) return;
+    const rowDelta = item.y - oldItem.y;
+    const next = updateElement(presentation, "historical_performance", (element) => ({
+      ...element,
+      x: item.x,
+      w: item.w,
+      row: (element.row ?? 0) + rowDelta,
+      row_span: resized ? item.h : element.row_span,
+      offset_y_pt: clamp((element.offset_y_pt ?? 0) + rowDelta * LAYOUT_PT_STEP, MIN_OFFSET_Y_PT, MAX_OFFSET_Y_PT),
+    }));
     setGroupDownRoomPt(null);
     onPresentationChange(next);
+  };
+  const commitFootnoteLayout = (_layout: Layout[], _oldItem: Layout, item: Layout) => {
+    const footerBottom = clamp(
+      FOOTNOTE_MAX_BOTTOM_MM - item.y,
+      FOOTNOTE_MIN_BOTTOM_MM,
+      FOOTNOTE_MAX_BOTTOM_MM,
+    );
+    onPresentationChange(updateElement(presentation, "footnote:historical", (element) => ({
+      ...element,
+      x: item.x,
+      w: item.w,
+      footer_bottom_mm: footerBottom,
+    })));
   };
 
   const selectedLabel = selectedElement ? elementLabel(selectedElement.id, blocks, historicalTitle, t("historicalFootnote")) : "";
@@ -866,7 +867,7 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
           <div className="review-builder-tools"><span>{t("openingPage", { page: historyPage })}</span><small>{t("historyGroupHelp")}</small></div>
           <TwelveColumnGrid
             className="review-grid historical-group-grid"
-            layout={groupLayout}
+            layout={historicalLayout}
             cols={GRID_COLUMNS}
             rowHeight={GRID_ROW_HEIGHT}
             margin={[GRID_GAP, GRID_GAP]}
@@ -879,12 +880,31 @@ export function ReviewCanvas({ blocks, presentation, historicalFootnote, histori
             draggableHandle=".review-drag-handle"
             draggableCancel="button, input, textarea, select, a, [contenteditable='true']"
             onDragStart={(_layout, _old, item) => setSelectedId(item.i)}
-            onDragStop={(layout, oldItem, item) => commitGroupLayout(layout, oldItem, item, false)}
-            onResizeStop={(layout, oldItem, item) => commitGroupLayout(layout, oldItem, item, true)}
+            onDragStop={(layout, oldItem, item) => commitHistoricalLayout(layout, oldItem, item, false)}
+            onResizeStop={(layout, oldItem, item) => commitHistoricalLayout(layout, oldItem, item, true)}
           >
             <div key="historical_performance">
               <HistoricalEditor historicalTitle={historicalTitle} element={historicalElement} disabled={disabled} selected={selectedId === "historical_performance"} expanded={false} onSelect={() => setSelectedId("historical_performance")} onExpand={(trigger) => openInspector("historical_performance", trigger)} onChange={(change) => onPresentationChange(changeElementStyle(presentation, "historical_performance", change))} />
             </div>
+          </TwelveColumnGrid>
+          <div className="review-builder-tools"><span>{t("historicalFootnote")}</span><small>Footer 16–36 mm</small></div>
+          <TwelveColumnGrid
+            className="review-grid historical-footnote-grid"
+            layout={footnoteLayout}
+            cols={GRID_COLUMNS}
+            rowHeight={12}
+            margin={[GRID_GAP, 0]}
+            containerPadding={[0, 0]}
+            compactType={null}
+            preventCollision
+            isDraggable={interactive}
+            isResizable={interactive}
+            draggableHandle=".review-drag-handle"
+            draggableCancel="button, input, textarea, select, a, [contenteditable='true']"
+            onDragStart={() => setSelectedId("footnote:historical")}
+            onDragStop={commitFootnoteLayout}
+            onResizeStop={commitFootnoteLayout}
+          >
             <div key="footnote:historical">
               <HistoricalFootnoteEditor element={footnoteElement} disabled={disabled} selected={selectedId === "footnote:historical"} expanded={false} onSelect={() => setSelectedId("footnote:historical")} onExpand={(trigger) => openInspector("footnote:historical", trigger)} onChange={(change) => onPresentationChange(changeElementStyle(presentation, "footnote:historical", change))} onTextChange={onHistoricalFootnoteChange} />
             </div>

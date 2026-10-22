@@ -254,6 +254,7 @@ export function TextStyleControls({
   showParagraph = true,
   showParagraphSpacing = true,
   showIndent = false,
+  showInline = true,
   compact = false,
 }: {
   idPrefix: string;
@@ -263,19 +264,22 @@ export function TextStyleControls({
   showParagraph?: boolean;
   showParagraphSpacing?: boolean;
   showIndent?: boolean;
+  showInline?: boolean;
   compact?: boolean;
 }) {
   const { t } = useLocale();
   return <div className={`precise-typography-controls${compact ? " compact" : ""}`}>
-    <datalist id="report-bundled-fonts">{BUNDLED_FONTS.map((font) => <option key={font} value={font} />)}</datalist>
-    <FontFamilyInput label={`${idPrefix} ${t("fontFamily")}`} value={value.font_family} disabled={disabled} onCommit={(font_family) => onChange({ font_family })} />
-    <BoundedNumberInput label={`${idPrefix} ${t("fontSize")}`} value={value.font_size_pt} {...TYPOGRAPHY_LIMITS.fontSize} disabled={disabled} onCommit={(font_size_pt) => onChange({ font_size_pt })} />
-    <label className="color-field"><span>{t("fontColor")}</span><input aria-label={`${idPrefix} ${t("fontColor")}`} type="color" value={value.color} disabled={disabled} onChange={(event) => onChange({ color: event.target.value.toUpperCase() })} /></label>
-    <div className="typography-toggle-group" role="group" aria-label={`${idPrefix} ${t("textFormatting")}`}>
-      <button type="button" className="icon-button" aria-label={`${idPrefix} ${t("bold")}`} aria-pressed={value.bold} disabled={disabled} onClick={() => onChange({ bold: !value.bold })}><Bold size={15} /></button>
-      <button type="button" className="icon-button" aria-label={`${idPrefix} ${t("italic")}`} aria-pressed={value.italic} disabled={disabled} onClick={() => onChange({ italic: !value.italic })}><Italic size={15} /></button>
-      <button type="button" className="icon-button" aria-label={`${idPrefix} ${t("underline")}`} aria-pressed={value.underline} disabled={disabled} onClick={() => onChange({ underline: !value.underline })}><Underline size={15} /></button>
-    </div>
+    {showInline && <>
+      <datalist id="report-bundled-fonts">{BUNDLED_FONTS.map((font) => <option key={font} value={font} />)}</datalist>
+      <FontFamilyInput label={`${idPrefix} ${t("fontFamily")}`} value={value.font_family} disabled={disabled} onCommit={(font_family) => onChange({ font_family })} />
+      <BoundedNumberInput label={`${idPrefix} ${t("fontSize")}`} value={value.font_size_pt} {...TYPOGRAPHY_LIMITS.fontSize} disabled={disabled} onCommit={(font_size_pt) => onChange({ font_size_pt })} />
+      <label className="color-field"><span>{t("fontColor")}</span><input aria-label={`${idPrefix} ${t("fontColor")}`} type="color" value={value.color} disabled={disabled} onChange={(event) => onChange({ color: event.target.value.toUpperCase() })} /></label>
+      <div className="typography-toggle-group" role="group" aria-label={`${idPrefix} ${t("textFormatting")}`}>
+        <button type="button" className="icon-button" aria-label={`${idPrefix} ${t("bold")}`} aria-pressed={value.bold} disabled={disabled} onClick={() => onChange({ bold: !value.bold })}><Bold size={15} /></button>
+        <button type="button" className="icon-button" aria-label={`${idPrefix} ${t("italic")}`} aria-pressed={value.italic} disabled={disabled} onClick={() => onChange({ italic: !value.italic })}><Italic size={15} /></button>
+        <button type="button" className="icon-button" aria-label={`${idPrefix} ${t("underline")}`} aria-pressed={value.underline} disabled={disabled} onClick={() => onChange({ underline: !value.underline })}><Underline size={15} /></button>
+      </div>
+    </>}
     {showParagraph && <>
       <BoundedNumberInput label={`${idPrefix} ${t("lineHeight")}`} value={value.line_height} {...TYPOGRAPHY_LIMITS.lineHeight} disabled={disabled} onCommit={(line_height) => onChange({ line_height })} />
       {showParagraphSpacing && <>

@@ -658,7 +658,7 @@ def create_language_variant(
         content["snapshot_id"] = cloned_snapshot.id
 
     content = page_one_presentation.retarget_footnote_styles(content)
-    if content.get("template_version") in {"3033-v3", "3033-v4"}:
+    if content.get("template_version") in {"3033-v3", "3033-v4", "3033-v5"}:
         content = validate_document_content(content)
 
     document = ReportDocument(

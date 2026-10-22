@@ -15,7 +15,7 @@ if __name__ == "__main__":
         "--opening-pages",
         type=int,
         default=1,
-        help="Number of manually-created Review/History pages (3033-v4; default: 1)",
+        help="Number of manually-created Review/History pages (3033-v4/v5; default: 1)",
     )
     args = parser.parse_args()
     actual = args.pdf

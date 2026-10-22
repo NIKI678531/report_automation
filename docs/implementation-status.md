@@ -1,8 +1,10 @@
 # Implementation status against V2.1
 
-Last verified: 2026-10-12
+Last verified: 2026-10-21
 
 ## Implemented and tested
+
+- Shared Review footer footnote (2026-10-21, ADR-0039): `3033-v5` moves the Historical Performance footnote into the running footer layer for paged HTML/PDF and the corresponding DOCX section footer, while continuous HTML keeps it semantically after Historical Performance. All data footnotes use locked Calibri/Carlito 8pt black regular text; Review retains bounded 12-column width/position, 16–36mm footer positioning, line/paragraph spacing and alignment controls. Editable v1–v4 drafts upgrade on first save, and finalized/archived v1–v4 documents remain version-isolated. Targeted frontend, domain, HTML, PDF, DOCX and reversible migration checks pass; the unrelated in-progress DA provider/API edits in the current checkout still prevent the full repository suites from collecting/building.
 
 - Verification for ADR-0038 (2026-10-12): 528 backend tests passed, including actual three-format exports, legacy/v4 overflow, disclaimer validation, signed downloads, security and visual baselines. Fourteen checks that require dedicated MySQL/DA contract databases or an unconfigured acceptance fixture were skipped rather than pointed at production. The older layout-blocking and fixed-title descriptions below record their original rollout; ADR-0038 supersedes those policies.
 

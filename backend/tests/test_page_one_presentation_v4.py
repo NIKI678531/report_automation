@@ -216,7 +216,7 @@ def test_v4_render_html_uses_explicit_pdf_font_fallback_without_losing_requested
     assert "font-family:Carlito" in rendered
 
 
-def test_editable_v3_is_adapted_without_mutation_but_finalized_v3_is_unchanged():
+def test_editable_v3_is_adapted_to_v5_shape_without_mutation_but_finalized_is_unchanged():
     content = initial_document(
         "report-v3", date(2026, 8, 31), "3033-v3", "3033-v3",
         "3033.HK", "Hang Seng TECH Index", "EN",
@@ -229,12 +229,12 @@ def test_editable_v3_is_adapted_without_mutation_but_finalized_v3_is_unchanged()
     locked = document_content_for_read(finalized, document)
 
     assert adapted["template_version"] == "3033-v3"
-    assert adapted["presentation"]["schema_version"] == 2
+    assert adapted["presentation"]["schema_version"] == 3
     assert locked["presentation"]["schema_version"] == 1
     assert content["presentation"]["schema_version"] == 1
 
 
-def test_v3_upgrade_preserves_each_footnote_paragraph_style_and_nudge_through_save():
+def test_v3_draft_upgrade_locks_footnote_style_and_resets_footer_position():
     current = initial_document(
         "report-v3", date(2026, 8, 31), "3033-v3", "3033-v3",
         "3033.HK", "Hang Seng TECH Index", "EN",
@@ -269,23 +269,23 @@ def test_v3_upgrade_preserves_each_footnote_paragraph_style_and_nudge_through_sa
     )
 
     expected_html = (
-        '<p data-line-height="1" data-text-align="left">'
-        '<span data-font-size-pt="8">First &lt;source&gt;.<br>continuation</span></p>'
-        '<p data-line-height="1.4" data-text-align="justify">'
-        '<span data-font-size-pt="10">Second &amp; final.</span></p>'
+        "<p>First &lt;source&gt;.<br>continuation</p>"
+        "<p>Second &amp; final.</p>"
     )
+    assert adapted["presentation"]["schema_version"] == 3
     assert _element(adapted, "historical_performance")["offset_y_pt"] == 15
-    assert _element(adapted, "footnote:historical")["gap_pt"] == 8
+    assert _element(adapted, "footnote:historical")["footer_bottom_mm"] == 20
+    assert "gap_pt" not in _element(adapted, "footnote:historical")
+    assert _element(adapted, "footnote:historical")["body_style"]["font_size_pt"] == 8
+    assert _element(adapted, "footnote:historical")["body_style"]["line_height"] == 1.2
     assert _element(adapted, "footnote:historical")["content_html"] == expected_html
     assert adapted["sections"]["footnotes"]["historical"] == historical_text
     assert locked == original
     assert current == original
 
     resolved = page_one_presentation.resolve_for_render(adapted, {})
-    assert 'style="line-height:1;text-align:left"' in resolved["footnote"]["rendered_content_html"]
-    assert 'style="font-size:8pt"' in resolved["footnote"]["rendered_content_html"]
-    assert 'style="line-height:1.4;text-align:justify"' in resolved["footnote"]["rendered_content_html"]
-    assert 'style="font-size:10pt"' in resolved["footnote"]["rendered_content_html"]
+    assert resolved["footnote"]["body_style"]["font_size_pt"] == 8
+    assert resolved["footnote"]["rendered_content_html"] == expected_html
 
     report = SimpleNamespace(
         id="report-v3",
@@ -305,9 +305,11 @@ def test_v3_upgrade_preserves_each_footnote_paragraph_style_and_nudge_through_sa
         report, product, adapted, current_content=current,
     )
 
-    assert saved["template_version"] == "3033-v4"
+    assert saved["template_version"] == "3033-v5"
+    assert saved["presentation"]["schema_version"] == 3
     assert _element(saved, "historical_performance")["offset_y_pt"] == 15
-    assert _element(saved, "footnote:historical")["gap_pt"] == 8
+    assert _element(saved, "footnote:historical")["footer_bottom_mm"] == 20
+    assert "gap_pt" not in _element(saved, "footnote:historical")
     assert _element(saved, "footnote:historical")["content_html"] == expected_html
     assert saved["sections"]["footnotes"]["historical"] == historical_text
 
@@ -331,7 +333,7 @@ def test_v3_bottom_nudge_migration_is_distinct_across_the_full_legacy_range(
     assert _element(upgraded, "footnote:historical")["gap_pt"] == expected_gap_pt
 
 
-def test_editable_v1_is_adapted_to_v4_shape_but_finalized_v1_is_unchanged():
+def test_editable_v1_is_adapted_to_v5_shape_but_finalized_v1_is_unchanged():
     content = initial_document(
         "report-v1", date(2026, 8, 31), "3033-v1", "3033-v1",
         "3033.HK", "Hang Seng TECH Index", "EN",
@@ -342,15 +344,15 @@ def test_editable_v1_is_adapted_to_v4_shape_but_finalized_v1_is_unchanged():
     adapted = document_content_for_read(SimpleNamespace(status=ReportStatus.EDITING), document)
     locked = document_content_for_read(SimpleNamespace(status=ReportStatus.FINALIZED), document)
 
-    assert adapted["template_version"] == "3033-v4"
-    assert adapted["presentation"]["schema_version"] == 2
+    assert adapted["template_version"] == "3033-v5"
+    assert adapted["presentation"]["schema_version"] == 3
     assert _element(adapted, "review:summary")["title_style"]["font_size_pt"] == 14.04
     assert _element(adapted, "historical_performance")["title_style"]["font_size_pt"] == 12
     assert "presentation" not in locked
     assert "presentation" not in content
 
 
-def test_first_save_of_adapted_v1_stamps_v4_without_losing_the_v2_presentation():
+def test_first_save_of_adapted_v1_stamps_v5_without_losing_the_presentation():
     current = initial_document(
         "report-v1", date(2026, 8, 31), "3033-v1", "3033-v1",
         "3033.HK", "Hang Seng TECH Index", "EN",
@@ -378,7 +380,7 @@ def test_first_save_of_adapted_v1_stamps_v4_without_losing_the_v2_presentation()
         report, product, submitted, current_content=current,
     )
 
-    assert saved["template_version"] == "3033-v4"
-    assert saved["design_token_version"] == "3033-v4"
-    assert saved["presentation"]["schema_version"] == 2
+    assert saved["template_version"] == "3033-v5"
+    assert saved["design_token_version"] == "3033-v5"
+    assert saved["presentation"]["schema_version"] == 3
     assert _element(saved, "review:summary")["title_style"]["font_size_pt"] == 14.04

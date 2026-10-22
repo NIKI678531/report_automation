@@ -35,7 +35,7 @@
     .review-layout-content p { margin:0 0 .8mm; }
     .review-layout-content ul,.review-layout-content ol { margin:0; padding-left:5mm; }
     .review-layout-content li { margin-bottom:.5mm; }
-{%- if page_one and page_one.get('schema_version') == 2 %}
+{%- if page_one and page_one.get('schema_version') in [2, 3] %}
     .review-layout-content :is(p,li,h2,h3,blockquote) { margin-top:var(--paragraph-space-before,0pt); margin-bottom:var(--paragraph-space-after,.8mm); }
 {%- endif %}
     .review-layout-block.align-left { text-align:left; }
@@ -55,7 +55,7 @@
     .review-layout-content [data-text-align="justify"] { text-align:justify; }
     [data-layout-id] { outline:1.2pt solid transparent; outline-offset:1mm; }
     [data-layout-selected="true"] { outline-color:var(--blue); background:rgba(38,96,173,.06); }
-{%- if page_one.get('schema_version') == 2 %}
+{%- if page_one.get('schema_version') in [2, 3] %}
     [data-layout-warning="true"] { outline-color:#d48806; background:rgba(212,136,6,.08); }
 {%- endif %}
     [data-layout-overflow="true"] { outline-color:#f5222d; background:rgba(245,34,45,.08); }
@@ -67,13 +67,18 @@
     td { padding:1.5mm 2mm; }
     .history td { text-align:center; } .history td:first-child { text-align:left; }
     .footnote { position:absolute; left:13mm; right:13mm; bottom:20mm; font-size:8pt; line-height:1.2; }
-{%- if page_one and page_one.get('schema_version') == 2 %}
+{%- if page_one and page_one.get('schema_version') in [2, 3] %}
     .opening-page-body { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); column-gap:0; align-content:start; }
     .opening-page-body > h1,.opening-page-body > .review-layout { grid-column:1 / -1; }
     .history-footnote-group { min-width:0; }
     .history-footnote-group .history { margin-top:0; }
     .history-footnote-group > .footnote { position:static; left:auto; right:auto; bottom:auto; margin-left:0; margin-right:0; }
     .history-footnote-group > .footnote :is(p,li,h2,h3,blockquote) { margin-top:var(--paragraph-space-before,0pt); margin-bottom:var(--paragraph-space-after,0pt); }
+{%- endif %}
+{%- if page_one and page_one.get('schema_version') == 3 %}
+    .review-footnote-layer { position:absolute; left:13mm; right:13mm; display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); z-index:2; }
+    .review-footnote-layer > .footnote { position:static; left:auto; right:auto; bottom:auto; min-width:0; }
+    .review-footnote-layer > .footnote :is(p,li,h2,h3,blockquote) { margin-top:var(--paragraph-space-before,0pt); margin-bottom:var(--paragraph-space-after,0pt); }
 {%- endif %}
     .news-list { margin:0; padding-left:4mm; }
     .news-list li { margin:0 0 3mm; padding-left:2mm; }
@@ -133,6 +138,8 @@
     .layout-continuous .report-page { width:100%; height:auto; min-height:0; margin:0; padding:8mm 10mm; overflow:visible; page-break-after:auto; break-after:auto; }
     .layout-continuous .page-body { padding:0; }
     .layout-continuous .footnote { position:static; margin:4mm 3mm 0; }
+    .layout-continuous .review-footnote-layer { position:static; margin:4mm 3mm 0; }
+    .layout-continuous .review-footnote-layer > .footnote { margin:0; }
     .layout-continuous .report-page + .report-page { padding-top:4mm; }
     .layout-continuous .disclaimer-page { margin-top:6mm; border-top:.45pt solid var(--deep); }
     .layout-continuous .disclaimer-page .page-body { padding:0; }
@@ -158,7 +165,7 @@
 
 {% macro review_node(node) -%}
   {%- if node.kind == 'block' %}
-  {% set block = node.block %}{% set is_v4_block = page_one and page_one.get('schema_version') == 2 %}<section class="review-layout-block align-{{ block.text_align|default('left', true) }}" data-block-id="{{ block.block_id }}"{% if page_one %} data-layout-id="{{ block.layout_id }}" style="margin-top:{{ block.vertical_nudge_pt }}pt"{% endif %}><h3{% if is_v4_block %} style="font-family:{{ block.title_style.pdf_font_family }};font-size:{{ block.title_style.font_size_pt }}pt;color:{{ block.title_style.color }};font-weight:{{ '700' if block.title_style.bold else '400' }};font-style:{{ 'italic' if block.title_style.italic else 'normal' }};text-decoration:{{ 'underline' if block.title_style.underline else 'none' }};line-height:{{ block.title_style.line_height }};margin-top:{{ block.title_style.space_before_pt }}pt;margin-bottom:{{ block.title_style.space_after_pt }}pt;margin-left:{{ block.title_style.indent_em }}em;text-align:{{ block.title_style.text_align }}"{% endif %}>{{ block.title }}</h3><div class="review-layout-content"{% if is_v4_block %} style="font-family:{{ block.body_style.pdf_font_family }};font-size:{{ block.body_style.font_size_pt }}pt;color:{{ block.body_style.color }};font-weight:{{ '700' if block.body_style.bold else '400' }};font-style:{{ 'italic' if block.body_style.italic else 'normal' }};text-decoration:{{ 'underline' if block.body_style.underline else 'none' }};line-height:{{ block.body_style.line_height }};margin-left:{{ block.body_style.indent_em }}em;text-align:{{ block.body_style.text_align }};--paragraph-space-before:{{ block.body_style.space_before_pt }}pt;--paragraph-space-after:{{ block.body_style.space_after_pt }}pt"{% endif %}>{{ (block.rendered_content_html if is_v4_block else block.content)|safe }}</div></section>
+  {% set block = node.block %}{% set is_v4_block = page_one and page_one.get('schema_version') in [2, 3] %}<section class="review-layout-block align-{{ block.text_align|default('left', true) }}" data-block-id="{{ block.block_id }}"{% if page_one %} data-layout-id="{{ block.layout_id }}" style="margin-top:{{ block.vertical_nudge_pt }}pt"{% endif %}><h3{% if is_v4_block %} style="font-family:{{ block.title_style.pdf_font_family }};font-size:{{ block.title_style.font_size_pt }}pt;color:{{ block.title_style.color }};font-weight:{{ '700' if block.title_style.bold else '400' }};font-style:{{ 'italic' if block.title_style.italic else 'normal' }};text-decoration:{{ 'underline' if block.title_style.underline else 'none' }};line-height:{{ block.title_style.line_height }};margin-top:{{ block.title_style.space_before_pt }}pt;margin-bottom:{{ block.title_style.space_after_pt }}pt;margin-left:{{ block.title_style.indent_em }}em;text-align:{{ block.title_style.text_align }}"{% endif %}>{{ block.title }}</h3><div class="review-layout-content"{% if is_v4_block %} style="font-family:{{ block.body_style.pdf_font_family }};font-size:{{ block.body_style.font_size_pt }}pt;color:{{ block.body_style.color }};font-weight:{{ '700' if block.body_style.bold else '400' }};font-style:{{ 'italic' if block.body_style.italic else 'normal' }};text-decoration:{{ 'underline' if block.body_style.underline else 'none' }};line-height:{{ block.body_style.line_height }};margin-left:{{ block.body_style.indent_em }}em;text-align:{{ block.body_style.text_align }};--paragraph-space-before:{{ block.body_style.space_before_pt }}pt;--paragraph-space-after:{{ block.body_style.space_after_pt }}pt"{% endif %}>{{ (block.rendered_content_html if is_v4_block else block.content)|safe }}</div></section>
   {%- elif node.kind == 'columns' %}
   <div class="review-flow-columns" data-review-flow="columns" style="grid-template-columns:repeat({{ node.w }},minmax(0,1fr))">{% for child in node.children %}<div class="review-flow-cell" style="grid-column:{{ child.x - node.x + 1 }} / span {{ child.w }}">{{ review_node(child) }}</div>{% endfor %}</div>
   {%- else %}
@@ -167,18 +174,18 @@
 {%- endmacro %}
 
 {% macro historical_group(opening_page) -%}
-  {% set v4 = page_one and page_one.get('schema_version') == 2 %}
+  {% set v4 = page_one and page_one.get('schema_version') in [2, 3] %}
   {% set historical = page_one.historical if page_one else {} %}
   {% set footnote = page_one.footnote if page_one else {} %}
   {% if v4 %}<div class="history-footnote-group" data-opening-page="{{ opening_page }}" style="grid-column:{{ historical.x + 1 }} / span {{ historical.w }};margin-top:{{ historical.offset_y_pt }}pt">{% endif %}
     <section class="historical-module"{% if page_one %} data-layout-id="historical_performance"{% if not v4 %} style="margin-top:{{ historical.vertical_nudge_pt }}pt"{% endif %}{% endif %}><h2 class="center"{% if v4 %} style="font-family:{{ historical.title_style.pdf_font_family }};font-size:{{ historical.title_style.font_size_pt }}pt;color:{{ historical.title_style.color }};font-weight:{{ '700' if historical.title_style.bold else '400' }};font-style:{{ 'italic' if historical.title_style.italic else 'normal' }};text-decoration:{{ 'underline' if historical.title_style.underline else 'none' }};line-height:{{ historical.title_style.line_height }};margin-top:{{ historical.title_style.space_before_pt }}pt;margin-bottom:{{ historical.title_style.space_after_pt }}pt;text-align:{{ historical.title_style.text_align }}"{% endif %}>{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}</h2>
     <div class="table-scroll" role="region" aria-label="{{ t('historical_performance', product=doc.product_ticker|default(report.product_code ~ '.HK', true), benchmark=benchmark_display_name) }}"><table class="history"{% if page_one and not v4 %} style="font-size:{{ historical.table_font_size_pt }}pt;line-height:{{ historical.table_line_height }}"{% endif %}><thead><tr>{% for label in ['', t('return_1m'), t('return_3m'), t('return_6m'), t('return_ytd')] %}<th{% if v4 %} style="font-family:{{ historical.header_style.pdf_font_family }};font-size:{{ historical.header_style.font_size_pt }}pt;color:{{ historical.header_style.color }};font-weight:{{ '700' if historical.header_style.bold else '400' }};font-style:{{ 'italic' if historical.header_style.italic else 'normal' }};text-decoration:{{ 'underline' if historical.header_style.underline else 'none' }};line-height:{{ historical.header_style.line_height }};padding-top:{{ historical.cell_padding_y_pt }}pt;padding-bottom:{{ historical.cell_padding_y_pt }}pt;text-align:{{ historical.header_style.text_align }}"{% endif %}>{{ label }}</th>{% endfor %}</tr></thead><tbody>{% for row in sections.historical_performance.get('rows', []) %}<tr>{% for value in [row.get('name', ''), row.get('return_1m')|pct(language_mode), row.get('return_3m')|pct(language_mode), row.get('return_6m')|pct(language_mode), row.get('return_ytd')|pct(language_mode)] %}<td{% if v4 %} style="font-family:{{ historical.body_style.pdf_font_family }};font-size:{{ historical.body_style.font_size_pt }}pt;color:{{ historical.body_style.color }};font-weight:{{ '700' if historical.body_style.bold else '400' }};font-style:{{ 'italic' if historical.body_style.italic else 'normal' }};text-decoration:{{ 'underline' if historical.body_style.underline else 'none' }};line-height:{{ historical.body_style.line_height }};padding-top:{{ historical.cell_padding_y_pt }}pt;padding-bottom:{{ historical.cell_padding_y_pt }}pt;text-align:{{ historical.body_style.text_align }}"{% endif %}>{{ value }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div></section>
-    {% if v4 %}<div class="footnote" data-layout-id="footnote:historical" style="margin-top:{{ footnote.gap_pt }}pt;font-family:{{ footnote.body_style.pdf_font_family }};font-size:{{ footnote.body_style.font_size_pt }}pt;color:{{ footnote.body_style.color }};font-weight:{{ '700' if footnote.body_style.bold else '400' }};font-style:{{ 'italic' if footnote.body_style.italic else 'normal' }};text-decoration:{{ 'underline' if footnote.body_style.underline else 'none' }};line-height:{{ footnote.body_style.line_height }};text-align:{{ footnote.body_style.text_align }};--paragraph-space-before:{{ footnote.body_style.space_before_pt }}pt;--paragraph-space-after:{{ footnote.body_style.space_after_pt }}pt">{{ footnote.rendered_content_html|safe }}</div>{% endif %}
+    {% if v4 and page_one.get('schema_version') == 2 %}<div class="footnote" data-layout-id="footnote:historical" style="margin-top:{{ footnote.gap_pt }}pt;font-family:{{ footnote.body_style.pdf_font_family }};font-size:{{ footnote.body_style.font_size_pt }}pt;color:{{ footnote.body_style.color }};font-weight:{{ '700' if footnote.body_style.bold else '400' }};font-style:{{ 'italic' if footnote.body_style.italic else 'normal' }};text-decoration:{{ 'underline' if footnote.body_style.underline else 'none' }};line-height:{{ footnote.body_style.line_height }};text-align:{{ footnote.body_style.text_align }};--paragraph-space-before:{{ footnote.body_style.space_before_pt }}pt;--paragraph-space-after:{{ footnote.body_style.space_after_pt }}pt">{{ footnote.rendered_content_html|safe }}</div>{% endif %}
   {% if v4 %}</div>{% endif %}
 {%- endmacro %}
 
 <article class="report-document" data-layout-mode="{{ layout_mode }}" data-language="{{ language_mode }}">
-{% set v4 = page_one and page_one.get('schema_version') == 2 %}
+{% set v4 = page_one and page_one.get('schema_version') in [2, 3] %}
 {% set historical_page = page_one.historical.page if v4 else 1 %}
 {% if v4 %}
 {% for opening_page in range(1, review_page_count + 1) %}
@@ -203,6 +210,11 @@
     {% endif %}
     {% if opening_page == historical_page %}{{ historical_group(opening_page) }}{% endif %}
   </main>
+  {% if page_one.get('schema_version') == 3 and opening_page == historical_page %}
+  <div class="review-footnote-layer" style="bottom:{{ page_one.footnote.footer_bottom_mm }}mm">
+    <div class="footnote" data-layout-id="footnote:historical" style="grid-column:{{ page_one.footnote.x + 1 }} / span {{ page_one.footnote.w }};font-family:{{ page_one.footnote.body_style.pdf_font_family }};font-size:{{ page_one.footnote.body_style.font_size_pt }}pt;color:{{ page_one.footnote.body_style.color }};font-weight:400;font-style:normal;text-decoration:none;line-height:{{ page_one.footnote.body_style.line_height }};text-align:{{ page_one.footnote.body_style.text_align }};--paragraph-space-before:{{ page_one.footnote.body_style.space_before_pt }}pt;--paragraph-space-after:{{ page_one.footnote.body_style.space_after_pt }}pt">{{ page_one.footnote.rendered_content_html|safe }}</div>
+  </div>
+  {% endif %}
 </section>
 {% endif %}
 {% endfor %}
