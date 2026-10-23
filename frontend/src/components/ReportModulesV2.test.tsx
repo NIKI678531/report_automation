@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, type Report } from "../api";
 import { LocaleProvider, type Locale } from "../i18n";
 import { ReportModule } from "./ReportModulesV2";
+import { legacyReviewBlocks, pageOnePresentation } from "../features/review/reviewPresentation";
 
 afterEach(() => {
   cleanup();
@@ -272,7 +273,7 @@ describe("report module data responsibilities", () => {
     expect(screen.getByText("Average Daily Turnover (HKD)^^")).toBeTruthy();
     expect(screen.getAllByText("N/A")).toHaveLength(1);
     expect(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)^^" })).toHaveProperty("value", "NA");
-    expect(screen.getByText("Number of holdings").nextElementSibling?.textContent).toBe("30");
+    expect(screen.getByText("Number of holdings").closest("dt")?.nextElementSibling?.textContent).toBe("30");
   });
 
   it("uses the saved report headings in module views without changing values", () => {
@@ -534,6 +535,49 @@ describe("report module data responsibilities", () => {
         }),
       }),
     ));
+  });
+
+  it("preserves a moved footer through preview, save and reload", async () => {
+    const editedReport = structuredClone(report);
+    const content = editedReport.latest_document!.content;
+    const blocks = legacyReviewBlocks({}, "June in Review");
+    const presentation = pageOnePresentation(undefined, blocks, "Source: CSOP.");
+    const footnote = presentation.page_one.elements.find((element) => element.id === "footnote:historical")!;
+    Object.assign(footnote, { x: 2, w: 8, footer_bottom_mm: 31 });
+    content.presentation = presentation;
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    const previewDraft = vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
+    const { container, rerender } = render(<ReportModule report={editedReport} active="review" busy={false} run={run} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Historical performance footnote editor" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close expanded editor" }));
+    fireEvent.keyDown(container.querySelector(".page-one-editor")!, { key: "ArrowUp" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Historical performance footnote" }), { target: { value: "Updated source." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save layout" }));
+    await waitFor(() => expect(saveDocument).toHaveBeenCalledOnce());
+    const saved = saveDocument.mock.calls[0][2];
+    expect(saved.presentation).toMatchObject({ page_one: { elements: expect.arrayContaining([
+      expect.objectContaining({ id: "footnote:historical", x: 2, w: 8, footer_bottom_mm: 32, content_html: "<p>Updated source.</p>" }),
+    ]) } });
+    await waitFor(() => expect(previewDraft).toHaveBeenLastCalledWith(report.id, 4, saved, expect.any(AbortSignal)));
+    editedReport.latest_document = { ...editedReport.latest_document!, version: 5, content: saved };
+    rerender(<ReportModule report={editedReport} active="review" busy={false} run={run} />);
+    expect(screen.getByRole("textbox", { name: "Historical performance footnote" })).toHaveProperty("value", "Updated source.");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save layout" })).toHaveProperty("disabled", true));
+    await waitFor(() => expect(previewDraft).toHaveBeenLastCalledWith(report.id, 5, saved, expect.any(AbortSignal)));
+    expect(saveDocument).toHaveBeenCalledOnce();
+  });
+
+  it.each(["FINALIZED", "ARCHIVED"] as const)("keeps the %s Review preview on its saved template", async (status) => {
+    const previewSaved = vi.spyOn(api, "previewSaved").mockResolvedValue("<html>saved</html>");
+    const previewDraft = vi.spyOn(api, "previewDraft").mockResolvedValue("<html>draft</html>");
+    const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
+    render(<ReportModule report={{ ...report, status }} active="review" busy={false} run={run} />);
+    await waitFor(() => expect(previewSaved).toHaveBeenCalledWith(report.id, expect.any(AbortSignal)));
+    expect(previewDraft).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Save layout" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("textbox", { name: "Historical performance footnote" })).toHaveProperty("disabled", true);
+    expect(saveDocument).not.toHaveBeenCalled();
   });
 
   it("migrates a v3 footnote into the locked v5 footer save payload", async () => {

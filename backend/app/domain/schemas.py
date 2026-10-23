@@ -1,8 +1,9 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from app.core.config import settings
 from .models import JobStatus, ReportStatus, SnapshotStatus
 
 
@@ -10,7 +11,43 @@ class ReportCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     product_code: str = "3033"
     report_date: date
-    language_mode: Literal["EN", "ZH_HANT", "BILINGUAL"] = "EN"
+    language_mode: Literal["EN", "ZH_HANS", "ZH_HANT"] = "EN"
+
+
+class LanguageVariantCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language_mode: Literal["EN", "ZH_HANS", "ZH_HANT"]
+    source_document_version: int = Field(ge=1)
+
+
+class LanguageVariantSync(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_document_version: int = Field(ge=1)
+    target_document_version: int = Field(ge=1)
+
+
+class TranslationJobRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    source_report_id: str
+    target_report_id: str
+    source_document_version: int
+    target_document_version: int
+    status: str
+    result_document_version: int | None
+    preserved_fields: list[str]
+    error: dict[str, Any] | None
+    request_id: str
+
+    @computed_field
+    @property
+    def job_id(self) -> str:
+        return self.id
+
+    @computed_field
+    @property
+    def status_url(self) -> str:
+        return f"{settings.api_prefix}/reports/{self.target_report_id}/translation-jobs/{self.id}"
 
 
 class ProductRead(BaseModel):
@@ -166,6 +203,17 @@ class ImportApply(BaseModel):
     reason: str | None = Field(default=None, min_length=5, max_length=500)
 
 
+class AutomaticDataRefresh(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1)
+
+
+class ImportBatchApply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=1)
+    reason: str | None = Field(default=None, min_length=5, max_length=500)
+
+
 class DatasetClear(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: int = Field(ge=1)
@@ -174,6 +222,18 @@ class DatasetClear(BaseModel):
 class DocumentUpdate(BaseModel):
     version: int
     content: dict[str, Any]
+
+
+class PreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int | None = Field(default=None, ge=1)
+    content: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _require_version_and_content_together(self) -> "PreviewRequest":
+        if (self.version is None) != (self.content is None):
+            raise ValueError("version and content must be supplied together")
+        return self
 
 
 class FinalizeRequest(BaseModel):

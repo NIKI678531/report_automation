@@ -6,6 +6,7 @@
   <title>{{ report.product_name }} - {{ report_date_long }}</title>
   <style>
     {{ cjk_font_css|safe }}
+    {{ calibri_font_css|safe }}
     :root { --deep:#22327f; --blue:#2660ad; --text:#000; --paper:#fff; }
     * { box-sizing:border-box; }
     html,body { margin:0; background:#eee; color:var(--text); font-family:Calibri,Carlito,Arial,sans-serif; font-size:10pt; line-height:1.22; }
@@ -67,6 +68,9 @@
     td { padding:1.5mm 2mm; }
     .history td { text-align:center; } .history td:first-child { text-align:left; }
     .footnote { position:absolute; left:13mm; right:13mm; bottom:20mm; font-size:8pt; line-height:1.2; }
+  {%- if footnote_tokens %}
+    .footnote { font-family:"{{ footnote_tokens.pdfFontFamily }}","Embedded Noto Sans CJK SC","Embedded Noto Sans CJK TC",sans-serif; font-size:{{ footnote_tokens.fontSizePt }}pt; color:{{ footnote_tokens.color }}; font-weight:400; font-style:normal; line-height:{{ footnote_tokens.lineHeight }}; text-align:left; }
+  {%- endif %}
 {%- if page_one and page_one.get('schema_version') in [2, 3] %}
     .opening-page-body { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); column-gap:0; align-content:start; }
     .opening-page-body > h1,.opening-page-body > .review-layout { grid-column:1 / -1; }
@@ -149,6 +153,24 @@
       .layout-continuous .analytics-grid { grid-template-columns:minmax(0,1fr); gap:6mm; }
       .layout-continuous .donut { max-width:100%; height:auto !important; }
     }
+{%- if product_sidebar %}
+    .report-reader { --report-column-width:210mm; --sidebar-width:{{ product_sidebar.width }}; --sidebar-inset:{{ product_sidebar.inset }}; --sidebar-gap:{{ product_sidebar.gap }}; --report-left:max(calc(var(--sidebar-inset) + var(--sidebar-width) + var(--sidebar-gap)), calc((100% - var(--report-column-width) + var(--sidebar-inset) + var(--sidebar-width)) / 2)); padding:0 var(--sidebar-gap) 0 calc(var(--sidebar-inset) + var(--sidebar-width) + var(--sidebar-gap)); }
+    .report-reader .report-document { width:min(var(--report-column-width),100%); min-width:0; overflow-wrap:anywhere; }
+    .product-sidebar { position:fixed; left:calc((var(--report-left) - var(--sidebar-width)) / 2); top:var(--sidebar-inset); width:var(--sidebar-width); display:grid; gap:var(--sidebar-gap); z-index:10; }
+    .product-ticker { display:flex; align-items:center; justify-content:center; height:{{ product_sidebar.cardHeight }}; border-radius:{{ product_sidebar.radius }}; background:var(--paper); color:var(--deep); box-shadow:{{ product_sidebar.shadow }}; font-size:{{ product_sidebar.fontSize }}; font-weight:700; text-decoration:none; letter-spacing:0; border-bottom:3px solid var(--blue); }
+    .product-ticker:hover { color:var(--blue); }
+    .product-ticker:active { transform:scale(.97); }
+    .product-ticker:focus-visible { outline:none; box-shadow:{{ product_sidebar.focusRing }}; }
+    @media screen and (max-width:800px) {
+      .report-reader { --sidebar-width:{{ product_sidebar.mobileWidth }}; --sidebar-inset:{{ product_sidebar.mobileInset }}; --sidebar-gap:{{ product_sidebar.mobileGap }}; }
+      .product-ticker { height:{{ product_sidebar.mobileCardHeight }}; font-size:{{ product_sidebar.mobileFontSize }}; }
+      .report-reader :is(.review-layout,.review-flow-row,.review-flow-columns) { column-gap:var(--sidebar-gap); }
+    }
+    @media print {
+      .product-sidebar { display:none; }
+      .report-reader { display:block; max-width:none; padding:0; }
+    }
+{%- endif %}
   </style>
 </head>
 <body class="layout-{{ layout_mode }} language-{{ language_mode|lower|replace('_', '-') }}">
@@ -184,6 +206,12 @@
   {% if v4 %}</div>{% endif %}
 {%- endmacro %}
 
+{% if product_sidebar %}
+<div class="report-reader">
+<aside class="product-sidebar">
+  {% for link in product_sidebar.links %}<a class="product-ticker" href="{{ link.href }}" target="_blank" rel="noopener noreferrer">{{ link.ticker }}</a>{% endfor %}
+</aside>
+{% endif %}
 <article class="report-document" data-layout-mode="{{ layout_mode }}" data-language="{{ language_mode }}">
 {% set v4 = page_one and page_one.get('schema_version') in [2, 3] %}
 {% set historical_page = page_one.historical.page if v4 else 1 %}
@@ -266,4 +294,5 @@
   <main class="page-body"><h2 id="disclaimer-title">{{ disclaimer.title }}</h2><div class="disclaimer-copy">{% for paragraph in disclaimer.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}<p class="disclaimer-issuer">{{ disclaimer.issuer }}</p></div></main>
 </section>
 </article>
+{% if product_sidebar %}</div>{% endif %}
 </body></html>

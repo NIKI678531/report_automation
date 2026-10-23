@@ -280,7 +280,7 @@ def test_every_output_format_reads_the_same_display_value(client, tmp_path):
         footnote_runs = section.footer.paragraphs[0].runs
         if section.footer.paragraphs[0].text.replace("\u200b", "").strip():
             assert footnote_runs[0].font.name == "Calibri"
-            assert footnote_runs[0].font.size.pt == 10
+            assert footnote_runs[0].font.size.pt == 8
     assert "Asset Under Management (HKD)^" in docx_text
     assert "67,536.55 million" in docx_text
     assert "Average Daily Turnover (HKD)^^" in docx_text

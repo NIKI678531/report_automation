@@ -18,6 +18,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
+from fastapi import HTTPException
 
 from app.core.config import settings
 from app.domain.document import checksum as structured_checksum
@@ -56,9 +57,9 @@ LAYOUT_POLICY_VERSION = "paged-layout-advisory-v3"
 
 def renderer_version_for(format_name: str) -> str:
     return (
-        f"{settings.renderer_version}-paged-i18n-v5" if format_name == "pdf"
-        else "html-continuous-i18n-v5" if format_name == "html"
-        else "docx-paged-i18n-v5"
+        f"{settings.renderer_version}-paged-i18n-v6" if format_name == "pdf"
+        else "html-fixed-sidebar-v7" if format_name == "html"
+        else "docx-shared-footer-v7"
     )
 
 
@@ -287,6 +288,7 @@ def _footer_table(
     footnote_font_size_pt: float = 10,
     footnote_x: int = 0,
     footnote_w: int = 12,
+    footnote_font_name: str | None = None,
     dynamic_page_number: bool = False,
     profile_page_number: int | None = None,
 ) -> None:
@@ -354,6 +356,12 @@ def _footer_table(
         else:
             anchor.paragraph_format.line_spacing = Pt(1)
             _set_run_font(anchor.add_run("\u200b"), font_name, size=1, color=RGBColor(255, 255, 255))
+
+    if footnote and footnote_font_name:
+        for paragraph in footer.paragraphs:
+            for run in paragraph.runs:
+                _set_run_font(run, footnote_font_name, bold=False)
+                run._element.get_or_add_rPr().find(qn("w:rFonts")).set(qn("w:eastAsia"), font_name)
 
     # The reference stacks the footnote, logo and page number vertically. The table extends
     # into the right page margin so the logo and folio align with the PDF rather than the body.
@@ -455,6 +463,7 @@ def _page_setup(
         footnote_font_size_pt=footnote_font_size_pt,
         footnote_x=footnote_x,
         footnote_w=footnote_w,
+        footnote_font_name="Calibri",
         dynamic_page_number=dynamic_page_number,
         profile_page_number=profile_page_number,
     )
@@ -1266,7 +1275,7 @@ def _render_historical_docx(
     blue_hex: str,
     deep: RGBColor,
 ) -> None:
-    """Render the indivisible History/footnote group on its assigned opening page."""
+    """Render Historical Performance on its assigned opening page."""
 
     is_controlled = bool(page_one and page_one.get("schema_version") in {2, 3})
     historical = page_one["historical"] if page_one else {}
@@ -1366,21 +1375,6 @@ def _render_historical_docx(
         cell_padding_y_pt=float(historical.get("cell_padding_y_pt") or 0)
         if is_controlled else None,
     )
-    if page_one and page_one.get("schema_version") == 2:
-        footnote = page_one["footnote"]
-        footnote_style = dict(footnote["body_style"])
-        footnote_style["space_before_pt"] = (
-            float(footnote_style.get("space_before_pt") or 0)
-            + float(footnote.get("gap_pt") or 0)
-        )
-        _append_rich_text(
-            content_parent,
-            str(footnote.get("rendered_content_html") or footnote.get("content_html") or ""),
-            font_name=str(footnote_style.get("font_family") or font_name),
-            size=float(footnote_style.get("font_size_pt") or 8),
-            alignment=WD_ALIGN_PARAGRAPH.LEFT,
-            default_style=footnote_style,
-        )
 
 
 def render_docx(report: Report, content: dict, destination: Path) -> None:
@@ -1393,7 +1387,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     tokens = _render_tokens(str(content.get("design_token_version") or "3033-v1"))
     page_one = (
         page_one_presentation.resolve_for_render(content, tokens)
-        if content.get("template_version") in {"3033-v3", "3033-v4", "3033-v5"}
+        if content.get("template_version") in {"3033-v3", "3033-v4", "3033-v5", "3033-v6"}
         else None
     )
     if page_one is not None:
@@ -1412,7 +1406,6 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     review = sections["month_in_review"]
     footnotes = sections.get("footnotes") or {}
     is_controlled = bool(page_one and page_one.get("schema_version") in {2, 3})
-    is_v5 = bool(page_one and page_one.get("schema_version") == 3)
     review_page_count = int(page_one.get("review_page_count") or 1) if is_controlled else 1
     historical_page = int(page_one["historical"].get("page") or 1) if is_controlled else 1
     if is_controlled:
@@ -1422,24 +1415,21 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
             document.settings.element.append(update_fields)
         update_fields.set(qn("w:val"), "true")
     def opening_footnote_kwargs(page_number: int) -> dict[str, Any]:
-        if page_number == 1 and not is_controlled:
-            return {
-                "footnote": str(footnotes.get("historical") or ""),
-                "footnote_paragraphs": page_one["footnote"]["paragraphs"] if page_one else None,
-                "footnote_bottom_nudge_pt": page_one["footnote"]["bottom_nudge_pt"] if page_one else 0,
-            }
-        if not is_v5 or page_number != historical_page or page_one is None:
+        if page_number != historical_page:
             return {}
-        footnote = page_one["footnote"]
+        footnote = page_one["footnote"] if page_one else {}
+        paragraphs = footnote.get("paragraphs")
         return {
             "footnote": str(footnotes.get("historical") or ""),
-            "footnote_paragraphs": footnote["paragraphs"],
+            "footnote_paragraphs": [
+                {**paragraph, "font_size_pt": 8} for paragraph in paragraphs
+            ] if paragraphs is not None else None,
             "footnote_bottom_nudge_pt": (
                 float(footnote["footer_bottom_mm"]) - 20.0
-            ) * 72 / 25.4,
+            ) * 72 / 25.4 if "footer_bottom_mm" in footnote else float(footnote.get("bottom_nudge_pt") or 0),
             "footnote_font_size_pt": 8,
-            "footnote_x": int(footnote["x"]),
-            "footnote_w": int(footnote["w"]),
+            "footnote_x": int(footnote.get("x", 0)),
+            "footnote_w": int(footnote.get("w", 12)),
         }
 
     _page_setup(
@@ -1544,7 +1534,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _page_setup(
         page3, constituent_page_number, report, language_mode, tokens,
         footnote=str(footnotes.get("constituents") or ""), banner=banner,
-        footnote_font_size_pt=8 if is_v5 else 10,
+        footnote_font_size_pt=8,
         dynamic_page_number=is_controlled, profile_page_number=3,
     )
     heading = document.add_heading(titles["constituent_performance"], 1)
@@ -1579,7 +1569,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _page_setup(
         page4, analytics_page_number, report, language_mode, tokens,
         footnote=str(footnotes.get("analytics") or ""), banner=banner,
-        footnote_font_size_pt=8 if is_v5 else 10,
+        footnote_font_size_pt=8,
         dynamic_page_number=is_controlled, profile_page_number=4,
     )
     analytics = sections["analytics"]
@@ -1856,6 +1846,23 @@ def _inspect_legacy_page_one_layout(
     return tuple(findings)
 
 
+def _verify_calibri_loaded(page: Any, content: Mapping[str, Any]) -> None:
+    if content.get("template_version") != "3033-v6":
+        return
+    loaded = page.evaluate('''async () => {
+        try {
+            const faces = await document.fonts.load('8pt "Report Calibri"', 'Source 0123456789');
+            return faces.length > 0 && faces.every(face => face.status === 'loaded');
+        } catch { return false; }
+    }''')
+    if not loaded:
+        raise HTTPException(status_code=503, detail={
+            "error_code": "CALIBRI_FONT_UNAVAILABLE",
+            "message": "Chromium could not load the required Calibri footnote font.",
+            "fix_hint": "Check CALIBRI_FONT_PATH contains a valid licensed Calibri Regular TTF.",
+        })
+
+
 def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     """Measure every paged sheet and return normalized warning/blocking findings.
 
@@ -1867,7 +1874,7 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
     editor provides its own immediate markers.
     """
 
-    if content.get("template_version") not in {"3033-v4", "3033-v5"}:
+    if content.get("template_version") not in {"3033-v4", "3033-v5", "3033-v6"}:
         return _inspect_legacy_page_one_layout(report, content)
 
     from playwright.sync_api import sync_playwright
@@ -1890,6 +1897,7 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
                         })
                     ));
                 }""")
+                _verify_calibri_loaded(page, content)
                 findings = page.evaluate("""(minorToleranceMm) => {
                     const pixelTolerance = 0.5;
                     const pxPerMm = 96 / 25.4;
@@ -2025,7 +2033,7 @@ def inspect_page_layout(report: Report, content: dict[str, Any]) -> tuple[dict[s
                 }""", MINOR_LAYOUT_OVERFLOW_TOLERANCE_MM)
             finally:
                 browser.close()
-    if content.get("template_version") in {"3033-v4", "3033-v5"} and isinstance(
+    if content.get("template_version") in {"3033-v4", "3033-v5", "3033-v6"} and isinstance(
         content.get("presentation"), Mapping
     ):
         resolved = page_one_presentation.resolve_for_render(
@@ -2174,5 +2182,8 @@ def _render_file(report: Report, document: ReportDocument, format_name: str, des
                         });
                     }));
                 }""")
-                page.pdf(path=str(destination), format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}, prefer_css_page_size=True)
-                browser.close()
+                try:
+                    _verify_calibri_loaded(page, document.content)
+                    page.pdf(path=str(destination), format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}, prefer_css_page_size=True)
+                finally:
+                    browser.close()

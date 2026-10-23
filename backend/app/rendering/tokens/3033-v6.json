@@ -1,0 +1,27 @@
+{
+  "id": "3033-v6",
+  "extends": "3033-v5",
+  "change": "Calibri data footnotes and ticker-only product links in 3033 HTML",
+  "footnote": {
+    "pdfFontFamily": "Report Calibri"
+  },
+  "productSidebar": {
+    "width": "88px",
+    "gap": "16px",
+    "inset": "24px",
+    "cardHeight": "72px",
+    "radius": "6px",
+    "fontSize": "22px",
+    "mobileWidth": "52px",
+    "mobileInset": "8px",
+    "mobileGap": "8px",
+    "mobileCardHeight": "48px",
+    "mobileFontSize": "16px",
+    "shadow": "0 2px 12px rgba(0,0,0,.1)",
+    "focusRing": "0 0 0 3px rgba(38,96,173,.35)",
+    "links": [
+      {"ticker": "3033", "href": "https://www.csopasset.com/tc/products/co-chst"},
+      {"ticker": "3149", "href": "https://www.csopasset.com/tc/products/hk-cptc"}
+    ]
+  }
+}

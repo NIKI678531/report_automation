@@ -156,6 +156,34 @@ def test_monthly_turnover_accepts_valid_mysql_double_rounding(tmp_path, monkeypa
     )
 
 
+@pytest.mark.parametrize("assignment", [
+    "trading_days = 0",
+    "trading_days = 1.5",
+    "total_turnover = -1",
+    "period_end = '2026-06-29'",
+    "currency = ''",
+])
+def test_monthly_turnover_rejects_invalid_contract_inputs(tmp_path, monkeypatch, assignment):
+    database = tmp_path / "invalid-turnover.sqlite"
+    build_monthly_turnover_snapshot(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(f"UPDATE market_monthly_turnovers SET {assignment}")
+    monkeypatch.setattr(settings, "da_report_sqlite_path", database)
+    monkeypatch.setattr(settings, "da_report_sqlite_sha256", None)
+    monkeypatch.setattr(settings, "da_report_database_url", None)
+    with pytest.raises(DaReportProviderError) as raised:
+        load_monthly_turnover(product_ticker="3033.HK", report_date=date(2026, 6, 30))
+    assert raised.value.code == "DA_REPORT_MONTHLY_TURNOVER_INVALID"
+
+
+def test_monthly_turnover_reports_missing_source(monkeypatch):
+    monkeypatch.setattr(settings, "da_report_database_url", None)
+    monkeypatch.setattr(settings, "da_report_sqlite_path", None)
+    with pytest.raises(DaReportProviderError) as raised:
+        load_monthly_turnover(product_ticker="3033.HK", report_date=date(2026, 6, 30))
+    assert raised.value.code == "DA_REPORT_NOT_CONFIGURED"
+
+
 def test_monthly_schema_failure_does_not_require_news_tables(tmp_path, monkeypatch):
     database = tmp_path / "incomplete.sqlite"
     sqlite3.connect(database).close()

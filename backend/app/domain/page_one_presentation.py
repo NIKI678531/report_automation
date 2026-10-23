@@ -637,7 +637,7 @@ class PageOnePresentationResolver:
     @staticmethod
     def supports(content: Mapping[str, Any]) -> bool:
         return content.get("template_version") in {
-            "3033-v2", "3033-v3", "3033-v4", "3033-v5",
+            "3033-v2", "3033-v3", "3033-v4", "3033-v5", "3033-v6",
         } or "presentation" in content
 
     def adapt_document(self, content: Mapping[str, Any]) -> dict[str, Any]:
@@ -667,7 +667,7 @@ class PageOnePresentationResolver:
             template_version = result.get("template_version")
             schema_version = (
                 PRESENTATION_SCHEMA_VERSION
-                if template_version == "3033-v5"
+                if template_version in {"3033-v5", "3033-v6"}
                 else V4_PRESENTATION_SCHEMA_VERSION
                 if template_version == "3033-v4"
                 else LEGACY_PRESENTATION_SCHEMA_VERSION
@@ -852,7 +852,7 @@ class PageOnePresentationResolver:
 
         source = deepcopy(dict(content))
         original_template = str(source.get("template_version") or "")
-        if original_template == "3033-v5":
+        if original_template in {"3033-v5", "3033-v6"}:
             result = self.adapt_document(source)
         else:
             result = self.upgrade_document_to_v4(source, stamp_template=False)
@@ -863,6 +863,12 @@ class PageOnePresentationResolver:
         result["presentation"] = self._normalize_presentation(result)
         self._sync_v2_footnote_plain_text(result)
         self._sync_legacy_block_geometry(result)
+        return result
+
+    def upgrade_document_to_v6(self, content: Mapping[str, Any]) -> dict[str, Any]:
+        result = self.upgrade_document_to_v5(content, stamp_template=False)
+        result["template_version"] = "3033-v6"
+        result["design_token_version"] = "3033-v6"
         return result
 
     def reconcile_submission(
@@ -879,7 +885,7 @@ class PageOnePresentationResolver:
 
         result = deepcopy(dict(submitted))
         current_template = str((current or {}).get("template_version") or "")
-        current_is_controlled = current_template in {"3033-v3", "3033-v4", "3033-v5"}
+        current_is_controlled = current_template in {"3033-v3", "3033-v4", "3033-v5", "3033-v6"}
         if current_is_controlled and not isinstance(result.get("presentation"), Mapping):
             raise PageOnePresentationError(
                 "A controlled-layout document must include its page-one presentation.",
@@ -892,11 +898,11 @@ class PageOnePresentationResolver:
                 "An editable v4 document must use the v4 or adapted v5 presentation schema.",
                 "presentation.schema_version",
             )
-        if current_template == "3033-v5" and result["presentation"].get(
+        if current_template in {"3033-v5", "3033-v6"} and result["presentation"].get(
             "schema_version"
         ) != PRESENTATION_SCHEMA_VERSION:
             raise PageOnePresentationError(
-                f"A v5 document must use presentation.schema_version={PRESENTATION_SCHEMA_VERSION}.",
+                f"A {current_template} document must use presentation.schema_version={PRESENTATION_SCHEMA_VERSION}.",
                 "presentation.schema_version",
             )
         if not self.supports(result):

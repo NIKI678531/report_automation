@@ -109,7 +109,8 @@ class Settings(BaseModel):
     db_pool_timeout_seconds: int = _env_int("DB_POOL_TIMEOUT_SECONDS", 30)
     db_connect_timeout_seconds: int = _env_int("DB_CONNECT_TIMEOUT_SECONDS", 10)
     db_echo: bool = _env_bool("DB_ECHO", False)
-    template_version: str = "3033-v5"
+    template_version: str = "3033-v6"
+    calibri_font_path: Path | None = _env_path("CALIBRI_FONT_PATH")
     renderer_version: str = "chromium-v1"
     # REMOTE is a shared application identity behind the existing remote application platform.
     auth_mode: str = _env_str("AUTH_MODE", _LOCAL_AUTH_MODE).upper()

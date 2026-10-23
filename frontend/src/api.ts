@@ -1,10 +1,15 @@
+import { apiUrl, artifactUrl } from "./remoteConfig";
+
 export type ReportStatus = "DRAFT" | "DATA_READY" | "EDITING" | "QA_BLOCKED" | "READY_TO_FINALIZE" | "REVIEW" | "FINALIZED" | "ARCHIVED";
+export type OutputFormat = "pdf" | "html" | "docx";
+export type ReportLanguage = "EN" | "ZH_HANS" | "ZH_HANT" | "BILINGUAL";
 
 export interface Product {
   id: string;
   product_code: string;
   ticker: string;
   name_en: string;
+  name_zh_hans?: string | null;
   name_zh_hant: string | null;
   constituent_index_code: string;
   constituent_index_name: string | null;
@@ -64,15 +69,21 @@ export interface CompanyNewsCatalogItem {
   source_code: string;
   source_name: string;
   source_name_zh: string | null;
+  source_name_zh_hans?: string | null;
+  source_name_zh_hans_source?: "SOURCE_ZH_HANS" | "OPENCC_T2S" | "MISSING";
   published_at: string;
   published_at_source: "published_at" | "fetched_at";
   fetched_at: string;
   title: string;
   title_en: string | null;
   title_zh: string | null;
+  title_zh_hans?: string | null;
+  title_zh_hans_source?: "SOURCE_ZH_HANS" | "OPENCC_T2S" | "MISSING";
   summary: string;
   summary_en: string | null;
   summary_zh: string | null;
+  summary_zh_hans?: string | null;
+  summary_zh_hans_source?: "SOURCE_ZH_HANS" | "OPENCC_T2S" | "MISSING";
   category: "Corporate";
   region: string | null;
   sentiment: string | null;
@@ -86,7 +97,8 @@ export interface CompanyNewsCatalogPage {
   has_more: boolean;
   next_cursor: string | null;
   facets: {
-    sources: Array<{ value: string; label: string; label_zh: string | null; count: number }>;
+    companies: Array<{ security_code: string; ticker: string; name_en: string; name_zh_hans?: string | null; name_zh_hant: string | null }>;
+    sources: Array<{ value: string; label: string; label_zh: string | null; label_zh_hans?: string | null; count: number }>;
     sentiments: Record<string, number>;
     importance: Record<string, number>;
     date_min: string | null;
@@ -96,6 +108,8 @@ export interface CompanyNewsCatalogPage {
 
 export interface CompanyNewsCatalogQuery {
   query?: string;
+  company?: string;
+  company_scope?: "CONSTITUENTS";
   source?: string;
   sentiment?: string;
   importance?: "LOW" | "MEDIUM" | "HIGH";
@@ -119,6 +133,8 @@ export interface DatasetSlot {
   latest_import_id: string | null;
   filename: string | null;
   rows: number;
+  source_type?: string | null;
+  source_name?: string | null;
   blocking: number;
   warnings: number;
 }
@@ -133,6 +149,54 @@ export interface ImportResult {
   summary: { rows_parsed: number; blocking: number; warnings: number };
   apply_mode: "FIRST_APPLY" | "OVERWRITE";
   requires_reason: boolean;
+}
+
+export interface ImportBatchFile {
+  id: string;
+  filename: string;
+  detected_type: string;
+  mapping_version: number | null;
+  status: "VALIDATED" | "REJECTED" | "NEEDS_MAPPING" | "UNSUPPORTED" | "EXCLUDED" | "APPLIED";
+  row_count: number;
+  errors: Array<{ error_code?: string; check_id?: string; severity: string; message?: string; fix_hint?: string }>;
+  preview: { columns: string[]; rows: Array<Record<string, unknown>> };
+}
+
+export interface ImportBatch {
+  id: string;
+  report_id: string;
+  status: "STAGING" | "INCOMPLETE" | "BLOCKED" | "PARTIAL_READY" | "READY" | "APPLIED" | "DISCARDED";
+  coverage: {
+    mode?: "CANONICAL" | "SPLIT";
+    identity?: { state: "READY" | "MISSING"; source?: "BATCH" | "ACTIVE_SNAPSHOT" | null; import_ids: string[] };
+    returns?: { state: "READY" | "MISSING"; source?: "BATCH" | null; import_ids: string[] };
+    unsupported_count?: number;
+  };
+  errors: Array<{ error_code?: string; severity: string; message?: string; fix_hint?: string }>;
+  reason: string | null;
+  applied_snapshot_id: string | null;
+  requires_reason?: boolean;
+  files: ImportBatchFile[];
+  merge_preview: {
+    report_month: string | null;
+    as_of_date: string | null;
+    sources: Array<{ dataset_type: string; filename: string }>;
+    rows: Array<{
+      security_code: string;
+      name_en: string | null;
+      name_zh_hans?: string | null;
+      name_zh_hant: string | null;
+      close_price: string | number | null;
+      currency: string | null;
+      weight: string | number | null;
+      return_1m: string | number | null;
+      return_3m: string | number | null;
+      return_6m: string | number | null;
+      return_ytd: string | number | null;
+    }>;
+    unmatched_identity_codes: string[];
+    unmatched_return_codes: string[];
+  };
 }
 
 export interface NewsSelectionDraft {
@@ -152,65 +216,213 @@ export interface Report {
   benchmark_instrument_code: string;
   benchmark_code: string;
   report_date: string;
+  language_mode: ReportLanguage;
+  /** Whether this report's data may be distributed. TESTING artifacts are watermarked. */
+  lane: "PRODUCTION" | "TESTING";
   status: ReportStatus;
   revision: number;
   version: number;
   active_snapshot_id: string | null;
+  parent_report_id?: string | null;
+  translation_source_report_id?: string | null;
+  translation_enabled?: boolean;
+  translation_source_language_mode?: ReportLanguage | null;
+  report_title_defaults?: Record<string, string>;
   finalized_document_version: number | null;
   latest_document?: { version: number; checksum: string; content: Record<string, unknown> } | null;
   quality_results?: Array<{ check_id: string; status: string; severity: string; fix_hint: string }>;
-  artifacts?: Array<{ id: string; format: string; size_bytes: number; checksum: string }>;
+  created_at?: string;
+  updated_at?: string;
 }
 
-export interface RenderJob {
+export interface TranslationJob {
   id: string;
-  format: string;
-  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED";
-  progress: number;
-  stage: string;
-  error: { error_code?: string; message?: string } | null;
-  artifact_id: string | null;
+  source_report_id: string;
+  target_report_id: string;
+  source_document_version: number;
+  target_document_version: number;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  result_document_version: number | null;
+  preserved_fields: string[];
+  error: { error_code: string; message?: string; retryable?: boolean } | null;
+  request_id: string;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+
+export interface CalculationResult {
+  snapshot_id: string;
+  formula_version: string;
+  metrics: Record<string, unknown>;
+  quality_results: Array<Record<string, unknown>>;
+  document_version: number;
+}
+
+export interface ErrorFinding {
+  error_code?: string;
+  message?: string;
+  fix_hint?: string;
+  field?: string | null;
+  row?: number | null;
+  entity_id?: string | null;
+}
+
+/** The structured envelope every backend failure carries. */
+export interface ErrorEnvelope {
+  error_code?: string;
+  message?: string;
+  severity?: string;
+  fix_hint?: string;
+  request_id?: string | null;
+  findings?: ErrorFinding[];
+}
+
+/**
+ * A failed API call, with the envelope kept intact.
+ *
+ * The client used to throw `new Error(await response.text())`, so the raw JSON was what reached
+ * `setError` and the user was shown `{"error_code":"FILE_TOO_LARGE",...}`. The backend already
+ * says what went wrong and how to fix it; this only has to present it. `toString` is overridden
+ * because call sites use `String(caught)`, which would otherwise prefix the name.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly errorCode: string;
+  readonly fixHint: string;
+  readonly requestId: string | null;
+  readonly findings: ErrorFinding[];
+
+  constructor(status: number, envelope: ErrorEnvelope, fallback: string) {
+    const findings = envelope.findings ?? [];
+    const detail = findings
+      .slice(0, 3)
+      .map((finding) => [finding.field, finding.message ?? finding.fix_hint ?? finding.error_code].filter(Boolean).join(": "))
+      .filter(Boolean);
+    super([envelope.message || fallback, envelope.fix_hint, ...detail].filter(Boolean).join(" "));
+    this.name = "ApiError";
+    this.status = status;
+    this.errorCode = envelope.error_code ?? "REQUEST_FAILED";
+    this.fixHint = envelope.fix_hint ?? "";
+    this.requestId = envelope.request_id ?? null;
+    this.findings = findings;
+  }
+
+  toString(): string {
+    return this.message;
+  }
+}
+
+/** Status codes the proxy can answer on its own, before the API ever sees the request. */
+const PROXY_FALLBACKS: Record<number, string> = {
+  401: "Your session has expired. Sign in again.",
+  403: "You do not have permission to do this.",
+  413: "The file is larger than this deployment accepts.",
+  502: "The API did not respond. It may still be starting up.",
+  503: "The service is unavailable. Try again shortly.",
+  504: "The request took too long and was cut off by the gateway.",
+};
+
+async function envelopeOf(response: Response): Promise<ErrorEnvelope> {
+  const body = await response.text();
+  if (!body) return {};
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    // nginx and the browser can both answer with something that is valid JSON but not an envelope.
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as ErrorEnvelope;
+  } catch {
+    // An HTML error page from the proxy. Showing its markup would be worse than the fallback.
+  }
+  return {};
+}
+
+async function fetchChecked(url: string, init?: RequestInit): Promise<Response> {
   const isForm = init?.body instanceof FormData;
-  const response = await fetch(`/api/v1${path}`, {
+  const response = await fetch(url, {
     ...init,
     headers: { ...(!isForm ? { "Content-Type": "application/json" } : {}), "X-Request-ID": crypto.randomUUID(), ...init?.headers },
   });
-  if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`);
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      await envelopeOf(response),
+      PROXY_FALLBACKS[response.status] ?? `Request failed: ${response.status}`,
+    );
+  }
+  return response;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetchChecked(apiUrl(path), init);
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
 export const api = {
+  downloadReport: async (id: string, format: OutputFormat) => {
+    const signed = await request<{ download_url: string }>(`/reports/${encodeURIComponent(id)}/exports/${format}/download`);
+    const response = await fetchChecked(artifactUrl(signed.download_url));
+    const expectedMime = { html: "text/html", pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }[format];
+    if (response.headers.get("Content-Type")?.split(";")[0] !== expectedMime) {
+      throw new ApiError(502, {}, "The download response has an unexpected format. Please retry.");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    try {
+      link.href = url;
+      link.download = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? `report.${format}`;
+      document.body.appendChild(link);
+      link.click();
+    } finally {
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  },
   listProducts: (asOfDate: string) => request<Product[]>(`/products?as_of_date=${encodeURIComponent(asOfDate)}`),
-  listReports: () => request<Report[]>("/reports"),
+  listReports: (options?: { includeArchived?: boolean }) => request<Report[]>(
+    `/reports${options?.includeArchived ? "?include_archived=true" : ""}`,
+  ),
   getReport: (id: string) => request<Report>(`/reports/${id}`),
-  createReport: (report_date: string, product_code = "3033") => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date }) }),
+  createReport: (report_date: string, product_code = "3033", language_mode?: Extract<ReportLanguage, "EN" | "ZH_HANS" | "ZH_HANT">) => request<Report>("/reports", { method: "POST", body: JSON.stringify({ product_code, report_date, ...(language_mode ? { language_mode } : {}) }) }),
+  createLanguageVariant: (sourceReportId: string, language_mode: Extract<ReportLanguage, "EN" | "ZH_HANS" | "ZH_HANT">, source_document_version: number) => request<Report>(`/reports/${sourceReportId}/language-variants`, { method: "POST", body: JSON.stringify({ language_mode, source_document_version }) }),
+  syncLanguageVariant: (sourceReportId: string, targetReportId: string, source_document_version: number, target_document_version: number) => request<Report>(`/reports/${sourceReportId}/language-variants/${targetReportId}/sync`, { method: "POST", body: JSON.stringify({ source_document_version, target_document_version }) }),
+  translateReport: (sourceReportId: string, targetReportId: string, source_document_version: number, target_document_version: number, key: string) => request<TranslationJob>(`/reports/${sourceReportId}/language-variants/${targetReportId}/translations`, { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify({ source_document_version, target_document_version }) }),
+  getTranslationJob: (reportId: string, jobId: string) => request<TranslationJob>(`/reports/${reportId}/translation-jobs/${jobId}`),
+  latestTranslation: (reportId: string) => request<TranslationJob | null>(`/reports/${reportId}/translation-jobs/latest`),
+  deleteReport: (id: string, version: number) => request<void>(`/reports/${id}?version=${version}`, { method: "DELETE" }),
+  refreshAutomaticData: (id: string, version: number) => request<{ changed: boolean; snapshot?: unknown }>(`/reports/${id}/automatic-data/refresh`, { method: "POST", body: JSON.stringify({ version }) }),
+  calculate: (id: string) => request<CalculationResult>(`/reports/${id}/calculations`, { method: "POST", body: JSON.stringify({}) }),
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
   saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PATCH", body: JSON.stringify({ version, content }) }),
   previewDraft: async (id: string, version: number, content: Record<string, unknown>, signal?: AbortSignal) => {
-    const response = await fetch(`/api/v1/reports/${encodeURIComponent(id)}/preview`, {
+    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview`), {
       method: "POST",
       body: JSON.stringify({ version, content }),
       signal,
-      headers: { "Content-Type": "application/json", "X-Request-ID": crypto.randomUUID() },
     });
-    if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`);
     return response.text();
   },
-  render: (id: string) => request<RenderJob[]>(`/reports/${id}/renders`, { method: "POST", body: JSON.stringify({ formats: ["html", "pdf", "docx"] }), headers: { "Idempotency-Key": crypto.randomUUID() } }),
+  previewSaved: async (id: string, signal?: AbortSignal) => {
+    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview`), { signal });
+    return response.text();
+  },
   listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),
   uploadDataset: (id: string, datasetType: DatasetType, file: File) => { const body = new FormData(); body.append("dataset_type", datasetType); body.append("file", file); return request<ImportResult>(`/reports/${id}/imports`, { method: "POST", body }); },
+  uploadImportBatch: (id: string, files: File[]) => { const body = new FormData(); files.forEach((file) => body.append("files", file)); return request<ImportBatch>(`/reports/${id}/import-batches`, { method: "POST", body }); },
+  getImportBatch: (reportId: string, batchId: string) => request<ImportBatch>(`/reports/${reportId}/import-batches/${batchId}`),
+  excludeImportBatchFile: (reportId: string, batchId: string, importId: string) => request<ImportBatch>(`/reports/${reportId}/import-batches/${batchId}/files/${importId}/exclude`, { method: "POST", body: JSON.stringify({}) }),
+  applyImportBatch: (reportId: string, batchId: string, version: number, reason?: string) => request(`/reports/${reportId}/import-batches/${batchId}/apply`, { method: "POST", body: JSON.stringify({ version, ...(reason ? { reason } : {}) }) }),
+  discardImportBatch: (reportId: string, batchId: string) => request<ImportBatch>(`/reports/${reportId}/import-batches/${batchId}/discard`, { method: "POST", body: JSON.stringify({}) }),
   applyImport: (reportId: string, importId: string, reason?: string) => request(`/reports/${reportId}/imports/${importId}/apply`, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   discardImport: (reportId: string, importId: string) => request(`/reports/${reportId}/imports/${importId}/discard`, { method: "POST", body: JSON.stringify({}) }),
   clearDataset: (reportId: string, datasetType: ClearableDatasetType, version: number) => request(`/reports/${reportId}/datasets/${datasetType}/clear`, { method: "POST", body: JSON.stringify({ version }) }),
   generateDraft: (id: string, version: number, user_prompt: string) => request<{ version: number }>(`/reports/${id}/ai/in-review`, { method: "POST", body: JSON.stringify({ version, user_prompt }) }),
-  review: (id: string) => request<{ ready: boolean; blocking: Array<{ check_id: string; fix_hint: string }>; warnings: unknown[] }>(`/reports/${id}/review`),
+  review: (id: string) => request<{ ready: boolean; blocking: Array<{ check_id: string; fix_hint: string }>; warnings: Array<{ check_id?: string; fix_hint?: string }> }>(`/reports/${id}/review`),
   listNewsProviders: () => request<NewsProvider[]>("/news/providers"),
   listCompanyNewsCatalog: (id: string, filters: CompanyNewsCatalogQuery = {}) => {
     const parameters = new URLSearchParams();
     if (filters.query) parameters.set("query", filters.query);
+    if (filters.company) parameters.set("company", filters.company);
+    if (filters.company_scope) parameters.set("company_scope", filters.company_scope);
     if (filters.source) parameters.set("source", filters.source);
     if (filters.sentiment) parameters.set("sentiment", filters.sentiment);
     if (filters.importance) parameters.set("importance", filters.importance);
@@ -229,5 +441,4 @@ export const api = {
     const items = selections.map((item, position) => typeof item === "string" ? { news_item_id: item, position } : item);
     return request<{ version: number }>(`/reports/${id}/news`, { method: "PUT", body: JSON.stringify({ version, items }) });
   },
-  downloadArtifact: async (id: string) => { const signed = await request<{ download_url: string }>(`/artifacts/${id}/download`); window.location.assign(signed.download_url); },
 };

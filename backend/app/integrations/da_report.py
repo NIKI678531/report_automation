@@ -5,10 +5,14 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import os
 import re
+import ssl
 import threading
 import unicodedata
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
@@ -17,7 +21,8 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy import Engine, create_engine, event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
@@ -62,11 +67,10 @@ class DaReportProviderError(NewsProviderError):
 
 
 def is_configured() -> bool:
+    if settings.da_report_database_url:
+        return not settings.da_report_mysql_problems()
     path = settings.da_report_sqlite_path
-    return bool(
-        (path and path.expanduser().is_file())
-        or (settings.da_report_object_url and settings.da_report_sqlite_sha256)
-    )
+    return bool(path and path.expanduser().is_file())
 
 
 def _normalize_text(value: Any) -> str:
@@ -239,6 +243,157 @@ def _engine(path: str) -> Engine:
         dbapi_connection.execute("PRAGMA query_only=ON")
 
     return engine
+
+
+@lru_cache(maxsize=4)
+def _mysql_engine(database_url: str, timeout: int, ssl_ca: str | None, verify_identity: bool) -> Engine:
+    tls = ssl.create_default_context(cafile=ssl_ca)
+    tls.check_hostname = verify_identity
+    if not verify_identity:
+        tls.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    engine = create_engine(
+        make_url(database_url),
+        connect_args={"charset": "utf8mb4", "connect_timeout": timeout, "read_timeout": timeout,
+                      "write_timeout": timeout, "ssl": tls},
+        pool_pre_ping=True, pool_recycle=300, pool_size=3, max_overflow=2, pool_timeout=timeout,
+        isolation_level="REPEATABLE READ", hide_parameters=True,
+    )
+
+    @event.listens_for(engine, "connect")
+    def configure_read_only(dbapi_connection, connection_record):
+        del connection_record
+        with dbapi_connection.cursor() as cursor:
+            cursor.execute("SET SESSION TRANSACTION READ ONLY")
+            cursor.execute(f"SET SESSION MAX_EXECUTION_TIME = {timeout * 1000}")
+            cursor.execute("SET SESSION time_zone = '+00:00'")
+            cursor.execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+            if not cursor.fetchone()[1]:
+                raise DaReportProviderError("DA_REPORT_TLS_REQUIRED", "DA-Report MySQL requires TLS.", 503)
+    return engine
+
+
+@dataclass(frozen=True)
+class _DataSource:
+    engine: Engine
+    name: str
+    file_checksum: str | None = None
+
+    @property
+    def source_type(self) -> str:
+        return "DA_REPORT_SQLITE" if self.file_checksum else "DA_REPORT_MYSQL"
+
+
+def _data_source() -> _DataSource:
+    if settings.da_report_database_url:
+        if settings.da_report_mysql_problems():
+            raise DaReportProviderError("DA_REPORT_CONFIGURATION_INVALID", "Check the DA-Report MySQL configuration.", 503)
+        try:
+            engine = _mysql_engine(
+                settings.da_report_database_url, max(1, int(settings.da_report_timeout_seconds)),
+                str(settings.da_report_mysql_ssl_ca) if settings.da_report_mysql_ssl_ca else None,
+                settings.da_report_mysql_ssl_verify_identity,
+            )
+        except (SQLAlchemyError, OSError, ValueError):
+            raise DaReportProviderError("DA_REPORT_CONFIGURATION_INVALID", "Check the DA-Report MySQL configuration and CA bundle.", 503) from None
+        return _DataSource(engine, "DA_REPORT")
+    path = settings.da_report_sqlite_path
+    if path is None or not path.expanduser().is_file():
+        raise DaReportProviderError("DA_REPORT_NOT_CONFIGURED", "The DA-Report snapshot is not available in this environment.", 503)
+    path = _materialize_snapshot()
+    stat = path.stat()
+    return _DataSource(
+        _engine(str(path.resolve())), path.name,
+        _file_checksum(str(path.resolve()), stat.st_size, stat.st_mtime_ns),
+    )
+
+
+@contextmanager
+def _connect_source(source: _DataSource):
+    try:
+        with source.engine.connect() as connection:
+            yield connection
+    except (SQLAlchemyError, OSError, ValueError):
+        raise DaReportProviderError("DA_REPORT_UNAVAILABLE", "The DA-Report data source could not be queried.", 503, retryable=True) from None
+
+
+def load_monthly_turnover(*, product_ticker: str, report_date: date) -> dict[str, Any]:
+    source = _data_source()
+    month_start = report_date.replace(day=1).isoformat()
+    period_end = report_date.isoformat()
+    normalized = str(product_ticker or "").strip().upper()
+    match = re.fullmatch(r"([0-9A-Z]+)\.([A-Z]{2})", normalized)
+    bloomberg_ticker = f"{match.group(1)} {match.group(2)} Equity" if match else normalized
+    required = {
+        "id", "bloomberg_ticker", "calendar_ticker", "month_start", "period_start", "period_end",
+        "total_turnover", "trading_days", "average_daily_turnover", "currency", "fetched_at",
+    }
+    with _connect_source(source) as connection:
+        schema = inspect(connection)
+        columns = {column["name"] for column in schema.get_columns("market_monthly_turnovers")} if schema.has_table("market_monthly_turnovers") else set()
+        if required - columns:
+            raise DaReportProviderError("DA_REPORT_MONTHLY_TURNOVER_NOT_AVAILABLE", "The DA-Report source does not contain the Bloomberg monthly-turnover contract.", 404)
+        records = list(connection.execute(text("""
+            SELECT id, bloomberg_ticker, calendar_ticker, month_start, period_start, period_end,
+                   total_turnover, trading_days, average_daily_turnover, currency, fetched_at
+            FROM market_monthly_turnovers
+            WHERE UPPER(bloomberg_ticker) = :bloomberg_ticker AND month_start = :month_start
+            ORDER BY id
+        """), {"bloomberg_ticker": bloomberg_ticker.upper(), "month_start": month_start}).mappings())
+    if not records:
+        raise DaReportProviderError("DA_REPORT_MONTHLY_TURNOVER_NOT_FOUND", "No Bloomberg turnover record exists for this product and report month.", 404)
+    if len(records) != 1:
+        raise DaReportProviderError("DA_REPORT_MONTHLY_TURNOVER_DUPLICATE", "More than one Bloomberg turnover record exists for this product and report month.", 422)
+    record = records[0]
+    try:
+        total = Decimal(str(record["total_turnover"]))
+        days = Decimal(str(record["trading_days"]))
+        stored = Decimal(str(record["average_daily_turnover"]))
+        if not all(value.is_finite() for value in (total, days, stored)) or total < 0 or stored < 0 or days <= 0 or days != days.to_integral_value():
+            raise ValueError("Invalid formula inputs")
+        calculated = total / days
+        tolerance = max(Decimal("0.000001"), Decimal(str(math.ulp(float(stored)))))
+        currency = str(record["currency"] or "").strip().upper()
+        if (
+            str(record["month_start"]) != month_start
+            or str(record["period_start"]) != month_start
+            or str(record["period_end"]) != period_end
+            or not re.fullmatch(r"[A-Z]{3}", currency)
+            or abs(calculated - stored) > tolerance
+        ):
+            raise ValueError("Invalid period, currency or average")
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
+        raise DaReportProviderError("DA_REPORT_MONTHLY_TURNOVER_INVALID", "The Bloomberg monthly-turnover row failed its period, currency or formula checks.", 422) from None
+    row = {
+        "bloomberg_ticker": str(record["bloomberg_ticker"]),
+        "calendar_ticker": str(record["calendar_ticker"]),
+        "month_start": month_start, "period_start": month_start, "period_end": period_end,
+        "total_turnover": format(total, "f"), "trading_days": int(days),
+        "average_daily_turnover": format(calculated, "f"),
+        "source_average_daily_turnover": format(stored, "f"),
+        "currency": currency, "unit": "unit", "source": "Bloomberg",
+        "formula": "INTERVAL_SUM(TURNOVER) / trading_days",
+        "source_updated_at": str(record["fetched_at"]),
+    }
+    digest = hashlib.sha256(json.dumps([row], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    lineage = {
+        "source_system": source.source_type, "source_table": "market_monthly_turnovers",
+        "source_record_ids": [int(record["id"])], "query_window": {"from": month_start, "to": period_end},
+        "product_mapping": {"product_ticker": product_ticker, "bloomberg_ticker": bloomberg_ticker},
+        "source_field_map": {"total_turnover": "total_turnover (Bloomberg INTERVAL_SUM, MARKET_DATA_OVERRIDE=TURNOVER)",
+                             "trading_days": "trading_days", "average_daily_turnover": "total_turnover / trading_days",
+                             "currency": "currency", "unit": "Bloomberg turnover currency amount"},
+    }
+    if source.file_checksum:
+        lineage["sqlite_checksum"] = source.file_checksum
+    return {
+        "fund_turnover_monthly": [row],
+        "datasets": {"fund_turnover_monthly": {
+            "source_type": source.source_type, "source_object": f"{source.name}#market_monthly_turnovers",
+            "checksum": digest, "row_count": 1, "mapping_version": "da-report-bloomberg-turnover-v1",
+            "lineage": lineage,
+        }},
+        "source_checksum": source.file_checksum or digest,
+    }
 
 
 def _validate_columns(connection, required_columns: dict[str, set[str]], error_code: str) -> None:

@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
 
@@ -8,9 +9,15 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from app.domain.document import initial_document, validate_document_content
+from app.core.config import settings
 from app.domain.page_one_presentation import PageOnePresentationError, page_one_presentation
 from app.rendering.artifacts import render_docx
 from app.rendering.html import render_html
+
+
+@pytest.fixture
+def calibri_css(monkeypatch):
+    monkeypatch.setattr("app.rendering.html._embedded_calibri_font_css", lambda: "")
 
 
 def _document(version: str = "3033-v5") -> dict:
@@ -24,9 +31,10 @@ def _document(version: str = "3033-v5") -> dict:
         "EN",
     )
     content["sections"]["footnotes"]["historical"] = "Source¹: CSOP.\n\nPast performance² is not indicative."
-    _element(content, "footnote:historical")["content_html"] = (
-        "<p>Source¹: CSOP.</p><p>Past performance² is not indicative.</p>"
-    )
+    if content.get("presentation", {}).get("schema_version") in {2, 3}:
+        _element(content, "footnote:historical")["content_html"] = (
+            "<p>Source¹: CSOP.</p><p>Past performance² is not indicative.</p>"
+        )
     return content
 
 
@@ -271,3 +279,242 @@ def test_finalized_v4_content_can_still_render_with_legacy_body_footnote():
     assert 'class="review-footnote-layer"' not in markup
     assert markup.count('data-layout-id="footnote:historical"') == 1
     assert "font-size:9.0pt" in markup
+
+
+@pytest.mark.parametrize("version", [f"3033-v{number}" for number in range(1, 7)])
+@pytest.mark.parametrize("product_code", ["3033", "3149"])
+@pytest.mark.parametrize("layout_mode", ["continuous", "paged"])
+def test_product_ticker_cards_are_in_all_downloaded_html(
+    version, product_code, layout_mode, calibri_css,
+):
+    from xml.etree import ElementTree
+
+    content = _document(version)
+    report = _report()
+    report.product_code = product_code
+
+    markup = render_html(report, content, layout_mode=layout_mode)
+
+    expected = layout_mode == "continuous"
+    assert ('class="product-sidebar"' in markup) is expected
+    if expected:
+        sidebar = ElementTree.fromstring(
+            markup[markup.index('<aside class="product-sidebar"'):markup.index('</aside>') + 8]
+        )
+        links = sidebar.findall("a")
+        assert ["".join(link.itertext()).strip() for link in links] == ["3033", "3149"]
+        assert [link.attrib["href"] for link in links] == [
+            "https://www.csopasset.com/tc/products/co-chst",
+            "https://www.csopasset.com/tc/products/hk-cptc",
+        ]
+        assert all(link.attrib["rel"] == "noopener noreferrer" for link in links)
+        assert all(link.attrib["target"] == "_blank" for link in links)
+
+
+def test_v6_keeps_footer_geometry_and_does_not_mutate_v5_source(calibri_css):
+    source = _document()
+    _element(source, "footnote:historical").update(x=2, w=8, footer_bottom_mm=31)
+    original = deepcopy(source)
+    upgraded = page_one_presentation.upgrade_document_to_v6(source)
+    canonical = validate_document_content(upgraded)
+    saved = _element(canonical, "footnote:historical")
+
+    assert source == original
+    assert canonical["template_version"] == canonical["design_token_version"] == "3033-v6"
+    assert canonical["presentation"]["schema_version"] == 3
+    assert (saved["x"], saved["w"], saved["footer_bottom_mm"]) == (2, 8, 31)
+    markup = render_html(_report(), canonical, layout_mode="paged")
+    assert 'class="review-footnote-layer" style="bottom:31.0mm"' in markup
+    assert markup.count('data-layout-id="footnote:historical"') == 1
+
+
+def test_v6_initial_document_uses_footer_presentation():
+    content = _document("3033-v6")
+    assert content["presentation"]["schema_version"] == 3
+    assert _element(content, "footnote:historical")["footer_bottom_mm"] == 20
+
+
+def test_v6_uses_one_calibri_footnote_family(calibri_css):
+    content = _document("3033-v6")
+    markup = render_html(_report(), content, layout_mode="paged")
+    assert '.footnote { font-family:"Report Calibri"' in markup
+    assert "font-family:Report Calibri;font-size:8.0pt" in markup
+
+
+def test_v6_missing_font_fails_without_exposing_filesystem_path(monkeypatch, tmp_path):
+    from fastapi import HTTPException
+
+    missing = tmp_path / "private" / "calibri.ttf"
+    monkeypatch.setattr(settings, "calibri_font_path", missing)
+    with pytest.raises(HTTPException) as caught:
+        render_html(_report(), _document("3033-v6"))
+    assert caught.value.status_code == 503
+    assert caught.value.detail["error_code"] == "CALIBRI_FONT_UNAVAILABLE"
+    assert str(missing) not in str(caught.value.detail)
+    assert "Report Calibri" not in render_html(_report(), _document("3033-v5"))
+
+
+def test_v6_docx_footer_uses_calibri_and_preserves_position(tmp_path):
+    from docx.oxml.ns import qn
+
+    content = _document("3033-v6")
+    _element(content, "footnote:historical").update(x=2, w=8, footer_bottom_mm=31)
+    destination = tmp_path / "v6-footer.docx"
+    render_docx(_report(), content, destination)
+
+    exported = Document(destination)
+    paragraph = next(
+        paragraph for paragraph in exported.sections[0].footer.paragraphs
+        if "Source" in paragraph.text
+    )
+    assert paragraph.runs[0].font.name == "Calibri"
+    assert paragraph.runs[0].font.size.pt == 8
+    assert paragraph.paragraph_format.left_indent.pt > 0
+    assert paragraph.runs[0]._element.find(".//" + qn("w:position")) is not None
+    assert not any("Source" in paragraph.text for paragraph in exported.paragraphs)
+
+
+@pytest.mark.parametrize("version", [f"3033-v{number}" for number in range(1, 7)])
+@pytest.mark.parametrize("product_code", ["3033", "3149"])
+def test_all_word_exports_use_updated_footers_without_changing_source(tmp_path, version, product_code):
+    content = _document(version)
+    content["sections"]["footnotes"].update(
+        constituents="Constituent source.", analytics="Analytics source.",
+    )
+    before = deepcopy(content)
+    report = _report()
+    report.product_code = product_code
+    destination = tmp_path / f"{product_code}-{version}.docx"
+
+    render_docx(report, content, destination)
+
+    assert content == before
+    exported = Document(destination)
+    for index, marker in ((0, "Source¹"), (2, "Constituent source."), (3, "Analytics source.")):
+        paragraph = next(
+            paragraph for paragraph in exported.sections[index].footer.paragraphs
+            if marker in paragraph.text
+        )
+        for run in paragraph.runs:
+            if run.text:
+                assert run.font.name == "Calibri"
+                assert run.font.size.pt == 8
+                assert run.bold is False
+    with ZipFile(destination) as archive:
+        body = archive.read("word/document.xml").decode("utf-8")
+        assert "Source¹" not in body
+        assert "Constituent source." not in body
+        assert "Analytics source." not in body
+
+
+def test_old_v4_word_moves_footnote_to_the_selected_review_page(tmp_path):
+    content = _document("3033-v4")
+    content["presentation"]["page_one"]["review_page_count"] = 2
+    _element(content, "historical_performance").update(page=2, x=2, w=8)
+    _element(content, "footnote:historical").update(page=2, x=2, w=8)
+    before = deepcopy(content)
+    destination = tmp_path / "old-v4-updated-footer.docx"
+
+    render_docx(_report(), content, destination)
+
+    assert content == before
+    exported = Document(destination)
+    assert all("Source¹" not in paragraph.text for paragraph in exported.sections[0].footer.paragraphs)
+    paragraph = next(paragraph for paragraph in exported.sections[1].footer.paragraphs if "Source¹" in paragraph.text)
+    assert paragraph.paragraph_format.left_indent.pt > 0
+    assert paragraph.runs[0].font.name == "Calibri"
+    assert paragraph.runs[0].font.size.pt == 8
+
+
+def test_v6_real_calibri_pdf_and_responsive_ticker_cards(monkeypatch, tmp_path):
+    import ctypes
+
+    import pypdfium2 as pdfium
+    from playwright.sync_api import sync_playwright
+    from app.rendering.artifacts import _render_file, _verify_calibri_loaded
+
+    font_path = settings.calibri_font_path or Path("C:/Windows/Fonts/calibri.ttf")
+    if not font_path.is_file():
+        pytest.skip("A licensed local Calibri Regular TTF is required for real-font verification.")
+    monkeypatch.setattr(settings, "calibri_font_path", font_path)
+    content = _document("3033-v6")
+    content["sections"]["footnotes"].update(
+        constituents="Constituent source.", analytics="Analytics source.",
+    )
+    html_path = tmp_path / "3033-v6.html"
+    html_path.write_text(render_html(_report(), content), encoding="utf-8")
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        try:
+            page = browser.new_page()
+            page.route("https://**", lambda route: route.abort())
+            for width in (1920, 1440, 1024, 390, 320):
+                page.set_viewport_size({"width": width, "height": 1000})
+                page.goto(html_path.as_uri())
+                _verify_calibri_loaded(page, content)
+                assert page.locator(".product-ticker").all_text_contents() == ["3033", "3149"]
+                assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                sidebar_box = page.locator(".product-sidebar").bounding_box()
+                body_box = page.locator(".report-document").bounding_box()
+                assert sidebar_box["x"] + sidebar_box["width"] <= body_box["x"]
+                assert sidebar_box["x"] + sidebar_box["width"] / 2 == pytest.approx(body_box["x"] / 2, abs=0.1)
+                assert page.locator(".product-sidebar").evaluate("node => getComputedStyle(node).position") == "fixed"
+                page.locator(".product-ticker").first.focus()
+                assert page.locator(".product-ticker").first.evaluate("node => node.matches(':focus-visible')")
+                page.screenshot(path=str(tmp_path / f"html-{width}.png"))
+                page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+                assert page.evaluate("window.scrollY") > 0
+                scrolled_box = page.locator(".product-sidebar").bounding_box()
+                assert scrolled_box["x"] == pytest.approx(sidebar_box["x"], abs=0.1)
+                assert scrolled_box["y"] == pytest.approx(sidebar_box["y"], abs=0.1)
+                page.screenshot(path=str(tmp_path / f"html-{width}-scrolled.png"))
+                page.evaluate("window.scrollTo(0, 0)")
+            page.emulate_media(media="print")
+            assert not page.locator(".product-sidebar").is_visible()
+            assert page.locator(".report-reader").evaluate("node => getComputedStyle(node).display") == "block"
+
+            page.emulate_media(media="screen")
+            page.set_viewport_size({"width": 1000, "height": 1200})
+            for bottom in (16, 20, 36):
+                _element(content, "footnote:historical")["footer_bottom_mm"] = bottom
+                page.set_content(render_html(_report(), content, layout_mode="paged"))
+                _verify_calibri_loaded(page, content)
+                assert page.locator(".product-sidebar").count() == 0
+                first_page = page.locator('.report-page[data-page="1"]')
+                footnote = first_page.locator(".footnote")
+                note_box = footnote.bounding_box()
+                page_box = first_page.bounding_box()
+                gap = (page_box["y"] + page_box["height"] - note_box["y"] - note_box["height"]) * 25.4 / 96
+                assert gap == pytest.approx(bottom, abs=0.1)
+                footer_box = first_page.locator(".page-footer").bounding_box()
+                assert note_box["y"] + note_box["height"] <= footer_box["y"]
+                if bottom == 20:
+                    first_page.screenshot(path=str(tmp_path / "page-one.png"))
+        finally:
+            browser.close()
+
+    pdf_path = tmp_path / "3033-v6.pdf"
+    _render_file(_report(), SimpleNamespace(content=content), "pdf", pdf_path)
+    exported = pdfium.PdfDocument(pdf_path)
+    try:
+        assert len(exported) == 5
+        for page_index, text in ((0, "Source"), (2, "Constituent"), (3, "Analytics")):
+            pdf_page = exported[page_index]
+            text_page = pdf_page.get_textpage()
+            search = text_page.search(text)
+            try:
+                match = search.get_next()
+                assert match is not None
+                flags = ctypes.c_int()
+                size = pdfium.raw.FPDFText_GetFontInfo(text_page, match[0], None, 0, ctypes.byref(flags))
+                buffer = ctypes.create_string_buffer(size)
+                pdfium.raw.FPDFText_GetFontInfo(text_page, match[0], buffer, size, ctypes.byref(flags))
+                assert "calibri" in buffer.value.decode().lower()
+            finally:
+                search.close()
+                text_page.close()
+                pdf_page.close()
+    finally:
+        exported.close()
+    print(f"Visual evidence: {tmp_path}")

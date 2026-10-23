@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from fastapi import HTTPException
 
+from app.core.config import settings
 from app.domain.document import review_display_title
 from app.domain.localization import (
     ZH_HANS,
@@ -206,6 +208,29 @@ def _embedded_cjk_font_css(language_mode: str = ZH_HANS) -> str:
             'font-style:normal;font-weight:700;font-display:block;}'
         )
     return ""
+
+
+def _embedded_calibri_font_css() -> str:
+    path = settings.calibri_font_path
+    try:
+        if path is None or path.suffix.lower() != ".ttf":
+            raise ValueError("Calibri Regular TTF is required")
+        data = path.read_bytes()
+        if data[:4] != b"\x00\x01\x00\x00":
+            raise ValueError("Invalid TrueType font")
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=503, detail={
+            "error_code": "CALIBRI_FONT_UNAVAILABLE",
+            "message": "The required Calibri footnote font is unavailable.",
+            "severity": "BLOCKING",
+            "fix_hint": "Configure CALIBRI_FONT_PATH with a licensed Calibri Regular TTF approved for embedding.",
+        }) from error
+    encoded = base64.b64encode(data).decode("ascii")
+    return (
+        '@font-face{font-family:"Report Calibri";'
+        f'src:url("data:font/ttf;base64,{encoded}") format("truetype");'
+        'font-style:normal;font-weight:400;font-display:block;}'
+    )
 
 
 # The lane mark is a control, not decoration, so it must survive a token file that forgets it.
@@ -403,11 +428,13 @@ def render_html(
     tokens = _render_tokens(design_token_version)
     page_one = (
         page_one_presentation.resolve_for_render(document, tokens)
-        if template_version in {"3033-v3", "3033-v4", "3033-v5"}
+        if template_version in {"3033-v3", "3033-v4", "3033-v5", "3033-v6"}
         else None
     )
     if page_one is not None:
         document = page_one["document"]
+        if template_version == "3033-v6":
+            page_one["footnote"]["body_style"]["pdf_font_family"] = tokens["footnote"]["pdfFontFamily"]
     sections = document["sections"]
     titles = resolve_report_titles(document, report_title_defaults(
         document, product_code=report.product_code, benchmark_name=report.benchmark_code,
@@ -431,7 +458,8 @@ def render_html(
     for row in portfolio:
         row["label"] = titles[f"portfolio.{row['metric_code']}"]
     template_name = (
-        "3033-v5.html.j2" if template_version == "3033-v5"
+        "3033-v6.html.j2" if template_version == "3033-v6"
+        else "3033-v5.html.j2" if template_version == "3033-v5"
         else "3033-v4.html.j2" if template_version == "3033-v4"
         else "3033.html.j2"
     )
@@ -442,6 +470,13 @@ def render_html(
         language_mode=language_mode,
         html_language="zh-CN" if is_zh_hans(language_mode) else "zh-HK" if is_zh_hant(language_mode) else "en",
         cjk_font_css=_embedded_cjk_font_css(language_mode) if is_chinese(language_mode) else "",
+        footnote_tokens=tokens["footnote"] if template_version == "3033-v6" else None,
+        calibri_font_css=_embedded_calibri_font_css() if template_version == "3033-v6" else "",
+        product_sidebar=(
+            _render_tokens("3033-v6")["productSidebar"]
+            if layout_mode == "continuous"
+            else None
+        ),
         layout_mode=layout_mode,
         t=lambda key, **values: titles[key] if key in titles else term(key, language_mode, **values),
         product_display_name=(document.get("terminology_overrides") or {}).get("product_name") or report.product_name,
