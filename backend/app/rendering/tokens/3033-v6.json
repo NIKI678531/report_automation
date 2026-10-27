@@ -1,27 +1,37 @@
 {
   "id": "3033-v6",
   "extends": "3033-v5",
-  "change": "Calibri data footnotes and ticker-only product links in 3033 HTML",
+  "change": "Calibri data footnotes and the continuous-HTML reader sidebar",
   "footnote": {
     "pdfFontFamily": "Report Calibri"
   },
   "productSidebar": {
-    "width": "88px",
-    "gap": "16px",
+    "width": "264px",
+    "gap": "22px",
     "inset": "24px",
-    "cardHeight": "72px",
-    "radius": "6px",
-    "fontSize": "22px",
-    "mobileWidth": "52px",
-    "mobileInset": "8px",
-    "mobileGap": "8px",
-    "mobileCardHeight": "48px",
-    "mobileFontSize": "16px",
-    "shadow": "0 2px 12px rgba(0,0,0,.1)",
-    "focusRing": "0 0 0 3px rgba(38,96,173,.35)",
+    "radius": "8px",
+    "shadow": "0 4px 18px rgba(0,0,0,.10)",
+    "focusRing": "0 0 0 3px rgba(38,96,173,.32)",
+    "ruleColor": "#2660ad",
+    "shareColor": "#2660ad",
+    "linkColor": "#2660ad",
+    "metadataColor": "#000000",
+    "author": "CSOP Intelligence",
+    "category": "Product Insights",
+    "shareTarget": "https://www.csopasset.com/en/home",
     "links": [
-      {"ticker": "3033", "href": "https://www.csopasset.com/tc/products/co-chst"},
-      {"ticker": "3149", "href": "https://www.csopasset.com/tc/products/hk-cptc"}
+      {
+        "ticker": "3033",
+        "name": "CSOP Hang Seng TECH Index ETF",
+        "action": "View 3033 holdings, NAV & performance details >>",
+        "href": "https://www.csopasset.com/en/products/co-chst"
+      },
+      {
+        "ticker": "3149",
+        "name": "CSOP Hang Seng Pioneer Technology Index ETF",
+        "action": "View 3149 holdings, NAV & performance details >>",
+        "href": "https://www.csopasset.com/en/products/hk-cptc"
+      }
     ]
   }
 }

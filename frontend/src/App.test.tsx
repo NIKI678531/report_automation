@@ -153,6 +153,17 @@ describe("report center navigation", () => {
     expect(await screen.findByRole("heading", { name: "報告中心" })).toBeTruthy();
   });
 
+  it("shows last-updated timestamps in Hong Kong time", async () => {
+    const august = report("hong-kong-time", "2026-08-31", "FINALIZED");
+    august.updated_at = "2026-08-31T17:30:00Z";
+    vi.spyOn(api, "listReports").mockResolvedValue([august]);
+
+    renderAt("/", true);
+
+    const timestamp = await screen.findByText("1 Sept 2026, 01:30");
+    expect(timestamp).toHaveProperty("dateTime", august.updated_at);
+  });
+
   it("opens the exact report selected from the report center", async () => {
     const july = report("july", "2026-07-31", "EDITING");
     const august = report("august", "2026-08-31", "DRAFT");

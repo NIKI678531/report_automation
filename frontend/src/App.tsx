@@ -81,7 +81,7 @@ function ReportGroups({ reports }: { reports: Report[] }) {
         {monthReports.map((report) => <button className="report-record" key={report.id} aria-label={t("openReport", { date: report.report_date, language: languageLabel(report.language_mode, t), status: statusLabel(report.status) })} onClick={() => navigate(`/reports/${report.id}`)}>
           <span className={`status ${report.status.toLowerCase()}`}>{statusLabel(report.status)}</span>
           <span className="report-record-main"><strong>{languageLabel(report.language_mode, t)}</strong><small>{formatDate(report.report_date)} · {t("revision", { revision: report.revision })}</small></span>
-          <span className="report-record-updated"><small>{t("lastUpdated")}</small><time dateTime={report.updated_at}>{report.updated_at ? new Intl.DateTimeFormat(dateTimeLocale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(report.updated_at)) : t("notAvailable")}</time></span>
+          <span className="report-record-updated"><small>{t("lastUpdated")}</small><time dateTime={report.updated_at}>{report.updated_at ? new Intl.DateTimeFormat(dateTimeLocale, { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Hong_Kong" }).format(new Date(report.updated_at)) : t("notAvailable")}</time></span>
           <FileText size={18} aria-hidden="true" />
         </button>)}
       </div>

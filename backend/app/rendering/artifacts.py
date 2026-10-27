@@ -58,7 +58,7 @@ LAYOUT_POLICY_VERSION = "paged-layout-advisory-v3"
 def renderer_version_for(format_name: str) -> str:
     return (
         f"{settings.renderer_version}-paged-i18n-v6" if format_name == "pdf"
-        else "html-fixed-sidebar-v7" if format_name == "html"
+        else "html-reader-sidebar-v9" if format_name == "html"
         else "docx-shared-footer-v7"
     )
 

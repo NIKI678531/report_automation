@@ -1,8 +1,10 @@
 # Implementation status against V2.1
 
-Last verified: 2026-10-23
+Last verified: 2026-10-27
 
 ## Implemented and tested
+
+- HTML reader sidebar and Hong Kong dates (2026-10-27, ADR-0043): continuous HTML exports now show the `CSOP Hang Seng TECH Index ETF (3033.HK) Monthly Commentary` heading, CSOP Intelligence authorship, the export-day date in Asia/Hong_Kong, Product Insights category and script-free sharing controls. The requested metadata labels and Related Products heading are black while product-card accents remain template blue. Related Products are English 3033/3149 cards linked to their corresponding official CSOP English product pages; desktop keeps the rail fixed and mobile moves it above the report. Report Centre `Last updated` timestamps now explicitly use Hong Kong time. The HTML renderer identity is `html-reader-sidebar-v9`; focused backend/browser tests, frontend tests and the production build pass.
 
 - All-report HTML/Word presentation (2026-10-23, ADR-0042): removed the product/template-version restriction on the two HTML ticker cards and made them viewport-fixed on the left at desktop and mobile sizes, with reserved report space and print suppression. All DOCX versions now use Calibri Regular 8pt data footnotes in section footers, including v4's former body footnote; existing page/position controls are retained without changing stored documents. Version/product tests, real browser scroll checks, and a signed HTML/DOCX download of an existing finalized v2 report verify the new behavior. Source version/checksum were unchanged. Users must re-download existing files. Frontend workbench and PDF pagination were not changed.
 

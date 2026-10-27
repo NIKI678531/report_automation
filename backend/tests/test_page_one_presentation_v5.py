@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
@@ -12,7 +12,7 @@ from app.domain.document import initial_document, validate_document_content
 from app.core.config import settings
 from app.domain.page_one_presentation import PageOnePresentationError, page_one_presentation
 from app.rendering.artifacts import render_docx
-from app.rendering.html import render_html
+from app.rendering.html import hong_kong_export_date, render_html
 
 
 @pytest.fixture
@@ -284,11 +284,12 @@ def test_finalized_v4_content_can_still_render_with_legacy_body_footnote():
 @pytest.mark.parametrize("version", [f"3033-v{number}" for number in range(1, 7)])
 @pytest.mark.parametrize("product_code", ["3033", "3149"])
 @pytest.mark.parametrize("layout_mode", ["continuous", "paged"])
-def test_product_ticker_cards_are_in_all_downloaded_html(
-    version, product_code, layout_mode, calibri_css,
+def test_reader_sidebar_is_in_all_downloaded_html(
+    version, product_code, layout_mode, calibri_css, monkeypatch,
 ):
     from xml.etree import ElementTree
 
+    monkeypatch.setattr("app.rendering.html.hong_kong_export_date", lambda: "26 Oct 2026")
     content = _document(version)
     report = _report()
     report.product_code = product_code
@@ -301,14 +302,33 @@ def test_product_ticker_cards_are_in_all_downloaded_html(
         sidebar = ElementTree.fromstring(
             markup[markup.index('<aside class="product-sidebar"'):markup.index('</aside>') + 8]
         )
-        links = sidebar.findall("a")
-        assert ["".join(link.itertext()).strip() for link in links] == ["3033", "3149"]
+        assert "Authored by:" in "".join(sidebar.itertext())
+        assert "CSOP Intelligence" in "".join(sidebar.itertext())
+        assert "Date : 26 Oct 2026" in " ".join("".join(sidebar.itertext()).split())
+        assert "Product Insights" in "".join(sidebar.itertext())
+        assert "Related Products" in "".join(sidebar.itertext())
+        assert "Related ETFs" not in "".join(sidebar.itertext())
+        assert (
+            f"<h1>CSOP Hang Seng TECH Index ETF ({product_code}.HK) Monthly Commentary</h1>"
+            in markup
+        )
+        cards = sidebar.findall(".//article")
+        assert [card.find("p").text for card in cards] == ["3033", "3149"]
+        links = sidebar.findall(".//a[@class='product-link']")
         assert [link.attrib["href"] for link in links] == [
-            "https://www.csopasset.com/tc/products/co-chst",
-            "https://www.csopasset.com/tc/products/hk-cptc",
+            "https://www.csopasset.com/en/products/co-chst",
+            "https://www.csopasset.com/en/products/hk-cptc",
+        ]
+        assert ["".join(link.itertext()).strip() for link in links] == [
+            "View 3033 holdings, NAV & performance details >>",
+            "View 3149 holdings, NAV & performance details >>",
         ]
         assert all(link.attrib["rel"] == "noopener noreferrer" for link in links)
         assert all(link.attrib["target"] == "_blank" for link in links)
+
+
+def test_reader_sidebar_date_uses_the_hong_kong_export_day():
+    assert hong_kong_export_date(datetime(2026, 10, 25, 16, 30, tzinfo=timezone.utc)) == "26 Oct 2026"
 
 
 def test_v6_keeps_footer_geometry_and_does_not_mutate_v5_source(calibri_css):
@@ -453,21 +473,40 @@ def test_v6_real_calibri_pdf_and_responsive_ticker_cards(monkeypatch, tmp_path):
                 page.set_viewport_size({"width": width, "height": 1000})
                 page.goto(html_path.as_uri())
                 _verify_calibri_loaded(page, content)
-                assert page.locator(".product-ticker").all_text_contents() == ["3033", "3149"]
+                assert page.locator(".product-code").all_text_contents() == ["3033", "3149"]
                 assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
                 sidebar_box = page.locator(".product-sidebar").bounding_box()
                 body_box = page.locator(".report-document").bounding_box()
-                assert sidebar_box["x"] + sidebar_box["width"] <= body_box["x"]
-                assert sidebar_box["x"] + sidebar_box["width"] / 2 == pytest.approx(body_box["x"] / 2, abs=0.1)
-                assert page.locator(".product-sidebar").evaluate("node => getComputedStyle(node).position") == "fixed"
-                page.locator(".product-ticker").first.focus()
-                assert page.locator(".product-ticker").first.evaluate("node => node.matches(':focus-visible')")
+                expected_position = "fixed" if width > 800 else "static"
+                assert page.locator(".product-sidebar").evaluate("node => getComputedStyle(node).position") == expected_position
+                for selector in (
+                    ".reader-meta-label",
+                    ".reader-meta-row",
+                    ".reader-category",
+                    ".share-heading",
+                    ".related-products > h2",
+                ):
+                    assert page.locator(selector).first.evaluate(
+                        "node => getComputedStyle(node).color"
+                    ) == "rgb(0, 0, 0)"
+                assert page.locator(".reader-author").evaluate(
+                    "node => getComputedStyle(node).color"
+                ) == "rgb(38, 96, 173)"
+                if width > 800:
+                    assert sidebar_box["x"] + sidebar_box["width"] <= body_box["x"]
+                else:
+                    assert sidebar_box["y"] + sidebar_box["height"] <= body_box["y"]
+                page.locator(".product-link").first.focus()
+                assert page.locator(".product-link").first.evaluate("node => node.matches(':focus-visible')")
                 page.screenshot(path=str(tmp_path / f"html-{width}.png"))
                 page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
                 assert page.evaluate("window.scrollY") > 0
                 scrolled_box = page.locator(".product-sidebar").bounding_box()
-                assert scrolled_box["x"] == pytest.approx(sidebar_box["x"], abs=0.1)
-                assert scrolled_box["y"] == pytest.approx(sidebar_box["y"], abs=0.1)
+                if width > 800:
+                    assert scrolled_box["x"] == pytest.approx(sidebar_box["x"], abs=0.1)
+                    assert scrolled_box["y"] == pytest.approx(sidebar_box["y"], abs=0.1)
+                else:
+                    assert scrolled_box["y"] < sidebar_box["y"]
                 page.screenshot(path=str(tmp_path / f"html-{width}-scrolled.png"))
                 page.evaluate("window.scrollTo(0, 0)")
             page.emulate_media(media="print")

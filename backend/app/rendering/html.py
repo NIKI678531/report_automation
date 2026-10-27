@@ -4,11 +4,13 @@ import base64
 import json
 import math
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from fastapi import HTTPException
@@ -74,6 +76,54 @@ def rebalancing_date_text(value: Any, language_mode: str = "EN") -> str:
 
 
 env.filters.update(pct=pct, price=price, rebalancing_date=rebalancing_date_text)
+
+
+HONG_KONG_TIMEZONE = ZoneInfo("Asia/Hong_Kong")
+
+
+def hong_kong_export_date(now: datetime | None = None) -> str:
+    """Return the reader-sidebar date for the instant at which HTML is rendered."""
+
+    instant = now or datetime.now(HONG_KONG_TIMEZONE)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    local_date = instant.astimezone(HONG_KONG_TIMEZONE).date()
+    return f"{local_date.day} {local_date:%b %Y}"
+
+
+def _product_sidebar_context(config: dict[str, Any], report: Report) -> dict[str, Any]:
+    result = deepcopy(config)
+    ticker = f"{report.product_code}.HK"
+    product_title = str(report.product_name).strip()
+    if ticker.casefold() not in product_title.casefold():
+        product_title = f"{product_title} ({ticker})"
+    reader_title = f"{product_title} Monthly Commentary"
+    share_target = str(result.pop("shareTarget"))
+    result["title"] = reader_title
+    result["exportDate"] = hong_kong_export_date()
+    result["shareLinks"] = [
+        {
+            "kind": "x",
+            "label": "Share on X",
+            "href": f"https://twitter.com/intent/tweet?{urlencode({'text': reader_title, 'url': share_target})}",
+        },
+        {
+            "kind": "linkedin",
+            "label": "Share on LinkedIn",
+            "href": f"https://www.linkedin.com/sharing/share-offsite/?{urlencode({'url': share_target})}",
+        },
+        {
+            "kind": "facebook",
+            "label": "Share on Facebook",
+            "href": f"https://www.facebook.com/sharer/sharer.php?{urlencode({'u': share_target})}",
+        },
+        {
+            "kind": "email",
+            "label": "Share by email",
+            "href": f"mailto:?{urlencode({'subject': reader_title, 'body': share_target})}",
+        },
+    ]
+    return result
 
 
 _LEGACY_PREVIEW_PLACEHOLDERS = {
@@ -473,7 +523,7 @@ def render_html(
         footnote_tokens=tokens["footnote"] if template_version == "3033-v6" else None,
         calibri_font_css=_embedded_calibri_font_css() if template_version == "3033-v6" else "",
         product_sidebar=(
-            _render_tokens("3033-v6")["productSidebar"]
+            _product_sidebar_context(_render_tokens("3033-v6")["productSidebar"], report)
             if layout_mode == "continuous"
             else None
         ),

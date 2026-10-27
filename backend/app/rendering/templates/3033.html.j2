@@ -156,15 +156,46 @@
 {%- if product_sidebar %}
     .report-reader { --report-column-width:210mm; --sidebar-width:{{ product_sidebar.width }}; --sidebar-inset:{{ product_sidebar.inset }}; --sidebar-gap:{{ product_sidebar.gap }}; --report-left:max(calc(var(--sidebar-inset) + var(--sidebar-width) + var(--sidebar-gap)), calc((100% - var(--report-column-width) + var(--sidebar-inset) + var(--sidebar-width)) / 2)); padding:0 var(--sidebar-gap) 0 calc(var(--sidebar-inset) + var(--sidebar-width) + var(--sidebar-gap)); }
     .report-reader .report-document { width:min(var(--report-column-width),100%); min-width:0; overflow-wrap:anywhere; }
-    .product-sidebar { position:fixed; left:calc((var(--report-left) - var(--sidebar-width)) / 2); top:var(--sidebar-inset); width:var(--sidebar-width); display:grid; gap:var(--sidebar-gap); z-index:10; }
-    .product-ticker { display:flex; align-items:center; justify-content:center; height:{{ product_sidebar.cardHeight }}; border-radius:{{ product_sidebar.radius }}; background:var(--paper); color:var(--deep); box-shadow:{{ product_sidebar.shadow }}; font-size:{{ product_sidebar.fontSize }}; font-weight:700; text-decoration:none; letter-spacing:0; border-bottom:3px solid var(--blue); }
-    .product-ticker:hover { color:var(--blue); }
-    .product-ticker:active { transform:scale(.97); }
-    .product-ticker:focus-visible { outline:none; box-shadow:{{ product_sidebar.focusRing }}; }
+    .product-sidebar { position:fixed; left:calc((var(--report-left) - var(--sidebar-width)) / 2); top:var(--sidebar-inset); width:var(--sidebar-width); max-height:calc(100vh - (2 * var(--sidebar-inset))); overflow:auto; padding:0 4px 16px; color:{{ product_sidebar.linkColor }}; z-index:10; scrollbar-width:thin; }
+    .reader-meta { border-top:1px solid {{ product_sidebar.ruleColor }}; border-bottom:1px solid {{ product_sidebar.ruleColor }}; padding:16px 0 18px; }
+    .reader-meta-label,.reader-meta-row { margin:0; color:{{ product_sidebar.metadataColor }}; font-size:13px; line-height:1.45; }
+    .reader-author { margin:7px 0 12px; padding-bottom:12px; border-bottom:1px solid {{ product_sidebar.ruleColor }}; font-size:22px; line-height:1.08; font-weight:400; }
+    .reader-meta-row + .reader-meta-row { margin-top:8px; }
+    .reader-meta-row strong { font-weight:400; }
+    .reader-category { color:inherit; }
+    .share-heading { margin:26px 0 10px; color:{{ product_sidebar.metadataColor }}; font-size:13px; font-weight:400; }
+    .share-links { display:flex; flex-wrap:wrap; gap:8px; }
+    .share-link { width:34px; height:34px; display:inline-flex; align-items:center; justify-content:center; border-radius:0; background:{{ product_sidebar.shareColor }}; color:#fff; font-family:Arial,sans-serif; font-size:15px; font-weight:700; line-height:1; text-decoration:none; }
+    .share-link:hover { filter:brightness(.92); }
+    .share-link:focus-visible,.product-link:focus-visible { outline:none; box-shadow:{{ product_sidebar.focusRing }}; }
+    .share-link svg { width:16px; height:16px; fill:currentColor; }
+    .related-products { padding-top:28px; }
+    .related-products > h2 { margin:0 0 18px; color:{{ product_sidebar.metadataColor }}; font-size:22px; font-weight:400; line-height:1.1; }
+    .product-links { display:grid; gap:18px; }
+    .product-card { min-height:244px; display:grid; grid-template-rows:auto auto 1fr auto; padding:22px; border-radius:{{ product_sidebar.radius }}; background:var(--paper); box-shadow:{{ product_sidebar.shadow }}; }
+    .product-code { position:relative; margin:0 0 14px; padding-bottom:10px; color:{{ product_sidebar.linkColor }}; font-size:30px; line-height:1; font-weight:400; }
+    .product-code::after { content:""; position:absolute; left:0; bottom:0; width:62px; height:3px; background:{{ product_sidebar.linkColor }}; }
+    .product-name { margin:0; color:{{ product_sidebar.linkColor }}; font-size:14px; line-height:1.35; font-weight:700; }
+    .product-divider { align-self:end; margin:18px 0; border-top:1px solid {{ product_sidebar.ruleColor }}; }
+    .product-link { display:flex; min-height:38px; align-items:center; justify-content:center; padding:8px 10px; border-radius:6px; background:{{ product_sidebar.linkColor }}; color:#fff; font-size:11px; line-height:1.25; font-weight:700; text-align:center; text-decoration:none; box-shadow:0 5px 12px rgba(38,96,173,.24); }
+    .product-link:hover { filter:brightness(.94); }
+    .product-link:active { transform:scale(.98); }
+    @media screen and (max-width:1100px) and (min-width:801px) {
+      .report-reader { --sidebar-width:220px; --sidebar-inset:16px; --sidebar-gap:14px; }
+      .product-card { padding:18px; }
+      .product-link { font-size:10px; }
+    }
     @media screen and (max-width:800px) {
-      .report-reader { --sidebar-width:{{ product_sidebar.mobileWidth }}; --sidebar-inset:{{ product_sidebar.mobileInset }}; --sidebar-gap:{{ product_sidebar.mobileGap }}; }
-      .product-ticker { height:{{ product_sidebar.mobileCardHeight }}; font-size:{{ product_sidebar.mobileFontSize }}; }
-      .report-reader :is(.review-layout,.review-flow-row,.review-flow-columns) { column-gap:var(--sidebar-gap); }
+      .report-reader { display:block; padding:0; }
+      .product-sidebar { position:static; width:auto; max-height:none; overflow:visible; margin:0 auto; padding:20px 16px 28px; }
+      .report-reader :is(.review-layout,.review-flow-row,.review-flow-columns) { column-gap:8px; }
+      .reader-meta { max-width:520px; margin:0 auto; }
+      .related-products { max-width:680px; margin:0 auto; }
+      .product-links { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .product-card { min-height:226px; }
+    }
+    @media screen and (max-width:520px) {
+      .product-links { grid-template-columns:minmax(0,1fr); }
     }
     @media print {
       .product-sidebar { display:none; }
@@ -208,8 +239,34 @@
 
 {% if product_sidebar %}
 <div class="report-reader">
-<aside class="product-sidebar">
-  {% for link in product_sidebar.links %}<a class="product-ticker" href="{{ link.href }}" target="_blank" rel="noopener noreferrer">{{ link.ticker }}</a>{% endfor %}
+<aside class="product-sidebar" aria-label="Report information and related products">
+  <section class="reader-meta">
+    <p class="reader-meta-label">Authored by:</p>
+    <p class="reader-author">{{ product_sidebar.author }}</p>
+    <p class="reader-meta-row"><strong>Date :</strong> {{ product_sidebar.exportDate }}</p>
+    <p class="reader-meta-row"><strong>Category :</strong> <span class="reader-category">{{ product_sidebar.category }}</span></p>
+    <h2 class="share-heading">Share This:</h2>
+    <nav class="share-links" aria-label="Share this report">
+      {% for share in product_sidebar.shareLinks %}
+      <a class="share-link share-{{ share.kind }}" href="{{ share.href }}" target="_blank" rel="noopener noreferrer" aria-label="{{ share.label }}" title="{{ share.label }}">
+        {% if share.kind == 'x' %}X{% elif share.kind == 'linkedin' %}in{% elif share.kind == 'facebook' %}f{% else %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 5.5A2.5 2.5 0 0 1 4.5 3h15A2.5 2.5 0 0 1 22 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 18.5v-13Zm2 .35v.36l8 5.33 8-5.33v-.36a.5.5 0 0 0-.5-.5h-15a.5.5 0 0 0-.5.5Zm16 2.76-7.45 4.97a1 1 0 0 1-1.1 0L4 8.61v9.89c0 .28.22.5.5.5h15a.5.5 0 0 0 .5-.5V8.61Z"/></svg>{% endif %}
+      </a>
+      {% endfor %}
+    </nav>
+  </section>
+  <section class="related-products">
+    <h2>Related Products</h2>
+    <div class="product-links">
+      {% for link in product_sidebar.links %}
+      <article class="product-card">
+        <p class="product-code">{{ link.ticker }}</p>
+        <p class="product-name">{{ link.name }}</p>
+        <div class="product-divider" aria-hidden="true"></div>
+        <a class="product-link" href="{{ link.href }}" target="_blank" rel="noopener noreferrer">{{ link.action }}</a>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
 </aside>
 {% endif %}
 <article class="report-document" data-layout-mode="{{ layout_mode }}" data-language="{{ language_mode }}">
@@ -222,7 +279,7 @@
   {{ chrome(opening_page) }}
   <main class="page-body{% if v4 %} opening-page-body{% endif %}" data-layout-safe-area="true">
     {% if opening_page == 1 %}
-      <h1>{{ product_display_name }}</h1>
+      <h1>{{ product_sidebar.title if product_sidebar else product_display_name }}</h1>
       {% if enable_review_layout and sections.month_in_review.get('blocks') %}
       <div class="review-layout">
         <div class="review-flow-cell" style="grid-column:{{ review_layout.x + 1 }} / span {{ review_layout.w }}">{{ review_node(review_layout) }}</div>
@@ -250,7 +307,7 @@
 <section class="report-page" data-page="1" data-section-key="month_in_review">
   {{ chrome(1) }}
   <main class="page-body">
-    <h1>{{ product_display_name }}</h1>
+    <h1>{{ product_sidebar.title if product_sidebar else product_display_name }}</h1>
     {% if enable_review_layout and sections.month_in_review.get('blocks') %}
     <div class="review-layout">
       <div class="review-flow-cell" style="grid-column:{{ review_layout.x + 1 }} / span {{ review_layout.w }}">{{ review_node(review_layout) }}</div>
