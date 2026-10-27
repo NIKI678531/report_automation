@@ -91,10 +91,14 @@ def hong_kong_export_date(now: datetime | None = None) -> str:
     return f"{local_date.day} {local_date:%b %Y}"
 
 
-def _product_sidebar_context(config: dict[str, Any], report: Report) -> dict[str, Any]:
+def _product_sidebar_context(
+    config: dict[str, Any],
+    report: Report,
+    product_display_name: str | None = None,
+) -> dict[str, Any]:
     result = deepcopy(config)
     ticker = f"{report.product_code}.HK"
-    product_title = str(report.product_name).strip()
+    product_title = str(product_display_name or report.product_name).strip()
     if ticker.casefold() not in product_title.casefold():
         product_title = f"{product_title} ({ticker})"
     reader_title = f"{product_title} Monthly Commentary"
@@ -507,6 +511,10 @@ def render_html(
                 row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
     for row in portfolio:
         row["label"] = titles[f"portfolio.{row['metric_code']}"]
+    product_display_name = (
+        (document.get("terminology_overrides") or {}).get("product_name")
+        or report.product_name
+    )
     template_name = (
         "3033-v6.html.j2" if template_version == "3033-v6"
         else "3033-v5.html.j2" if template_version == "3033-v5"
@@ -523,13 +531,15 @@ def render_html(
         footnote_tokens=tokens["footnote"] if template_version == "3033-v6" else None,
         calibri_font_css=_embedded_calibri_font_css() if template_version == "3033-v6" else "",
         product_sidebar=(
-            _product_sidebar_context(_render_tokens("3033-v6")["productSidebar"], report)
+            _product_sidebar_context(
+                _render_tokens("3033-v6")["productSidebar"], report, product_display_name
+            )
             if layout_mode == "continuous"
             else None
         ),
         layout_mode=layout_mode,
         t=lambda key, **values: titles[key] if key in titles else term(key, language_mode, **values),
-        product_display_name=(document.get("terminology_overrides") or {}).get("product_name") or report.product_name,
+        product_display_name=product_display_name,
         benchmark_display_name=(document.get("terminology_overrides") or {}).get("benchmark_name") or document.get("benchmark_name") or report.benchmark_code,
         report_date_long=long_date(report.report_date, language_mode),
         disclaimer_report_date_long=long_date(report.report_date, "EN"),

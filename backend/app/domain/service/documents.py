@@ -44,7 +44,7 @@ def lock_report(db: Session, report: Report) -> None:
 
 
 def document_content_for_read(report: Report, document: ReportDocument) -> dict[str, Any]:
-    """Return an in-memory v6 adapter for editable legacy documents.
+    """Return an in-memory v5 adapter for editable legacy documents.
 
     Finalized and archived documents keep their exact locked layout.  No ORM JSON value is
     mutated: callers receive a deep copy even when no adaptation is needed.
@@ -52,13 +52,16 @@ def document_content_for_read(report: Report, document: ReportDocument) -> dict[
 
     content = deepcopy(document.content)
     if (
-        document.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4", "3033-v5"}
+        document.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}
         and report.status not in {ReportStatus.FINALIZED, ReportStatus.ARCHIVED}
     ):
         # v1 has no presentation-aware renderer, so never expose the invalid hybrid
         # ``template_version=v1`` + ``presentation.schema_version=2``.  This is still an
         # in-memory read adapter; persistence and the report identity change on first save.
-        return page_one_presentation.upgrade_document_to_v6(content)
+        return page_one_presentation.upgrade_document_to_v5(
+            content,
+            stamp_template=document.template_version == "3033-v1",
+        )
     return page_one_presentation.adapt_document(content) if document.template_version in {"3033-v5", "3033-v6"} else content
 
 
@@ -72,13 +75,16 @@ def canonicalize_document_content(
     """Purely restamp, reconcile and validate submitted document content.
 
     Persistence and audit stay with :func:`update_document`; draft preview calls this same seam
-    without creating a version. Editable v1-v5 reports are upgraded to v6 in the returned value,
+    without creating a version. Editable v1-v4 reports are upgraded to v5 in the returned value,
     allowing the caller to persist report/document/template identities atomically afterwards.
+
+    v6 is deliberately explicit: it embeds licensed Calibri and may only be selected by a product
+    catalog entry after that font has been provisioned.  Saving a v5 report must not opt it in.
     """
 
     target_template_version = (
-        "3033-v6"
-        if report.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4", "3033-v5", "3033-v6"}
+        "3033-v5"
+        if report.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}
         else report.template_version
     )
     canonical = page_one_presentation.reconcile_submission(
@@ -94,7 +100,9 @@ def canonicalize_document_content(
         "benchmark_name": product.benchmark_instrument_name or product.benchmark_instrument_code,
         "template_version": target_template_version,
         "design_token_version": (
-            "3033-v6" if target_template_version == "3033-v6" else product.design_token_version
+            target_template_version
+            if target_template_version in {"3033-v5", "3033-v6"}
+            else product.design_token_version
         ),
         "language_mode": report.language_mode,
         "snapshot_id": report.active_snapshot_id,

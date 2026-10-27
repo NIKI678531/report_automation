@@ -902,7 +902,9 @@ def test_language_variant_retargets_v4_footnote_content_to_blank_editorial(clien
 
     assert target_content["sections"]["footnotes"].get("historical", "") == ""
     assert target_footnote["content_html"] == "<p></p>"
-    assert target_footnote["body_style"]["font_size_pt"] == 10.0
+    # v5 locks the shared data-footnote typography at 8pt while retaining the editable paragraph
+    # spacing and alignment when the editorial text is retargeted to a language variant.
+    assert target_footnote["body_style"]["font_size_pt"] == 8.0
     assert target_footnote["body_style"]["line_height"] == 1.4
     assert target_footnote["body_style"]["text_align"] == "right"
     preview = client.post(f"/api/v1/reports/{target['id']}/preview")

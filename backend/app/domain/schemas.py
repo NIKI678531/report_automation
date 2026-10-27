@@ -1,17 +1,17 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from app.core.config import settings
-from .models import JobStatus, ReportStatus, SnapshotStatus
+from .models import ReportStatus, SnapshotStatus
 
 
 class ReportCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     product_code: str = "3033"
     report_date: date
-    language_mode: Literal["EN", "ZH_HANS", "ZH_HANT"] = "EN"
+    language_mode: Literal["EN", "ZH_HANS", "ZH_HANT", "BILINGUAL"] = "EN"
 
 
 class LanguageVariantCreate(BaseModel):
@@ -56,6 +56,7 @@ class ProductRead(BaseModel):
     product_code: str
     ticker: str
     name_en: str
+    name_zh_hans: str | None
     name_zh_hant: str | None
     constituent_index_code: str
     constituent_index_name: str | None
@@ -116,11 +117,13 @@ class ReportRead(BaseModel):
     benchmark_code: str
     report_date: date
     language_mode: str
+    lane: str
     status: ReportStatus
     revision: int
     version: int
     active_snapshot_id: str | None
     parent_report_id: str | None
+    translation_source_report_id: str | None
     revision_reason: str | None
     finalized_document_version: int | None
     template_version: str
@@ -129,13 +132,16 @@ class ReportRead(BaseModel):
 
 
 class ReportDetail(ReportRead):
+    translation_enabled: bool = False
+    translation_source_language_mode: str | None = None
+    report_title_defaults: dict[str, str] = Field(default_factory=dict)
     latest_document: dict[str, Any] | None = None
     quality_results: list[dict[str, Any]] = Field(default_factory=list)
-    artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SnapshotCreate(BaseModel):
-    source_policy: Literal["DA_REPORT_AUTO", "CDB_ONLY", "GOLDEN_FIXTURE", "UPLOAD_OVERRIDE"] = "GOLDEN_FIXTURE"
+    # Required so a request that does not name a source cannot silently select TESTING fixture data.
+    source_policy: Literal["DA_REPORT_AUTO", "CDB_ONLY", "GOLDEN_FIXTURE", "UPLOAD_OVERRIDE"]
     mapping_version: str = "hstech-v1"
 
 
@@ -143,8 +149,10 @@ class SnapshotRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     report_id: str
+    source_snapshot_id: str | None
     as_of_date: date
     source_policy: str
+    lane: str
     mapping_version: str
     status: SnapshotStatus
     checksum: str | None
@@ -225,6 +233,8 @@ class DocumentUpdate(BaseModel):
 
 
 class PreviewRequest(BaseModel):
+    """Optional unsaved draft submitted to the canonical preview renderer."""
+
     model_config = ConfigDict(extra="forbid")
     version: int | None = Field(default=None, ge=1)
     content: dict[str, Any] | None = None
@@ -242,22 +252,6 @@ class FinalizeRequest(BaseModel):
 
 class RevisionCreate(BaseModel):
     reason: str = Field(min_length=5, max_length=500)
-
-
-class RenderRequest(BaseModel):
-    formats: list[Literal["html", "pdf", "docx"]] = ["html", "pdf", "docx"]
-
-
-class JobRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: str
-    report_id: str
-    format: str
-    status: JobStatus
-    progress: int
-    stage: str
-    error: dict[str, Any] | None
-    artifact_id: str | None
 
 
 class ErrorItem(BaseModel):
@@ -287,6 +281,19 @@ class NewsCreate(BaseModel):
     ticker: str | None = None
     importance: Literal["LOW", "MEDIUM", "HIGH"] = "MEDIUM"
 
+    @field_validator("source_url")
+    @classmethod
+    def _http_url_only(cls, value: str) -> str:
+        """A news citation must be a web address someone can open.
+
+        Accepting an arbitrary string let `javascript:` and `data:` URLs reach the review UI, where
+        the analyst clicking through to check a source would have run the payload instead.
+        """
+        candidate = value.strip()
+        if not candidate.casefold().startswith(("http://", "https://")):
+            raise ValueError("source_url must be an http:// or https:// address.")
+        return candidate
+
 
 class NewsRead(NewsCreate):
     model_config = ConfigDict(from_attributes=True)
@@ -312,10 +319,20 @@ class NewsCatalogSourceFacet(BaseModel):
     value: str
     label: str
     label_zh: str | None = None
+    label_zh_hans: str | None = None
     count: int
 
 
+class NewsCatalogCompanyFacet(BaseModel):
+    security_code: str
+    ticker: str
+    name_en: str
+    name_zh_hans: str | None = None
+    name_zh_hant: str | None = None
+
+
 class NewsCatalogFacets(BaseModel):
+    companies: list[NewsCatalogCompanyFacet]
     sources: list[NewsCatalogSourceFacet]
     sentiments: dict[str, int]
     importance: dict[str, int]
@@ -330,15 +347,21 @@ class DaReportNewsCatalogItem(BaseModel):
     source_code: str
     source_name: str
     source_name_zh: str | None = None
+    source_name_zh_hans: str | None = None
+    source_name_zh_hans_source: Literal["SOURCE_ZH_HANS", "OPENCC_T2S", "MISSING"] = "MISSING"
     published_at: datetime
     published_at_source: Literal["published_at", "fetched_at"]
     fetched_at: datetime
     title: str
     title_en: str | None = None
     title_zh: str | None = None
+    title_zh_hans: str | None = None
+    title_zh_hans_source: Literal["SOURCE_ZH_HANS", "OPENCC_T2S", "MISSING"] = "MISSING"
     summary: str
     summary_en: str | None = None
     summary_zh: str | None = None
+    summary_zh_hans: str | None = None
+    summary_zh_hans_source: Literal["SOURCE_ZH_HANS", "OPENCC_T2S", "MISSING"] = "MISSING"
     category: Literal["Corporate"]
     region: str | None = None
     sentiment: str | None = None

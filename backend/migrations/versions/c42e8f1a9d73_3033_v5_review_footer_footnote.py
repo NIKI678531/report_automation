@@ -1,7 +1,7 @@
 """3033 v5 Review footer footnote
 
 Revision ID: c42e8f1a9d73
-Revises: b31d9e4f7a62
+Revises: e4a7c9d2f610
 """
 
 from typing import Sequence, Union
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 
 revision: str = "c42e8f1a9d73"
-down_revision: Union[str, Sequence[str], None] = "b31d9e4f7a62"
+down_revision: Union[str, Sequence[str], None] = "e4a7c9d2f610"
 branch_labels = None
 depends_on = None
 
