@@ -64,7 +64,11 @@ def mysql_contract(tmp_path_factory):
     tls.check_hostname = False
     tls.verify_flags &= ~ssl.VERIFY_X509_STRICT
     kwargs = {"connect_args": {"ssl": tls, "charset": "utf8mb4"}}
-    admin = create_engine(url.set(database=None), **kwargs)
+    # SQLAlchemy 2 treats ``URL.set(database=None)`` as "leave this component unchanged",
+    # which tries to connect to da_contract before the fixture has created it.  Use MySQL's
+    # built-in schema for the administrative connection so a clean CI service can bootstrap the
+    # isolated contract database.
+    admin = create_engine(url.set(database="mysql"), **kwargs)
     with admin.begin() as connection:
         connection.execute(text("CREATE DATABASE IF NOT EXISTS da_contract CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"))
     admin.dispose()
