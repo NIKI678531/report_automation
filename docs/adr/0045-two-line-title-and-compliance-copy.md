@@ -30,6 +30,10 @@ Renderer identities advance to `html-reader-compliance-v10`,
 `docx-compliance-v8`; the layout policy advances to `paged-layout-advisory-v4`. New reader-only
 spacing and colour values live in `3033-reader-v2` tokens. On-demand regeneration therefore changes
 artifact bytes and checksums but not the locked source document, consistent with ADR-0029.
+The approved copy changes also alter the deterministic PDF font subset, producing the recorded
+sub-pixel glyph deltas on Pages 2 and 3 without changing page geometry, financial values, or content
+outside this decision. The visual regression baseline retains the prior values and this rationale in
+its append-only raise history.
 
 Rollback restores the previous renderer identities, reader date/title markup, and selected legal
 resource. It does not require a database migration or an immutable document rewrite.
