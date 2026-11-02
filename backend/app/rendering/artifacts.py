@@ -60,7 +60,7 @@ LAYOUT_POLICY_VERSION = "paged-layout-advisory-v4"
 def renderer_version_for(format_name: str) -> str:
     return (
         f"{settings.renderer_version}-paged-compliance-v7" if format_name == "pdf"
-        else "html-reader-compliance-v10" if format_name == "html"
+        else "html-reader-compliance-v11" if format_name == "html"
         else "docx-compliance-v8"
     )
 

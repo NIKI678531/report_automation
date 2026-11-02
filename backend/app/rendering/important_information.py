@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
-IMPORTANT_INFORMATION_VERSION = "csop-3033-important-information-v1"
-IMPORTANT_INFORMATION_CHECKSUM = "6c06f38ada539b7ffdce07f0e8673cee236d03354b628f1ecaf49e81fa5b5b5e"
+IMPORTANT_INFORMATION_VERSION = "csop-3033-important-information-v2"
+IMPORTANT_INFORMATION_CHECKSUM = "58c9131d84a0492e6e802a63133b29b503699b4b56b49849d548bf91f50279c7"
 IMPORTANT_INFORMATION_RESOURCE_PATH = (
     Path(__file__).resolve().parent
     / "resources"
@@ -71,7 +71,7 @@ def load_important_information() -> ImportantInformationResource:
     if (
         version != IMPORTANT_INFORMATION_VERSION
         or product_code != "3033"
-        or title != "IMPORTANT INFORMATION"
+        or title != "Key Risks Reminder"
         or not isinstance(paragraphs, list)
         or len(paragraphs) != 3
         or any(not isinstance(paragraph, str) or not paragraph.strip() for paragraph in paragraphs)

@@ -71,10 +71,10 @@ def _content(*, language_mode: str = "EN", product_code: str = "3033") -> dict:
 def test_important_information_resource_is_exactly_versioned():
     resource = load_important_information()
 
-    assert resource.version == IMPORTANT_INFORMATION_VERSION == "csop-3033-important-information-v1"
+    assert resource.version == IMPORTANT_INFORMATION_VERSION == "csop-3033-important-information-v2"
     assert resource.checksum == IMPORTANT_INFORMATION_CHECKSUM
     assert resource.product_code == "3033"
-    assert resource.title == "IMPORTANT INFORMATION"
+    assert resource.title == "Key Risks Reminder"
     assert resource.paragraphs == EXPECTED_PARAGRAPHS
 
 
@@ -89,10 +89,10 @@ def test_important_information_is_once_above_the_continuous_html_title_only():
     assert continuous.index('data-section-key="important-information"') < continuous.index(
         '<h1 class="report-title">'
     )
-    assert continuous.count("IMPORTANT INFORMATION") == 1
-    assert "Key Risk Reminder:" not in continuous
+    assert continuous.count("Key Risks Reminder") == 1
+    assert "IMPORTANT INFORMATION" not in continuous
     assert 'class="important-information-marker"' not in continuous
-    assert '<p id="important-information-title" class="important-information-lead">IMPORTANT INFORMATION</p>' in continuous
+    assert '<p id="important-information-title" class="important-information-lead">Key Risks Reminder</p>' in continuous
     for paragraph in EXPECTED_PARAGRAPHS:
         assert continuous.count(paragraph) == 1
         assert paragraph not in paged
@@ -107,7 +107,7 @@ def test_product_specific_notice_is_not_applied_to_another_product():
     )
 
     assert 'data-section-key="important-information"' not in markup
-    assert "Key Risk Reminder:" not in markup
+    assert "Key Risks Reminder" not in markup
 
 
 @pytest.mark.parametrize(("language_mode", "commentary"), [

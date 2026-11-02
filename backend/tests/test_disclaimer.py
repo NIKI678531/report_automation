@@ -135,8 +135,8 @@ def test_all_exports_append_disclaimer_and_record_its_identity(client) -> None:
     assert 'data-section-key="disclaimer"' in html
     assert _plain_text(html).count(load_disclaimer().paragraphs[0]) == 1
     assert html.count('data-section-key="important-information"') == 1
-    assert "IMPORTANT INFORMATION" in html
-    assert "Key Risk Reminder:" not in html
+    assert "Key Risks Reminder" in html
+    assert "IMPORTANT INFORMATION" not in html
 
     pdf = pdfium.PdfDocument(downloads["pdf"].content)
     try:
@@ -146,7 +146,7 @@ def test_all_exports_append_disclaimer_and_record_its_identity(client) -> None:
         assert "not legally binding" in last_page_text
         assert load_disclaimer().issuer in last_page_text
         assert "Monthly Commentary | June 30, 2026" in last_page_text
-        assert "Key Risk Reminder:" not in " ".join(
+        assert "Key Risks Reminder" not in " ".join(
             pdf[index].get_textpage().get_text_bounded() for index in range(len(pdf))
         )
     finally:
@@ -157,7 +157,7 @@ def test_all_exports_append_disclaimer_and_record_its_identity(client) -> None:
     word_text = _docx_text(word)
     assert word_text.count(load_disclaimer().paragraphs[0]) == 1
     assert word_text.count(load_disclaimer().issuer) == 1
-    assert "Key Risk Reminder:" not in word_text
+    assert "Key Risks Reminder" not in word_text
 
     with client.app.state.testing_sessionmaker() as db:
         stored_document = db.scalar(
@@ -242,7 +242,7 @@ def test_archived_legacy_finalized_document_gets_disclaimer_and_cannot_override_
         assert "FORGED LEGAL COPY" not in pdf_text
         assert "Do not render this." not in pdf_text
         assert _plain_text(pdf_text).count(_plain_text(load_disclaimer().paragraphs[0])) == 1
-        assert "Key Risk Reminder:" not in pdf_text
+        assert "Key Risks Reminder" not in pdf_text
     finally:
         pdf.close()
 
@@ -252,7 +252,7 @@ def test_archived_legacy_finalized_document_gets_disclaimer_and_cannot_override_
     assert "FORGED LEGAL COPY" not in word_text
     assert "Do not render this." not in word_text
     assert word_text.count(load_disclaimer().paragraphs[0]) == 1
-    assert "Key Risk Reminder:" not in word_text
+    assert "Key Risks Reminder" not in word_text
 
     with client.app.state.testing_sessionmaker() as db:
         stored_document = db.scalar(
