@@ -41,8 +41,9 @@ PAGE4_REQUIRED_TEXT = (
 )
 
 PAGE5_REQUIRED_TEXT = (
-    "Disclaimer",
-    "This document is not for public distribution outside Hong Kong.",
+    "Disclaimer:",
+    "The product(s) is/are authorized by the Securities and Futures Commission",
+    "Investors should not base on this document alone to make investment decisions.",
     "For the Index Provider Disclaimer, please refer to the Product’s offering document.",
     "Issuer: CSOP Asset Management Limited",
 )

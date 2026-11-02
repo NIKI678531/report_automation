@@ -3,14 +3,14 @@ from __future__ import annotations
 import base64
 import json
 import math
+from calendar import monthrange
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from fastapi import HTTPException
@@ -37,6 +37,8 @@ from app.domain.models import Report
 from app.domain.page_one_presentation import page_one_presentation
 from app.domain.report_titles import report_title_defaults, resolve_report_titles
 from .disclaimer import load_disclaimer
+from .important_information import load_important_information
+from .report_heading import ReportHeading, resolve_report_heading
 
 ROOT = Path(__file__).resolve().parent
 env = Environment(
@@ -78,33 +80,23 @@ def rebalancing_date_text(value: Any, language_mode: str = "EN") -> str:
 env.filters.update(pct=pct, price=price, rebalancing_date=rebalancing_date_text)
 
 
-HONG_KONG_TIMEZONE = ZoneInfo("Asia/Hong_Kong")
+def report_month_end_display(report_date: date) -> str:
+    """Return the last calendar day of the report's month for reader metadata."""
 
-
-def hong_kong_export_date(now: datetime | None = None) -> str:
-    """Return the reader-sidebar date for the instant at which HTML is rendered."""
-
-    instant = now or datetime.now(HONG_KONG_TIMEZONE)
-    if instant.tzinfo is None:
-        instant = instant.replace(tzinfo=timezone.utc)
-    local_date = instant.astimezone(HONG_KONG_TIMEZONE).date()
+    local_date = report_date.replace(day=monthrange(report_date.year, report_date.month)[1])
     return f"{local_date.day} {local_date:%b %Y}"
 
 
 def _product_sidebar_context(
     config: dict[str, Any],
     report: Report,
-    product_display_name: str | None = None,
+    heading: ReportHeading,
 ) -> dict[str, Any]:
     result = deepcopy(config)
-    ticker = f"{report.product_code}.HK"
-    product_title = str(product_display_name or report.product_name).strip()
-    if ticker.casefold() not in product_title.casefold():
-        product_title = f"{product_title} ({ticker})"
-    reader_title = f"{product_title} Monthly Commentary"
+    reader_title = heading.flat
     share_target = str(result.pop("shareTarget"))
     result["title"] = reader_title
-    result["exportDate"] = hong_kong_export_date()
+    result["exportDate"] = report_month_end_display(report.report_date)
     result["shareLinks"] = [
         {
             "kind": "x",
@@ -494,7 +486,14 @@ def render_html(
         document, product_code=report.product_code, benchmark_name=report.benchmark_code,
         report_date=report.report_date, language_mode=language_mode,
     ))
+    heading = resolve_report_heading(report, document)
     disclaimer = load_disclaimer()
+    reader_tokens = _render_tokens("3033-reader-v2") if layout_mode == "continuous" else None
+    important_information = (
+        load_important_information().template_context()
+        if layout_mode == "continuous" and str(report.product_code) == "3033"
+        else None
+    )
     banner = testing_banner(document)
     enable_review_layout = template_version != "3033-v1"
     if banner and is_chinese(language_mode):
@@ -511,10 +510,6 @@ def render_html(
                 row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
     for row in portfolio:
         row["label"] = titles[f"portfolio.{row['metric_code']}"]
-    product_display_name = (
-        (document.get("terminology_overrides") or {}).get("product_name")
-        or report.product_name
-    )
     template_name = (
         "3033-v6.html.j2" if template_version == "3033-v6"
         else "3033-v5.html.j2" if template_version == "3033-v5"
@@ -531,15 +526,17 @@ def render_html(
         footnote_tokens=tokens["footnote"] if template_version == "3033-v6" else None,
         calibri_font_css=_embedded_calibri_font_css() if template_version == "3033-v6" else "",
         product_sidebar=(
-            _product_sidebar_context(
-                _render_tokens("3033-v6")["productSidebar"], report, product_display_name
-            )
+            _product_sidebar_context(reader_tokens["productSidebar"], report, heading)
             if layout_mode == "continuous"
             else None
         ),
+        report_heading=heading,
+        important_information=important_information,
+        important_information_style=(
+            reader_tokens["importantInformation"] if important_information else None
+        ),
         layout_mode=layout_mode,
         t=lambda key, **values: titles[key] if key in titles else term(key, language_mode, **values),
-        product_display_name=product_display_name,
         benchmark_display_name=(document.get("terminology_overrides") or {}).get("benchmark_name") or document.get("benchmark_name") or report.benchmark_code,
         report_date_long=long_date(report.report_date, language_mode),
         disclaimer_report_date_long=long_date(report.report_date, "EN"),

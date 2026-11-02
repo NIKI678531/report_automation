@@ -48,18 +48,20 @@ from .html import (
     sector_chart,
     testing_banner,
 )
+from .important_information import important_information_audit_fields
+from .report_heading import resolve_report_heading
 
 
 MIME = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 MINOR_LAYOUT_OVERFLOW_TOLERANCE_MM = 3.0
-LAYOUT_POLICY_VERSION = "paged-layout-advisory-v3"
+LAYOUT_POLICY_VERSION = "paged-layout-advisory-v4"
 
 
 def renderer_version_for(format_name: str) -> str:
     return (
-        f"{settings.renderer_version}-paged-i18n-v6" if format_name == "pdf"
-        else "html-reader-sidebar-v9" if format_name == "html"
-        else "docx-shared-footer-v7"
+        f"{settings.renderer_version}-paged-compliance-v7" if format_name == "pdf"
+        else "html-reader-compliance-v10" if format_name == "html"
+        else "docx-compliance-v8"
     )
 
 
@@ -1380,6 +1382,7 @@ def _render_historical_docx(
 def render_docx(report: Report, content: dict, destination: Path) -> None:
     language_mode = str(content.get("language_mode") or report.language_mode or "EN")
     content = localized_document(content, language_mode)
+    report_heading = resolve_report_heading(report, content)
     titles = resolve_report_titles(content, report_title_defaults(
         content, product_code=report.product_code, benchmark_name=report.benchmark_code,
         report_date=report.report_date, language_mode=language_mode,
@@ -1440,7 +1443,10 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         **opening_footnote_kwargs(1),
     )
     usable_width = _usable_width_twips(document.sections[0])
-    title = document.add_heading((content.get("terminology_overrides") or {}).get("product_name") or report.product_name, 0)
+    title = document.add_heading("", 0)
+    title_product = title.add_run(report_heading.product)
+    title_product.add_break()
+    title.add_run(report_heading.commentary)
     _format_paragraph(title, before=0, after=6, line_spacing=1.0, keep_with_next=True)
     _set_paragraph_border(title, color=deep_hex, size=2, space=7)
     enable_review_layout = content.get("template_version") != "3033-v1"
@@ -1715,6 +1721,8 @@ class GeneratedExport:
     content_manifest: dict
     disclaimer_version: str
     disclaimer_checksum: str
+    important_information_version: str | None = None
+    important_information_checksum: str | None = None
     layout_findings: tuple[dict[str, Any], ...] = ()
 
     def cleanup(self) -> None:
@@ -2132,6 +2140,9 @@ def generate_export(report: Report, document: ReportDocument, format_name: str) 
         layout_findings = assert_page_one_layout_fits(report, document.content)
         _render_file(report, document, format_name, destination)
         disclaimer_fields = disclaimer_audit_fields()
+        important_information_fields = important_information_audit_fields(
+            report.product_code, format_name
+        )
         content_manifest = {
             key: value
             for key, value in render_content_manifest(document.content).items()
@@ -2148,6 +2159,7 @@ def generate_export(report: Report, document: ReportDocument, format_name: str) 
             checksum=sha256(destination),
             content_manifest=content_manifest,
             layout_findings=tuple(layout_findings or ()),
+            **important_information_fields,
             **disclaimer_fields,
         )
     except BaseException:

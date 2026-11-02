@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{{ report.product_name }} - {{ report_date_long }}</title>
+  <title>{{ report_heading.flat }} - {{ report_date_long }}</title>
   <style>
     {{ cjk_font_css|safe }}
     {{ calibri_font_css|safe }}
@@ -20,6 +20,8 @@
     .page-footer img { position:absolute; right:0; bottom:0; width:44mm; height:auto; }
     .page-number { position:absolute; right:0; bottom:-1.5mm; transform:translateX(5mm); color:#777; font-size:8pt; }
     h1 { margin:0 0 1.5mm; padding-bottom:3mm; border-bottom:0.45pt solid var(--deep); color:var(--deep); font-size:24pt; line-height:1.05; }
+    .report-title-line { display:block; }
+    .report-title-product { white-space:nowrap; }
     h2 { margin:2mm 0 1.5mm; color:var(--deep); font-size:14pt; line-height:1.1; }
     h3 { margin:1.5mm 0 1mm; color:var(--deep); font-size:12pt; }
     p { margin:0 0 1.4mm; }
@@ -73,7 +75,7 @@
   {%- endif %}
 {%- if page_one and page_one.get('schema_version') in [2, 3] %}
     .opening-page-body { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); column-gap:0; align-content:start; }
-    .opening-page-body > h1,.opening-page-body > .review-layout { grid-column:1 / -1; }
+    .opening-page-body > .important-information,.opening-page-body > h1,.opening-page-body > .review-layout { grid-column:1 / -1; }
     .history-footnote-group { min-width:0; }
     .history-footnote-group .history { margin-top:0; }
     .history-footnote-group > .footnote { position:static; left:auto; right:auto; bottom:auto; margin-left:0; margin-right:0; }
@@ -136,6 +138,7 @@
     }
     @media screen and (max-width:800px) {
       .report-page { width:100%; height:auto; min-height:297mm; margin:0 0 8px; overflow-x:auto; }
+      .report-title-product { white-space:normal; }
     }
     body.layout-continuous { background:#fff; }
     .layout-continuous .report-document { width:min(210mm,100%); margin:0 auto; background:#fff; }
@@ -202,6 +205,13 @@
       .report-reader { display:block; max-width:none; padding:0; }
     }
 {%- endif %}
+{%- if important_information %}
+    .important-information { margin:0 0 {{ important_information_style.marginBottom }}; padding:{{ important_information_style.padding }}; border:{{ important_information_style.borderWidth }} solid {{ important_information_style.borderColor }}; background:{{ important_information_style.background }}; color:{{ important_information_style.bodyColor }}; }
+    .important-information-copy { font-size:{{ important_information_style.bodySize }}; line-height:{{ important_information_style.lineHeight }}; }
+    .important-information-copy p { margin:0 0 {{ important_information_style.paragraphGap }}; }
+    .important-information-copy p:last-child { margin-bottom:0; }
+    .important-information-lead { color:{{ important_information_style.headingColor }}; font-weight:700; }
+{%- endif %}
   </style>
 </head>
 <body class="layout-{{ layout_mode }} language-{{ language_mode|lower|replace('_', '-') }}">
@@ -214,6 +224,15 @@
   <div class="testing-mark" data-lane="TESTING" aria-hidden="true"><span class="testing-watermark">{{ testing_banner.watermark }}</span></div>
   <div class="testing-chip">{{ testing_banner.label }}</div>
   {%- endif %}
+{%- endmacro %}
+
+{% macro report_title_block() -%}
+  {%- if important_information %}
+  <section class="important-information" data-section-key="important-information" data-important-information-version="{{ important_information.version }}" aria-labelledby="important-information-title">
+    <div class="important-information-copy"><p id="important-information-title" class="important-information-lead">{{ important_information.title }}</p>{% for paragraph in important_information.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}</div>
+  </section>
+  {%- endif %}
+  <h1 class="report-title"><span class="report-title-line report-title-product">{{ report_heading.product }}</span><span class="report-title-line report-title-commentary">{{ report_heading.commentary }}</span></h1>
 {%- endmacro %}
 
 {% macro review_node(node) -%}
@@ -279,7 +298,7 @@
   {{ chrome(opening_page) }}
   <main class="page-body{% if v4 %} opening-page-body{% endif %}" data-layout-safe-area="true">
     {% if opening_page == 1 %}
-      <h1>{{ product_sidebar.title if product_sidebar else product_display_name }}</h1>
+      {{ report_title_block() }}
       {% if enable_review_layout and sections.month_in_review.get('blocks') %}
       <div class="review-layout">
         <div class="review-flow-cell" style="grid-column:{{ review_layout.x + 1 }} / span {{ review_layout.w }}">{{ review_node(review_layout) }}</div>
@@ -307,7 +326,7 @@
 <section class="report-page" data-page="1" data-section-key="month_in_review">
   {{ chrome(1) }}
   <main class="page-body">
-    <h1>{{ product_sidebar.title if product_sidebar else product_display_name }}</h1>
+    {{ report_title_block() }}
     {% if enable_review_layout and sections.month_in_review.get('blocks') %}
     <div class="review-layout">
       <div class="review-flow-cell" style="grid-column:{{ review_layout.x + 1 }} / span {{ review_layout.w }}">{{ review_node(review_layout) }}</div>

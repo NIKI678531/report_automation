@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
@@ -12,7 +12,7 @@ from app.domain.document import initial_document, validate_document_content
 from app.core.config import settings
 from app.domain.page_one_presentation import PageOnePresentationError, page_one_presentation
 from app.rendering.artifacts import render_docx
-from app.rendering.html import hong_kong_export_date, render_html
+from app.rendering.html import render_html, report_month_end_display
 
 
 @pytest.fixture
@@ -285,12 +285,12 @@ def test_finalized_v4_content_can_still_render_with_legacy_body_footnote():
 @pytest.mark.parametrize("product_code", ["3033", "3149"])
 @pytest.mark.parametrize("layout_mode", ["continuous", "paged"])
 def test_reader_sidebar_is_in_all_downloaded_html(
-    version, product_code, layout_mode, calibri_css, monkeypatch,
+    version, product_code, layout_mode, calibri_css,
 ):
     from xml.etree import ElementTree
 
-    monkeypatch.setattr("app.rendering.html.hong_kong_export_date", lambda: "26 Oct 2026")
     content = _document(version)
+    content["product_ticker"] = f"{product_code}.HK"
     report = _report()
     report.product_code = product_code
 
@@ -298,20 +298,21 @@ def test_reader_sidebar_is_in_all_downloaded_html(
 
     expected = layout_mode == "continuous"
     assert ('class="product-sidebar"' in markup) is expected
+    assert (
+        '<h1 class="report-title"><span class="report-title-line report-title-product">'
+        f'CSOP Hang Seng TECH Index ETF ({product_code}.HK)</span>'
+        '<span class="report-title-line report-title-commentary">Monthly Commentary</span></h1>'
+    ) in markup
     if expected:
         sidebar = ElementTree.fromstring(
             markup[markup.index('<aside class="product-sidebar"'):markup.index('</aside>') + 8]
         )
         assert "Authored by:" in "".join(sidebar.itertext())
         assert "CSOP Intelligence" in "".join(sidebar.itertext())
-        assert "Date : 26 Oct 2026" in " ".join("".join(sidebar.itertext()).split())
+        assert "Date : 30 Jun 2026" in " ".join("".join(sidebar.itertext()).split())
         assert "Product Insights" in "".join(sidebar.itertext())
         assert "Related Products" in "".join(sidebar.itertext())
         assert "Related ETFs" not in "".join(sidebar.itertext())
-        assert (
-            f"<h1>CSOP Hang Seng TECH Index ETF ({product_code}.HK) Monthly Commentary</h1>"
-            in markup
-        )
         cards = sidebar.findall(".//article")
         assert [card.find("p").text for card in cards] == ["3033", "3149"]
         links = sidebar.findall(".//a[@class='product-link']")
@@ -327,8 +328,14 @@ def test_reader_sidebar_is_in_all_downloaded_html(
         assert all(link.attrib["target"] == "_blank" for link in links)
 
 
-def test_reader_sidebar_date_uses_the_hong_kong_export_day():
-    assert hong_kong_export_date(datetime(2026, 10, 25, 16, 30, tzinfo=timezone.utc)) == "26 Oct 2026"
+@pytest.mark.parametrize(("report_date", "expected"), [
+    (date(2026, 2, 14), "28 Feb 2026"),
+    (date(2024, 2, 1), "29 Feb 2024"),
+    (date(2026, 4, 7), "30 Apr 2026"),
+    (date(2026, 10, 27), "31 Oct 2026"),
+])
+def test_reader_sidebar_date_uses_the_report_month_calendar_end(report_date, expected):
+    assert report_month_end_display(report_date) == expected
 
 
 def test_v6_keeps_footer_geometry_and_does_not_mutate_v5_source(calibri_css):

@@ -1,0 +1,17 @@
+{
+  "id": "3033-reader-v2",
+  "extends": "3033-v6",
+  "change": "Month-end reader metadata and versioned important-information presentation",
+  "importantInformation": {
+    "background": "#ffffff",
+    "borderColor": "#e5e7eb",
+    "headingColor": "#003b49",
+    "bodyColor": "#6b7280",
+    "borderWidth": "1px",
+    "padding": "22px",
+    "marginBottom": "26px",
+    "paragraphGap": "12px",
+    "bodySize": "16px",
+    "lineHeight": 1.45
+  }
+}

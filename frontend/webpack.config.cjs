@@ -3,6 +3,7 @@ const { container: { ModuleFederationPlugin } } = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
 const remoteBase = '/remote/fund-cmt-auto/';
+const apiProxyTarget = process.env.FUND_CMT_API_PROXY_TARGET || 'http://localhost:8000';
 
 module.exports = (_env, argv) => ({
   context: __dirname,
@@ -62,7 +63,7 @@ module.exports = (_env, argv) => ({
       } });
       return middlewares;
     },
-    proxy: [{ context: [`${remoteBase}api/`], target: 'http://localhost:8000', pathRewrite: { '^/remote/fund-cmt-auto': '' } }],
+    proxy: [{ context: [`${remoteBase}api/`], target: apiProxyTarget, pathRewrite: { '^/remote/fund-cmt-auto': '' } }],
   },
   performance: { hints: false },
 });

@@ -15,6 +15,10 @@ from app.domain.page_one_presentation import PageOneLayoutOverflowError
 from app.rendering.artifacts import LAYOUT_POLICY_VERSION, generate_export, renderer_version_for
 from app.rendering.disclaimer import DisclaimerResourceError, disclaimer_audit_fields
 from app.rendering.download_response import ExportResponse
+from app.rendering.important_information import (
+    ImportantInformationResourceError,
+    important_information_audit_fields,
+)
 from .deps import Db, RequestId
 
 router = APIRouter()
@@ -51,7 +55,8 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
                "layout_policy_version": LAYOUT_POLICY_VERSION,
                "lane": document.content.get("lane", report.lane),
                "language_mode": document.content.get("language_mode", report.language_mode),
-               **disclaimer_audit_fields()}
+               **disclaimer_audit_fields(),
+               **important_information_audit_fields(report.product_code, format_name)}
     export = None
     try:
         export = generate_export(report, document, format_name)
@@ -61,6 +66,10 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
             content_manifest=export.content_manifest,
             disclaimer_version=export.disclaimer_version,
             disclaimer_checksum=export.disclaimer_checksum,
+            **({
+                "important_information_version": export.important_information_version,
+                "important_information_checksum": export.important_information_checksum,
+            } if export.important_information_version else {}),
             layout_warning_findings=[
                 dict(item) for item in export.layout_findings
                 if item.get("severity") == "WARNING"
@@ -77,6 +86,8 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
         code = (
             "DISCLAIMER_RESOURCE_INVALID"
             if isinstance(error, DisclaimerResourceError)
+            else "IMPORTANT_INFORMATION_RESOURCE_INVALID"
+            if isinstance(error, ImportantInformationResourceError)
             else "PAGE_ONE_LAYOUT_OVERFLOW"
             if isinstance(error, PageOneLayoutOverflowError)
             else "PDF_LAYOUT_OVERFLOW"
@@ -100,6 +111,8 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
             "message": (
                 "The approved disclaimer resource is unavailable or invalid."
                 if code == "DISCLAIMER_RESOURCE_INVALID"
+                else "The approved important-information resource is unavailable or invalid."
+                if code == "IMPORTANT_INFORMATION_RESOURCE_INVALID"
                 else str(error)
                 if code == "PAGE_ONE_LAYOUT_OVERFLOW"
                 else "The report could not be generated."
@@ -107,6 +120,8 @@ def export_content(report_id: str, format_name: OutputFormat, version: int, expi
             "fix_hint": (
                 "Restore the approved versioned disclaimer resource before retrying the download."
                 if code == "DISCLAIMER_RESOURCE_INVALID"
+                else "Restore the approved versioned important-information resource before retrying the HTML download."
+                if code == "IMPORTANT_INFORMATION_RESOURCE_INVALID"
                 else error.fix_hint
                 if isinstance(error, PageOneLayoutOverflowError)
                 else "Retry the download. If it fails again, check the API rendering logs and resources."

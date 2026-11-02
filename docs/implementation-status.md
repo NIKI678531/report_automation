@@ -1,8 +1,10 @@
 # Implementation status against V2.1
 
-Last verified: 2026-10-27
+Last verified: 2026-10-28
 
 ## Implemented and tested
+
+- Two-line title and current compliance copy (2026-10-28, ADR-0045): all HTML/PDF/DOCX exports, including re-exports of finalized and archived reports, now show product name plus ticker on the first title line and the localized Monthly Commentary label on the second without rewriting the locked ReportDocument. The continuous HTML sidebar uses the report month's final calendar day. 3033 continuous HTML adds the checksum-locked English `IMPORTANT INFORMATION` risk notice above the title; official PDF/DOCX omit it. The final page uses checksum-locked `csop-hk-disclaimer-v2` in all formats. Export audits distinguish the new legal resources and renderer identities.
 
 - HTML reader sidebar and Hong Kong dates (2026-10-27, ADR-0043): continuous HTML exports now show the `CSOP Hang Seng TECH Index ETF (3033.HK) Monthly Commentary` heading, CSOP Intelligence authorship, the export-day date in Asia/Hong_Kong, Product Insights category and script-free sharing controls. The requested metadata labels and Related Products heading are black while product-card accents remain template blue. Related Products are English 3033/3149 cards linked to their corresponding official CSOP English product pages; desktop keeps the rail fixed and mobile moves it above the report. Report Centre `Last updated` timestamps now explicitly use Hong Kong time. The HTML renderer identity is `html-reader-sidebar-v9`; focused backend/browser tests, frontend tests and the production build pass.
 

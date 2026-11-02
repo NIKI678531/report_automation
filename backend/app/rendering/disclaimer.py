@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 
 
-DISCLAIMER_VERSION = "csop-hk-professional-investor-v1"
-DISCLAIMER_CHECKSUM = "6f41352bc7639c65a2c190aa22bf543b0c0e4d039c753a9c57d9f7c7602423df"
+DISCLAIMER_VERSION = "csop-hk-disclaimer-v2"
+DISCLAIMER_CHECKSUM = "7191451971bdd09b98cd7a327e2c72d1eead025abea996fe222f5830f06cca36"
 DISCLAIMER_RESOURCE_PATH = (
     Path(__file__).resolve().parent / "resources" / f"{DISCLAIMER_VERSION}.json"
 )
@@ -78,7 +78,7 @@ def load_disclaimer() -> DisclaimerResource:
         or not isinstance(title, str)
         or not title.strip()
         or not isinstance(paragraphs, list)
-        or len(paragraphs) != 6
+        or len(paragraphs) != 5
         or any(not isinstance(paragraph, str) or not paragraph.strip() for paragraph in paragraphs)
         or not isinstance(issuer, str)
         or not issuer.strip()
