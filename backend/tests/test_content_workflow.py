@@ -9,7 +9,7 @@ from docx import Document
 from playwright.sync_api import sync_playwright
 from sqlalchemy import select
 
-from app.domain.models import ProductCatalog
+from app.domain.models import DataSnapshot, ProductCatalog, Report
 
 
 def prepared_report(client):
@@ -50,6 +50,31 @@ def test_calculation_and_ai_draft_are_versioned_and_bound(client):
     assert "30 constituents" in content["sections"]["month_in_review"]["summary"]
     review = client.get(f"/api/v1/reports/{report_id}/review")
     assert next(item for item in review.json()["checks"] if item["check_id"] == "QC-008")["status"] == "PASSED"
+
+
+def test_failed_quality_findings_remain_advisory_after_calculation(client):
+    report_id = prepared_report(client)
+    with client.app.state.testing_sessionmaker() as db:
+        report = db.get(Report, report_id)
+        snapshot = db.get(DataSnapshot, report.active_snapshot_id)
+        snapshot.quality_results = [
+            {
+                "check_id": "TEST-QUALITY",
+                "severity": "BLOCKING",
+                "status": "FAILED",
+                "fix_hint": "Review the test finding.",
+            }
+        ]
+        db.commit()
+
+    calculated = client.post(f"/api/v1/reports/{report_id}/calculations")
+    assert calculated.status_code == 200, calculated.text
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    assert detail["status"] == "EDITING"
+    review = client.get(f"/api/v1/reports/{report_id}/review").json()
+    assert review["ready"] is True
+    assert review["blocking"] == []
+    assert any(item["check_id"] == "TEST-QUALITY" for item in review["warnings"])
 
 
 def test_v3_ai_draft_replaces_initial_placeholder_review_blocks(client):

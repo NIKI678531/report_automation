@@ -25,7 +25,6 @@ class ReportStatus(str, enum.Enum):
     DRAFT = "DRAFT"
     DATA_READY = "DATA_READY"
     EDITING = "EDITING"
-    QA_BLOCKED = "QA_BLOCKED"
     READY_TO_FINALIZE = "READY_TO_FINALIZE"
     # Kept so pre-V2.1 rows can be read and revised after migration.
     REVIEW = "REVIEW"

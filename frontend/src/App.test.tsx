@@ -354,7 +354,7 @@ describe("3033 product scope", () => {
   });
 
   it("saves title edits before finalizing without blocking on review findings and opens downloads", async () => {
-    let current = report("ready", "2026-07-31", "QA_BLOCKED");
+    let current = report("ready", "2026-07-31", "EDITING");
     current.report_title_defaults = { top10: "Largest 3033.HK positions*" };
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
     vi.spyOn(api, "listReports").mockImplementation(async () => [current]);

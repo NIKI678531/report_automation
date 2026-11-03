@@ -546,7 +546,6 @@ input[type="checkbox"] { min-height: 0; accent-color: var(--color-primary); }
 .report-record-updated small { color: var(--color-text-secondary); }
 .report-record-updated { justify-items: end; }
 .report-record-updated time { font-family: var(--font-numeric); font-size: var(--text-label-sm); font-variant-numeric: var(--numeric-features); }
-.status.qa_blocked { background: var(--color-error-container); color: var(--color-on-error-container); }
 .status.ready_to_finalize,
 .status.review { background: var(--color-warning-container); color: var(--color-on-warning-container); }
 .status.data_ready,

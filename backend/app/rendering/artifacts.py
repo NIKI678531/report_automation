@@ -55,13 +55,15 @@ from .report_heading import resolve_report_heading
 MIME = {"html": "text/html", "pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 MINOR_LAYOUT_OVERFLOW_TOLERANCE_MM = 3.0
 LAYOUT_POLICY_VERSION = "paged-layout-advisory-v4"
+DATA_FOOTNOTE_FONT_SIZE_PT = 8.0
+DATA_FOOTNOTE_LINE_HEIGHT = 1.2
 
 
 def renderer_version_for(format_name: str) -> str:
     return (
-        f"{settings.renderer_version}-paged-compliance-v7" if format_name == "pdf"
-        else "html-reader-compliance-v11" if format_name == "html"
-        else "docx-compliance-v8"
+        f"{settings.renderer_version}-paged-compliance-v8" if format_name == "pdf"
+        else "html-reader-compliance-v12" if format_name == "html"
+        else "docx-compliance-v9"
     )
 
 
@@ -287,7 +289,6 @@ def _footer_table(
     *,
     footnote_paragraphs: list[dict[str, Any]] | None = None,
     footnote_bottom_nudge_pt: float = 0,
-    footnote_font_size_pt: float = 10,
     footnote_x: int = 0,
     footnote_w: int = 12,
     footnote_font_name: str | None = None,
@@ -303,10 +304,7 @@ def _footer_table(
     profile_page_number = profile_page_number or page_number
     footnote_spacing_after = {1: 5.25, 3: 3.5, 4: 3.6}.get(profile_page_number, 2.5)
     footnote_line_spacing = (
-        Pt(footnote_font_size_pt * 1.2)
-        if footnote and footnote_font_size_pt == 8
-        else Pt(13.7) if profile_page_number == 3 and footnote
-        else 1.0
+        Pt(DATA_FOOTNOTE_FONT_SIZE_PT * DATA_FOOTNOTE_LINE_HEIGHT) if footnote else 1.0
     )
     footnote_left_pt = 521.6 * max(0, footnote_x) / 12
     footnote_right_pt = 521.6 * max(0, 12 - footnote_x - footnote_w) / 12
@@ -314,23 +312,14 @@ def _footer_table(
         for index, item in enumerate(footnote_paragraphs):
             paragraph = anchor if index == 0 else footer.add_paragraph()
             _clear_paragraph(paragraph)
-            alignment = {
-                "center": WD_ALIGN_PARAGRAPH.CENTER,
-                "right": WD_ALIGN_PARAGRAPH.RIGHT,
-                "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
-            }.get(str(item.get("text_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT)
             _format_paragraph(
                 paragraph,
-                alignment=alignment,
-                before=float(item.get("space_before_pt") or 0),
+                alignment=WD_ALIGN_PARAGRAPH.LEFT,
+                before=0,
                 after=(
-                    float(item.get("space_after_pt") or 0)
-                    + (footnote_spacing_after if index == len(footnote_paragraphs) - 1 else 0)
+                    footnote_spacing_after if index == len(footnote_paragraphs) - 1 else 0
                 ),
-                line_spacing=Pt(
-                    float(item.get("font_size_pt") or 8)
-                    * float(item.get("line_height") or 1.2)
-                ),
+                line_spacing=footnote_line_spacing,
             )
             paragraph.paragraph_format.left_indent = Pt(footnote_left_pt + 0.5)
             paragraph.paragraph_format.right_indent = Pt(footnote_right_pt - 7.5)
@@ -338,13 +327,17 @@ def _footer_table(
             _set_run_font(
                 run,
                 font_name,
-                size=float(item.get("font_size_pt") or 8),
+                size=DATA_FOOTNOTE_FONT_SIZE_PT,
+                bold=False,
                 color=RGBColor(0, 0, 0),
             )
+            run.italic = False
+            run.underline = False
             _set_run_vertical_position(run, footnote_bottom_nudge_pt)
     else:
         _format_paragraph(
             anchor,
+            alignment=WD_ALIGN_PARAGRAPH.LEFT,
             after=footnote_spacing_after if footnote else 0,
             line_spacing=footnote_line_spacing,
         )
@@ -353,7 +346,7 @@ def _footer_table(
         if footnote:
             _set_run_font(
                 anchor.add_run(footnote), font_name,
-                size=footnote_font_size_pt, color=RGBColor(0, 0, 0),
+                size=DATA_FOOTNOTE_FONT_SIZE_PT, bold=False, color=RGBColor(0, 0, 0),
             )
         else:
             anchor.paragraph_format.line_spacing = Pt(1)
@@ -363,6 +356,8 @@ def _footer_table(
         for paragraph in footer.paragraphs:
             for run in paragraph.runs:
                 _set_run_font(run, footnote_font_name, bold=False)
+                run.italic = False
+                run.underline = False
                 run._element.get_or_add_rPr().find(qn("w:rFonts")).set(qn("w:eastAsia"), font_name)
 
     # The reference stacks the footnote, logo and page number vertically. The table extends
@@ -409,7 +404,6 @@ def _page_setup(
     footnote: str = "",
     footnote_paragraphs: list[dict[str, Any]] | None = None,
     footnote_bottom_nudge_pt: float = 0,
-    footnote_font_size_pt: float = 10,
     footnote_x: int = 0,
     footnote_w: int = 12,
     banner: dict | None = None,
@@ -462,7 +456,6 @@ def _page_setup(
         font_name,
         footnote_paragraphs=footnote_paragraphs,
         footnote_bottom_nudge_pt=footnote_bottom_nudge_pt,
-        footnote_font_size_pt=footnote_font_size_pt,
         footnote_x=footnote_x,
         footnote_w=footnote_w,
         footnote_font_name="Calibri",
@@ -1430,7 +1423,6 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
             "footnote_bottom_nudge_pt": (
                 float(footnote["footer_bottom_mm"]) - 20.0
             ) * 72 / 25.4 if "footer_bottom_mm" in footnote else float(footnote.get("bottom_nudge_pt") or 0),
-            "footnote_font_size_pt": 8,
             "footnote_x": int(footnote.get("x", 0)),
             "footnote_w": int(footnote.get("w", 12)),
         }
@@ -1540,7 +1532,6 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _page_setup(
         page3, constituent_page_number, report, language_mode, tokens,
         footnote=str(footnotes.get("constituents") or ""), banner=banner,
-        footnote_font_size_pt=8,
         dynamic_page_number=is_controlled, profile_page_number=3,
     )
     heading = document.add_heading(titles["constituent_performance"], 1)
@@ -1575,7 +1566,6 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _page_setup(
         page4, analytics_page_number, report, language_mode, tokens,
         footnote=str(footnotes.get("analytics") or ""), banner=banner,
-        footnote_font_size_pt=8,
         dynamic_page_number=is_controlled, profile_page_number=4,
     )
     analytics = sections["analytics"]

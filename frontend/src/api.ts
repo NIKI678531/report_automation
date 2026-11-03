@@ -1,6 +1,6 @@
 import { apiUrl, artifactUrl } from "./remoteConfig";
 
-export type ReportStatus = "DRAFT" | "DATA_READY" | "EDITING" | "QA_BLOCKED" | "READY_TO_FINALIZE" | "REVIEW" | "FINALIZED" | "ARCHIVED";
+export type ReportStatus = "DRAFT" | "DATA_READY" | "EDITING" | "READY_TO_FINALIZE" | "REVIEW" | "FINALIZED" | "ARCHIVED";
 export type OutputFormat = "pdf" | "html" | "docx";
 export type ReportLanguage = "EN" | "ZH_HANS" | "ZH_HANT" | "BILINGUAL";
 

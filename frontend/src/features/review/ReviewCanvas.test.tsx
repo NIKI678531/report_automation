@@ -331,7 +331,7 @@ describe("Review page-one layout controls", () => {
       page: 2,
       footer_bottom_mm: 20,
       content_html: "<p>Source¹</p>",
-      body_style: { font_size_pt: 8, line_height: 1.4, text_align: "right" },
+      body_style: { font_size_pt: 8, line_height: 1.2, text_align: "left" },
     });
     expect(footnote).not.toHaveProperty("row");
     expect(footnote).not.toHaveProperty("gap_pt");
@@ -424,7 +424,7 @@ describe("Review page-one layout controls", () => {
     expect(onPresentationChange).not.toHaveBeenCalled();
   });
 
-  it("locks footnote inline typography while retaining paragraph controls", () => {
+  it("locks every footnote typography control while retaining content editing", () => {
     const onPresentationChange = vi.fn();
     const initial = pageOnePresentation(undefined, blocks);
 
@@ -443,15 +443,10 @@ describe("Review page-one layout controls", () => {
     const inspector = screen.getByRole("dialog", { name: "Historical performance footnote detailed editor" });
     expect(within(inspector).queryByLabelText("Historical performance footnote Font size")).toBeNull();
     expect(within(inspector).queryByLabelText("Historical performance footnote Font color")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Historical performance footnote Line spacing"), { target: { value: "1.4" } });
-    fireEvent.change(screen.getByLabelText("Historical performance footnote Alignment"), { target: { value: "justify" } });
-
-    const updated = onPresentationChange.mock.calls.at(-1)?.[0] as PageOnePresentation;
-    expect(updated.page_one.elements.find((element) => element.id === "footnote:historical")?.body_style).toMatchObject({
-      font_size_pt: 8,
-      line_height: 1.4,
-      text_align: "justify",
-    });
+    expect(within(inspector).queryByLabelText("Historical performance footnote Line spacing")).toBeNull();
+    expect(within(inspector).queryByLabelText("Historical performance footnote Alignment")).toBeNull();
+    expect(within(inspector).getByRole("textbox", { name: "Historical performance footnote" })).toBeTruthy();
+    expect(onPresentationChange).not.toHaveBeenCalled();
   });
 
   it("edits the title-to-table gap while keeping Historical Performance title typography locked", () => {

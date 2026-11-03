@@ -167,9 +167,10 @@ def generate_in_review(report_id: str, command: AiDraftRequest, db: Db, x_reques
 def review(report_id: str, db: Db) -> ReviewRead:
     report = service.get_report(db, report_id); document = service.latest_document(db, report_id)
     checks = service.release_gate_checks(db, report, document)
-    blocking = [item for item in checks if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
-    warnings = [item for item in checks if item["severity"] == "WARNING" and item["status"] != "PASSED"]
-    return ReviewRead(ready=not blocking, blocking=blocking, warnings=warnings, checks=checks)
+    advisories = [item for item in checks if item["status"] != "PASSED"]
+    # The review endpoint is diagnostic. Failed release checks are advisory under ADR-0014 and
+    # must not advertise a second, contradictory finalization gate to API clients.
+    return ReviewRead(ready=True, blocking=[], warnings=advisories, checks=checks)
 
 
 @router.patch("/reports/{report_id}/document")

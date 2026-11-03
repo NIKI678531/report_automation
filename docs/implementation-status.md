@@ -1,8 +1,17 @@
 # Implementation status against V2.1
 
-Last verified: 2026-11-02
+Last verified: 2026-11-03
 
 ## Implemented and tested
+
+- Advisory quality lifecycle and unified data footnotes (2026-11-03, ADR-0047/0048): removed the
+  runtime `QA_BLOCKED` state and made review findings consistently advisory while preserving audit
+  and security boundaries. Review's Historical footnote now uses the same locked output typography
+  as Constituents and Analytics in HTML/PDF/DOCX, while retaining its page/footer geometry controls.
+  All 156 frontend tests and the production build pass; 78 focused backend tests pass. The full
+  backend run reached 615 passed and 15 configured skips; its remaining three failures are the two
+  CJK embedding assertions and the font-stack-sensitive pixel baseline because this host has none
+  of the required Carlito/Noto CJK fonts and resolves both to DejaVu Sans.
 
 - Two-line title and current compliance copy (2026-11-02, ADR-0045 / ADR-0046): all HTML/PDF/DOCX exports, including re-exports of finalized and archived reports, now show product name plus ticker on the first title line and the localized Monthly Commentary label on the second without rewriting the locked ReportDocument. The continuous HTML sidebar uses the report month's final calendar day. 3033 continuous HTML adds the checksum-locked English `Key Risks Reminder` notice above the title; official PDF/DOCX omit it. The final page uses checksum-locked `csop-hk-disclaimer-v2` in all formats. Export audits distinguish the new legal resources and renderer identities.
 
@@ -108,6 +117,6 @@ Last verified: 2026-11-02
 - The business-approved full CSOP listed-fund CSV has not been supplied. The production catalog therefore contains only the confirmed 3033 baseline; test-only products are never seeded by migrations.
 - Page 04 constituents can be loaded automatically from the latest available observation inside each report month in the enriched CDB fund holding valuation view. Physical equity `value_percent` supplies portfolio weight, `price` supplies valuation price and `gics_sector` supplies classified sector exposure using ADR-0040's rounded denominator. Blank GICS values are warned but omitted from the chart; HSTECH supplies neither automatic weights nor sectors. 1M/3M/6M/YTD returns are loaded from FMP's dividend-adjusted EOD endpoint using each normalized Hong Kong ticker. An explicit full constituent CSV remains an override, and provider tests use HTTP mocks without committed credentials.
 - Review v3 uses a fixed set of prose blocks in a controlled twelve-column flow, allowlisted paragraph typography, bounded nudges and live paged preview. Product/benchmark and module titles are fixed; Simplified and Traditional Chinese security/industry terminology overrides remain available. Dedicated image/data-table block property editors, paired bilingual block editing and undo/redo history remain outside the current scope.
-- The formal report-date 112-subindustry HSICS file remains an environment input for explicit constituent uploads; automatic holdings use source-supplied GICS. Complete KPI/calendar/event feeds remain environment inputs. CDB/FMP credentials also remain deployment secrets. The code fails closed or marks QA blocked rather than copying facts from the PDF.
+- The formal report-date 112-subindustry HSICS file remains an environment input for explicit constituent uploads; automatic holdings use source-supplied GICS. Complete KPI/calendar/event feeds remain environment inputs. CDB/FMP credentials also remain deployment secrets. The code fails closed where input cannot be safely parsed and otherwise records advisory quality findings rather than copying facts from the PDF.
 
 This file is an implementation ledger, not a waiver. Requirements above remain active except where an accepted ADR explicitly supersedes them.

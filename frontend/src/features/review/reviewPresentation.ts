@@ -182,15 +182,10 @@ export function normalizeTextStyle(value: unknown, fallback: TextStyle): TextSty
   };
 }
 
-export function normalizeFootnoteStyle(value: unknown): TextStyle {
-  const source = isRecord(value) ? value : {};
-  return {
-    ...FOOTNOTE_BODY_STYLE,
-    line_height: boundedNumber(source.line_height, FOOTNOTE_BODY_STYLE.line_height, TYPOGRAPHY_LIMITS.lineHeight.min, TYPOGRAPHY_LIMITS.lineHeight.max),
-    space_before_pt: boundedNumber(source.space_before_pt, FOOTNOTE_BODY_STYLE.space_before_pt, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max),
-    space_after_pt: boundedNumber(source.space_after_pt, FOOTNOTE_BODY_STYLE.space_after_pt, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max),
-    text_align: ALIGNMENTS.includes(source.text_align as ReviewTextAlign) ? source.text_align as ReviewTextAlign : FOOTNOTE_BODY_STYLE.text_align,
-  };
+export function normalizeFootnoteStyle(_value: unknown): TextStyle {
+  // Review owns footnote geometry, not a separate typography dialect. The other report-page
+  // footnotes define the shared 8pt/1.2/left-aligned output contract.
+  return { ...FOOTNOTE_BODY_STYLE };
 }
 
 function normalizeLockedTitleStyle(value: unknown, fallback: TextStyle): TextStyle {

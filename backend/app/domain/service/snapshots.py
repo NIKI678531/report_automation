@@ -942,11 +942,7 @@ def apply_import(db: Session, report: Report, data_import: DataImport, reason: s
     ensure_snapshot_datasets(db, snapshot)
     report.active_snapshot_id = snapshot.id
     report.lane = snapshot.lane
-    report.status = (
-        ReportStatus.DATA_READY if status == SnapshotStatus.VALID
-        else ReportStatus.QA_BLOCKED if complete and blocked
-        else ReportStatus.DRAFT
-    )
+    report.status = ReportStatus.DATA_READY if status == SnapshotStatus.VALID else ReportStatus.DRAFT
     current = latest_document(db, report.id)
     bound = bind_snapshot(current.content, base, lane=snapshot.lane)
     bound["snapshot_id"] = snapshot.id

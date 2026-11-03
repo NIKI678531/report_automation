@@ -465,11 +465,11 @@ def test_finalized_v3_still_exports_legacy_html_pdf_and_docx(client):
     assert archived_html.content == html.content
 
 
-def test_qa_blocked_can_finalize_and_layout_warning_is_audited(client, monkeypatch):
+def test_editing_report_can_finalize_and_layout_warning_is_audited(client, monkeypatch):
     created = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     with client.app.state.testing_sessionmaker() as db:
         report = db.get(Report, created["id"])
-        report.status = ReportStatus.QA_BLOCKED
+        report.status = ReportStatus.EDITING
         db.commit()
 
     warning = {

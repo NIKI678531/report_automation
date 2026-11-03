@@ -132,6 +132,32 @@ def test_the_schema_survives_a_downgrade_and_re_upgrade(sqlite_url):
     command.check(config)
 
 
+def test_advisory_quality_migration_maps_existing_qa_blocked_rows(sqlite_url):
+    config = _config(sqlite_url)
+    command.upgrade(config, "c42e8f1a9d73")
+    engine = create_engine(sqlite_url)
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO reports (
+                id, product_code, product_name, constituent_index_code,
+                benchmark_instrument_code, benchmark_code, report_date, language_mode,
+                lane, status, revision, version, template_version, created_at, updated_at
+            ) VALUES (
+                'qa-row', '3033', 'Test product', 'HSTECH', 'HSTECHN', 'HSTECH',
+                '2026-06-30', 'EN', 'PRODUCTION', 'QA_BLOCKED', 1, 1, '3033-v5',
+                '2026-11-03 00:00:00', '2026-11-03 00:00:00'
+            )
+        """))
+
+    command.upgrade(config, "f04c7b1e9a62")
+
+    with engine.connect() as connection:
+        status = connection.execute(
+            text("SELECT status FROM reports WHERE id = 'qa-row'")
+        ).scalar_one()
+    assert status == "EDITING"
+
+
 def _indexed_string_columns():
     """Every (table, index name, column) pair whose key includes a variable-length string."""
     for table in Base.metadata.sorted_tables:

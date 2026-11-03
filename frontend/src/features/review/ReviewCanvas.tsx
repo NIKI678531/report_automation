@@ -30,7 +30,6 @@ import { MarkerInput, MarkerTextarea } from "../../components/SuperscriptMarkerC
 import { BoundedNumberInput, RichTypographyEditor, TextStyleControls, textStyleProperties } from "./RichTypographyEditor";
 import {
   FOOTNOTE_BASELINE_BOTTOM_MM,
-  FOOTNOTE_BODY_STYLE,
   FOOTNOTE_MAX_BOTTOM_MM,
   FOOTNOTE_MIN_BOTTOM_MM,
   GRID_COLUMNS,
@@ -292,7 +291,6 @@ function HistoricalFootnoteEditor({ element, disabled, selected, expanded, onSel
   onTextChange: (value: string) => void;
 }) {
   const { t } = useLocale();
-  const style = element.body_style ?? FOOTNOTE_BODY_STYLE;
   return <section
     className={`historical-footnote-editor page-one-module-shell${selected ? " selected" : ""}${expanded ? " is-expanded" : ""}`}
     data-layout-id="footnote:historical"
@@ -306,13 +304,6 @@ function HistoricalFootnoteEditor({ element, disabled, selected, expanded, onSel
     }}
   >
     <ModuleHeader title={t("historicalFootnote")} width={element.w} disabled={disabled} expanded={expanded} onExpand={(event) => { event.stopPropagation(); onExpand(event.currentTarget); }} trailing={<span className="read-only-badge">{t("sharedWithFootnotes")}</span>} />
-    {expanded && <TextStyleControls
-      idPrefix={t("historicalFootnote")}
-      value={style}
-      disabled={disabled}
-      showInline={false}
-      onChange={(change) => onChange({ body_style: { ...style, ...change } })}
-    />}
     <MarkerTextarea
       aria-label={t("historicalFootnote")}
       value={richHtmlToPlainText(element.content_html ?? "")}

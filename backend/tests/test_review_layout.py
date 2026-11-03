@@ -72,6 +72,6 @@ def test_review_flow_uses_stable_rows_for_a_non_slicing_layout():
 
 
 def test_compact_html_and_pdf_have_new_renderer_identities():
-    assert renderer_version_for("html") == "html-reader-compliance-v11"
-    assert renderer_version_for("pdf").endswith("-paged-compliance-v7")
-    assert renderer_version_for("docx") == "docx-compliance-v8"
+    assert renderer_version_for("html") == "html-reader-compliance-v12"
+    assert renderer_version_for("pdf").endswith("-paged-compliance-v8")
+    assert renderer_version_for("docx") == "docx-compliance-v9"

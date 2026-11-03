@@ -1033,12 +1033,12 @@ export function LocaleProvider({ children, locale: controlledLocale, manageDocum
       year: "numeric", month: "long", timeZone: "UTC",
     }).format(new Date(`${value.slice(0, 7)}-01T00:00:00Z`)),
     statusLabel: (status) => locale === "en" ? status : ((locale === "zh-Hant" ? {
-      DRAFT: "草稿", DATA_READY: "數據就緒", EDITING: "編輯中", QA_BLOCKED: "需關注",
+      DRAFT: "草稿", DATA_READY: "數據就緒", EDITING: "編輯中",
       READY_TO_FINALIZE: "可定稿", REVIEW: "審閱中", FINALIZED: "已定稿", ARCHIVED: "已封存",
       MISSING: "缺失", AVAILABLE: "可用", VALIDATED: "已驗證", NEEDS_MAPPING: "需要配對",
       REJECTED: "已拒絕", APPLIED: "已套用", OVERRIDDEN: "已替代", HIGH: "高", MEDIUM: "中", LOW: "低",
     } : {
-      DRAFT: "草稿", DATA_READY: "数据就绪", EDITING: "编辑中", QA_BLOCKED: "需关注",
+      DRAFT: "草稿", DATA_READY: "数据就绪", EDITING: "编辑中",
       READY_TO_FINALIZE: "可终稿化", REVIEW: "审核中", FINALIZED: "已终稿", ARCHIVED: "已归档",
       MISSING: "缺失", AVAILABLE: "可用", VALIDATED: "已验证", NEEDS_MAPPING: "需要映射",
       REJECTED: "已拒绝", APPLIED: "已应用", OVERRIDDEN: "已替代", HIGH: "高", MEDIUM: "中", LOW: "低",

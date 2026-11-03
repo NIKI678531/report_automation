@@ -902,11 +902,10 @@ def test_language_variant_retargets_v4_footnote_content_to_blank_editorial(clien
 
     assert target_content["sections"]["footnotes"].get("historical", "") == ""
     assert target_footnote["content_html"] == "<p></p>"
-    # v5 locks the shared data-footnote typography at 8pt while retaining the editable paragraph
-    # spacing and alignment when the editorial text is retargeted to a language variant.
+    # Retargeting cannot reintroduce a Review-only footnote format.
     assert target_footnote["body_style"]["font_size_pt"] == 8.0
-    assert target_footnote["body_style"]["line_height"] == 1.4
-    assert target_footnote["body_style"]["text_align"] == "right"
+    assert target_footnote["body_style"]["line_height"] == 1.2
+    assert target_footnote["body_style"]["text_align"] == "left"
     preview = client.post(f"/api/v1/reports/{target['id']}/preview")
     assert preview.status_code == 200, preview.text
 
@@ -967,8 +966,9 @@ def test_finalize_allows_missing_snapshot_for_direct_download(client):
     report = create_report(client)
     review = client.get(f"/api/v1/reports/{report['id']}/review")
     assert review.status_code == 200
-    assert review.json()["ready"] is False
-    assert any(item["check_id"] == "SNAPSHOT_REQUIRED" for item in review.json()["blocking"])
+    assert review.json()["ready"] is True
+    assert review.json()["blocking"] == []
+    assert any(item["check_id"] == "SNAPSHOT_REQUIRED" for item in review.json()["warnings"])
 
     response = client.post(f"/api/v1/reports/{report['id']}/finalize", json={"version": 1})
     assert response.status_code == 200, response.text
@@ -1010,5 +1010,6 @@ def test_review_uses_the_same_calculation_gate_as_finalize(client):
     review = client.get(f"/api/v1/reports/{report['id']}/review")
 
     assert review.status_code == 200, review.text
-    assert review.json()["ready"] is False
-    assert any(item["check_id"] == "CALCULATION_REQUIRED" for item in review.json()["blocking"])
+    assert review.json()["ready"] is True
+    assert review.json()["blocking"] == []
+    assert any(item["check_id"] == "CALCULATION_REQUIRED" for item in review.json()["warnings"])

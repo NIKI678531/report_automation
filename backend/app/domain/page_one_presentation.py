@@ -286,7 +286,7 @@ def _normalize_locked_title_style(
 
 
 def _normalize_footnote_style(raw: object, *, field: str) -> dict[str, Any]:
-    """Lock shared footnote typography while retaining paragraph layout controls."""
+    """Accept legacy style objects but lock output to the shared data-footnote contract."""
 
     if raw is None:
         raw = {}
@@ -294,25 +294,7 @@ def _normalize_footnote_style(raw: object, *, field: str) -> dict[str, Any]:
         raise PageOnePresentationError(
             f"{field} must be an object containing only supported typography fields.", field
         )
-    result = deepcopy(DEFAULT_FOOTNOTE_BODY_STYLE)
-    for key in ("line_height", "space_before_pt", "space_after_pt"):
-        if key in raw:
-            minimum, maximum = (
-                (LINE_HEIGHT_MIN, LINE_HEIGHT_MAX)
-                if key == "line_height"
-                else (SPACING_MIN_PT, SPACING_MAX_PT)
-            )
-            result[key] = _number(
-                raw.get(key), field=f"{field}.{key}", minimum=minimum, maximum=maximum
-            )
-    if "text_align" in raw:
-        alignment = str(raw.get("text_align") or "").casefold()
-        if alignment not in TEXT_ALIGNMENTS:
-            raise PageOnePresentationError(
-                f"Unsupported paragraph alignment: {alignment}.", f"{field}.text_align"
-            )
-        result["text_align"] = alignment
-    return result
+    return deepcopy(DEFAULT_FOOTNOTE_BODY_STYLE)
 
 
 def _sanitize_footnote_html(value: object, field: str) -> str:

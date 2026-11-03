@@ -523,7 +523,9 @@ def render_html(
         language_mode=language_mode,
         html_language="zh-CN" if is_zh_hans(language_mode) else "zh-HK" if is_zh_hant(language_mode) else "en",
         cjk_font_css=_embedded_cjk_font_css(language_mode) if is_chinese(language_mode) else "",
-        footnote_tokens=tokens["footnote"] if template_version == "3033-v6" else None,
+        # Exporter-level contract: legacy finalized documents keep their content identity while
+        # all three data footnotes share the current Constituents/Analytics typography.
+        footnote_tokens=tokens.get("footnote") or _render_tokens("3033-v5")["footnote"],
         calibri_font_css=_embedded_calibri_font_css() if template_version == "3033-v6" else "",
         product_sidebar=(
             _product_sidebar_context(reader_tokens["productSidebar"], report, heading)

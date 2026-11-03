@@ -458,17 +458,10 @@ def run_calculation(db: Session, report: Report, request_id: str) -> tuple[dict,
         content=content, checksum=checksum(content),
     )
     db.add(document); report.version += 1
-    blocking = [item for item in results if item["severity"] == "BLOCKING" and item["status"] != "PASSED"]
-    snapshot_blocking = [
-        item for item in snapshot.quality_results or []
-        if item.get("severity") == "BLOCKING" and item.get("status", "FAILED") != "PASSED"
-    ]
     missing = missing_required_slots(snapshot.payload or {})
-    report.status = (
-        ReportStatus.DRAFT if missing
-        else ReportStatus.QA_BLOCKED if blocking or snapshot_blocking
-        else ReportStatus.EDITING
-    )
+    # Quality findings remain queryable and auditable, but do not create a separate lifecycle
+    # state or prevent an editor from completing the report.
+    report.status = ReportStatus.DRAFT if missing else ReportStatus.EDITING
     audit(db, "calculation.completed", "report", report.id, request_id, {"formula_version": formula_version, "metrics": metrics})
     db.commit(); db.refresh(document)
     return metrics, document, results

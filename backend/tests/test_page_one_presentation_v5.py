@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import date
 from pathlib import Path
+import re
 from types import SimpleNamespace
 from zipfile import ZipFile
 
@@ -111,7 +112,7 @@ def test_v5_preserves_multilingual_footnote_text_and_unicode_markers(
     assert text in render_html(_report(), canonical, layout_mode="paged")
 
 
-def test_v5_locks_inline_style_but_keeps_allowed_paragraph_and_position_controls():
+def test_v5_locks_all_typography_but_keeps_position_controls():
     content = _document()
     footnote = _element(content, "footnote:historical")
     footnote.update(x=2, w=8, footer_bottom_mm=31)
@@ -141,10 +142,10 @@ def test_v5_locks_inline_style_but_keeps_allowed_paragraph_and_position_controls
     assert saved["body_style"]["font_family"] == "Calibri"
     assert saved["body_style"]["color"] == "#000000"
     assert saved["body_style"]["bold"] is False
-    assert saved["body_style"]["line_height"] == 1.4
-    assert saved["body_style"]["space_before_pt"] == 2
-    assert saved["body_style"]["space_after_pt"] == 3
-    assert saved["body_style"]["text_align"] == "right"
+    assert saved["body_style"]["line_height"] == 1.2
+    assert saved["body_style"]["space_before_pt"] == 0
+    assert saved["body_style"]["space_after_pt"] == 0
+    assert saved["body_style"]["text_align"] == "left"
     assert canonical["sections"]["footnotes"]["historical"] == "Source¹\nLine 2"
 
 
@@ -181,14 +182,31 @@ def test_v4_draft_upgrade_preserves_page_and_columns_but_resets_vertical_positio
 
 def test_v5_paged_and_continuous_html_share_footer_style_without_body_footnote():
     content = _document()
+    content["sections"]["footnotes"].update(
+        constituents="Constituent source.", analytics="Analytics source.",
+    )
+    _element(content, "footnote:historical")["body_style"].update(
+        font_size_pt=10, line_height=1.4, text_align="right",
+    )
     paged = render_html(_report(), content, layout_mode="paged")
     continuous = render_html(_report(), content, layout_mode="continuous")
 
     for markup in (paged, continuous):
         assert markup.count('data-layout-id="footnote:historical"') == 1
+        assert markup.count('class="footnote"') == 3
         assert 'class="review-footnote-layer"' in markup
-        assert "font-size:8.0pt" in markup
+        assert "font-size:8pt" in markup
+        assert "line-height:1.2" in markup
         assert "Source¹" in markup
+        review_style = re.search(
+            r'<div class="footnote" data-layout-id="footnote:historical" style="([^"]*)"',
+            markup,
+        )
+        assert review_style is not None
+        assert review_style.group(1).startswith("grid-column:")
+        assert "font-" not in review_style.group(1)
+        assert "line-height" not in review_style.group(1)
+        assert "text-align" not in review_style.group(1)
 
 
 def test_v5_keeps_existing_review_typography_controls_while_locking_footnote_style():
@@ -201,7 +219,7 @@ def test_v5_keeps_existing_review_typography_controls_while_locking_footnote_sty
 
     assert "font-size:11.0pt" in paged
     assert "margin-bottom:6.0pt" in paged
-    assert "font-size:8.0pt" in paged
+    assert "font-size:8pt" in paged
 
 
 def test_v5_historical_footnote_follows_historical_to_the_selected_review_page():
@@ -250,10 +268,9 @@ def test_v5_docx_writes_historical_footnote_only_to_footer_xml(tmp_path):
         for paragraph in section.footer.paragraphs
         if "Source¹" in paragraph.text
     )
-    assert paragraph.alignment == WD_ALIGN_PARAGRAPH.RIGHT
-    assert paragraph.paragraph_format.space_before.pt == 2
-    assert paragraph.paragraph_format.space_after.pt >= 3
-    assert paragraph.paragraph_format.line_spacing.pt == pytest.approx(11.2)
+    assert paragraph.alignment == WD_ALIGN_PARAGRAPH.LEFT
+    assert paragraph.paragraph_format.space_before.pt == 0
+    assert paragraph.paragraph_format.line_spacing.pt == pytest.approx(9.6)
 
 
 def test_v5_docx_footer_follows_historical_to_its_review_section(tmp_path):
@@ -278,7 +295,7 @@ def test_finalized_v4_content_can_still_render_with_legacy_body_footnote():
 
     assert 'class="review-footnote-layer"' not in markup
     assert markup.count('data-layout-id="footnote:historical"') == 1
-    assert "font-size:9.0pt" in markup
+    assert "font-size:8pt" in markup
 
 
 @pytest.mark.parametrize("version", [f"3033-v{number}" for number in range(1, 7)])
@@ -365,7 +382,7 @@ def test_v6_uses_one_calibri_footnote_family(calibri_css):
     content = _document("3033-v6")
     markup = render_html(_report(), content, layout_mode="paged")
     assert '.footnote { font-family:"Report Calibri"' in markup
-    assert "font-family:Report Calibri;font-size:8.0pt" in markup
+    assert "font-size:8pt" in markup
 
 
 def test_v6_missing_font_fails_without_exposing_filesystem_path(monkeypatch, tmp_path):
@@ -422,11 +439,16 @@ def test_all_word_exports_use_updated_footers_without_changing_source(tmp_path, 
             paragraph for paragraph in exported.sections[index].footer.paragraphs
             if marker in paragraph.text
         )
+        assert paragraph.alignment == WD_ALIGN_PARAGRAPH.LEFT
+        assert paragraph.paragraph_format.space_before.pt == 0
+        assert paragraph.paragraph_format.line_spacing.pt == pytest.approx(9.6)
         for run in paragraph.runs:
             if run.text:
                 assert run.font.name == "Calibri"
                 assert run.font.size.pt == 8
                 assert run.bold is False
+                assert run.italic is False
+                assert run.underline is False
     with ZipFile(destination) as archive:
         body = archive.read("word/document.xml").decode("utf-8")
         assert "Source¹" not in body
