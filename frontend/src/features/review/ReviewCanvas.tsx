@@ -360,7 +360,10 @@ function reviewPreviewPages(document: Document): HTMLElement[] {
   return fallback ? [fallback] : [];
 }
 
-function preparePreviewDocument(document: Document): HTMLElement[] {
+export function preparePreviewDocument(document: Document): HTMLElement[] {
+  // An iframe exposes contentDocument before a srcDoc navigation has necessarily created
+  // its HTML skeleton. The load event will call this function again once head/body exist.
+  if (!document.documentElement || !document.head) return [];
   const pages = reviewPreviewPages(document);
   const kept = new Set(pages);
   document.querySelectorAll<HTMLElement>(".report-page").forEach((candidate) => {
@@ -384,7 +387,7 @@ export function pageOnePreviewHtml(html: string): string {
 
 function fitPreviewPages(iframe: HTMLIFrameElement): void {
   const document = iframe.contentDocument;
-  if (!document) return;
+  if (!document?.documentElement || !document.head) return;
   const pages = preparePreviewDocument(document);
   const firstPage = pages[0];
   if (!firstPage) return;
@@ -487,7 +490,7 @@ function PreviewPane({ html, busy, error, collapsed, onToggle, selectedId, onSel
   }, []);
   const bindPreview = useCallback(() => {
     const document = iframeRef.current?.contentDocument;
-    if (!document) return;
+    if (!document?.documentElement || !document.head) return;
     preparePreviewDocument(document);
     resizePreview();
     document.querySelectorAll("[data-layout-id]").forEach((node) => {

@@ -11,6 +11,7 @@ import {
   markPreviewOverflows,
   pageOnePreviewHtml,
   pageOnePresentation,
+  preparePreviewDocument,
   retargetHistoricalFootnoteStyles,
   richHtmlToPlainText,
   type PageOnePresentation,
@@ -620,6 +621,13 @@ describe("Review page-one layout controls", () => {
     expect(reviewHtml).not.toContain("Company News");
     expect(reviewHtml).toContain("width: 210mm !important");
     expect(reviewHtml).toContain("height: 297mm !important");
+  });
+
+  it("waits for an iframe srcDoc document to create its head before binding the preview", () => {
+    const loadingDocument = document.implementation.createDocument(null, "", null) as unknown as Document;
+
+    expect(loadingDocument.head).toBeNull();
+    expect(preparePreviewDocument(loadingDocument)).toEqual([]);
   });
 
   it("collapses and expands the desktop preview without removing its mobile content", () => {

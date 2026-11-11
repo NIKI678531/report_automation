@@ -35,6 +35,21 @@ const BUNDLED_FONTS = ["Carlito", "Calibri", "Noto Sans CJK SC", "Noto Sans CJK 
 const SAFE_FONT_FAMILY = /^[\p{L}\p{N}\s.,'_+()&\/-]+$/u;
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 const MAX_INDENT_LEVEL = 6;
+const RICH_TEXT_TAGS = new Set([
+  "a", "blockquote", "br", "em", "h2", "h3", "li", "ol", "p", "span", "strong", "u", "ul",
+]);
+const PARAGRAPH_TAGS = new Set(["blockquote", "h2", "h3", "li", "p"]);
+const PARAGRAPH_ATTRIBUTES = new Set([
+  "data-indent-level",
+  "data-line-height",
+  "data-line-height-role",
+  "data-space-after-pt",
+  "data-space-before-pt",
+  "data-text-align",
+]);
+const SPAN_ATTRIBUTES = new Set([
+  "data-color", "data-font-family", "data-font-size-pt", "data-underline",
+]);
 
 function safeFontFamily(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -150,9 +165,40 @@ const ParagraphStyle = Extension.create({
   },
 });
 
-function cleanRichHtml(value: string): string {
+function validRichTextAttribute(tag: string, name: string, value: string): boolean {
+  if (tag === "a") return name === "href" && /^(?:https?:|mailto:)/i.test(value.trim());
+  if (tag === "span") {
+    if (!SPAN_ATTRIBUTES.has(name)) return false;
+    if (name === "data-font-family") return safeFontFamily(value) !== null;
+    if (name === "data-font-size-pt") return bounded(value, TYPOGRAPHY_LIMITS.fontSize.min, TYPOGRAPHY_LIMITS.fontSize.max) !== null;
+    if (name === "data-color") return HEX_COLOR.test(value);
+    return value === "true" || value === "false";
+  }
+  if (!PARAGRAPH_TAGS.has(tag) || !PARAGRAPH_ATTRIBUTES.has(name)) return false;
+  if (name === "data-line-height") return bounded(value, TYPOGRAPHY_LIMITS.lineHeight.min, TYPOGRAPHY_LIMITS.lineHeight.max) !== null;
+  if (name === "data-space-before-pt" || name === "data-space-after-pt") {
+    return bounded(value, TYPOGRAPHY_LIMITS.spacing.min, TYPOGRAPHY_LIMITS.spacing.max) !== null;
+  }
+  if (name === "data-text-align") return TEXT_ALIGNMENTS.some(({ value: alignment }) => alignment === value);
+  if (name === "data-indent-level") return /^\d+$/.test(value) && Number(value) <= MAX_INDENT_LEVEL;
+  return /^(?:1\.0|1\.2|1\.4)$/.test(value);
+}
+
+/** Canonicalize editor output to the exact HTML vocabulary accepted by the API. */
+export function normalizeRichHtmlForSubmission(value: string): string {
   const document = new DOMParser().parseFromString(value, "text/html");
-  document.body.querySelectorAll("[style]").forEach((node) => node.removeAttribute("style"));
+  document.body.querySelectorAll<HTMLElement>("*").forEach((node) => {
+    const tag = node.tagName.toLocaleLowerCase();
+    if (!RICH_TEXT_TAGS.has(tag)) {
+      node.replaceWith(...node.childNodes);
+      return;
+    }
+    [...node.attributes].forEach((attribute) => {
+      if (!validRichTextAttribute(tag, attribute.name.toLocaleLowerCase(), attribute.value)) {
+        node.removeAttribute(attribute.name);
+      }
+    });
+  });
   return document.body.innerHTML;
 }
 
@@ -312,15 +358,21 @@ export function RichTypographyEditor({
   const { t } = useLocale();
   const [, setSelectionRevision] = useState(0);
   const editor = useEditor({
-    extensions: [StarterKit.configure({ link: { openOnClick: false } }), InlineTextStyle, ParagraphStyle],
+    extensions: [StarterKit.configure({ link: {
+      openOnClick: false,
+      autolink: false,
+      linkOnPaste: false,
+      shouldAutoLink: () => false,
+      HTMLAttributes: { target: null, rel: null, class: null },
+    } }), InlineTextStyle, ParagraphStyle],
     content: value,
     editable: !disabled,
     onSelectionUpdate: () => setSelectionRevision((revision) => revision + 1),
-    onUpdate: ({ editor: activeEditor }) => onChange(cleanRichHtml(activeEditor.getHTML())),
+    onUpdate: ({ editor: activeEditor }) => onChange(normalizeRichHtmlForSubmission(activeEditor.getHTML())),
   });
   useEffect(() => { editor?.setEditable(!disabled); }, [disabled, editor]);
   useEffect(() => {
-    if (editor && cleanRichHtml(editor.getHTML()) !== value) editor.commands.setContent(value);
+    if (editor && normalizeRichHtmlForSubmission(editor.getHTML()) !== value) editor.commands.setContent(value);
   }, [editor, value]);
 
   const hasSelection = editor ? !editor.state.selection.empty : false;
