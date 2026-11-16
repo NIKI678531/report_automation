@@ -1,8 +1,16 @@
 # Implementation status against V2.1
 
-Last verified: 2026-11-03
+Last verified: 2026-11-16
 
 ## Implemented and tested
+
+- Editable finalized reports and marker-free Page 05 (2026-11-16, ADR-0049): a report with a
+  finalized document can append new working versions in place. The first save returns it to an
+  editable lifecycle state while downloads remain bound to the prior `finalized_document_version`;
+  re-finalization advances that baseline. Archived reports remain read-only. Final Analytics
+  defaults, calculated portfolio labels, legacy overrides and all HTML/PDF/DOCX render paths remove
+  trailing `*`, `**`, `^` and `^^` publication markers, and Page 05 title editors no longer expose
+  the superscript-marker insertion control.
 
 - Advisory quality lifecycle and unified data footnotes (2026-11-03, ADR-0047/0048): removed the
   runtime `QA_BLOCKED` state and made review findings consistently advisory while preserving audit

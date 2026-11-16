@@ -66,11 +66,11 @@ def test_report_headings_use_the_product_ticker_in_all_languages():
     expected = {
         "EN": (
             "The Performance of 3033.HK Constituents",
-            "Top 10 3033.HK Constituents*",
-            "3033.HK Sectors Breakdown*",
+            "Top 10 3033.HK Constituents",
+            "3033.HK Sectors Breakdown",
         ),
-        ZH_HANS: ("3033.HK 成分股表现", "3033.HK 十大成分股*", "3033.HK 行业分布*"),
-        ZH_HANT: ("3033.HK 成分股表現", "3033.HK 十大成分股*", "3033.HK 行業分佈*"),
+        ZH_HANS: ("3033.HK 成分股表现", "3033.HK 十大成分股", "3033.HK 行业分布"),
+        ZH_HANT: ("3033.HK 成分股表現", "3033.HK 十大成分股", "3033.HK 行業分佈"),
     }
 
     for language_mode, headings in expected.items():

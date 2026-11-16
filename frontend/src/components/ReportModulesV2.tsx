@@ -4,7 +4,7 @@ import { api, type DatasetSlot, type Report } from "../api";
 import { SectorDonut, sectorSlices, type SectorChartSnapshot } from "../features/analytics/SectorDonut";
 import { CompanyNewsWorkbench } from "../features/news/CompanyNewsWorkbench";
 import { legacyReviewBlocks, pageOnePresentation, retargetHistoricalFootnoteStyles, richHtmlToPlainText, ReviewCanvas, type PageOnePresentation, type ReviewBlock } from "../features/review/ReviewCanvas";
-import { FOOTNOTE_SECTIONS, isReportReadOnly, reportConstituentsTitle, reportMonthName, reportProductTicker, reportTitle, reportTitleOverrides, reviewLegacyText, type FootnoteSectionKey, type ModuleId } from "../reportModules";
+import { FOOTNOTE_SECTIONS, isReportReadOnly, reportConstituentsTitle, reportMonthName, reportProductTicker, reportTitle, reportTitleOverrides, reviewLegacyText, withoutPageFiveMarker, type FootnoteSectionKey, type ModuleId } from "../reportModules";
 import type { RegisterPendingSave } from "../pendingSave";
 import { CsvDatasetUpload } from "./CsvDatasetUpload";
 import { MarkerInput, MarkerTextarea } from "./SuperscriptMarkerControl";
@@ -57,8 +57,8 @@ function portfolioRows(value: unknown): JsonRecord[] {
     return "";
   };
   const specifications = [
-    { metric_code: "AUM", label: `Asset Under Management (${currency})^`, unit: "million", display_precision: 2 },
-    { metric_code: "AVERAGE_DAILY_TURNOVER", label: `Average Daily Turnover (${currency})^^`, unit: "million", display_precision: 0 },
+    { metric_code: "AUM", label: `Asset Under Management (${currency})`, unit: "million", display_precision: 2 },
+    { metric_code: "AVERAGE_DAILY_TURNOVER", label: `Average Daily Turnover (${currency})`, unit: "million", display_precision: 0 },
     { metric_code: "NUMBER_OF_HOLDINGS", label: "Number of holdings", unit: "count", display_precision: 0 },
   ];
   return specifications.map((fallback) => {
@@ -109,11 +109,12 @@ export function ReportModule({ report, active, busy, run, registerPendingSave = 
   return null;
 }
 
-function ReportTitleField({ label, value, overridden, disabled, onChange, onReset }: {
+function ReportTitleField({ label, value, overridden, disabled, markers = true, onChange, onReset }: {
   label: string;
   value: string;
   overridden: boolean;
   disabled: boolean;
+  markers?: boolean;
   onChange: (value: string) => void;
   onReset: () => void;
 }) {
@@ -126,7 +127,9 @@ function ReportTitleField({ label, value, overridden, disabled, onChange, onRese
         title={t("resetReportTitle", { title: label })} aria-label={t("resetReportTitle", { title: label })}
         onClick={onReset}><RotateCcw size={16} /></button>
     </div>
-    <MarkerInput id={id} value={value} maxLength={200} required disabled={disabled} onValueChange={onChange} />
+    {markers
+      ? <MarkerInput id={id} value={value} maxLength={200} required disabled={disabled} onValueChange={onChange} />
+      : <input id={id} value={value} maxLength={200} required disabled={disabled} onChange={(event) => onChange(event.target.value)} />}
   </div>;
 }
 
@@ -160,9 +163,10 @@ function ReportTitleFields({ defaults, overrides, disabled, onChange, productNam
       {groups.map((group) => <section className="report-title-group" key={group.label}>
         <h4>{t(group.label)}</h4>
         {group.keys.filter((key) => defaults[key] !== undefined).map((key) => <ReportTitleField
-          key={key} label={defaults[key]} value={overrides[key] ?? defaults[key]}
+          key={key} label={withoutPageFiveMarker(key, defaults[key])} value={withoutPageFiveMarker(key, overrides[key] ?? defaults[key])}
           overridden={overrides[key] !== undefined} disabled={disabled}
-          onChange={(value) => onChange({ ...overrides, [key]: value })}
+          markers={group.label !== "finalAnalytics"}
+          onChange={(value) => onChange({ ...overrides, [key]: withoutPageFiveMarker(key, value) })}
           onReset={() => { const next = { ...overrides }; delete next[key]; onChange(next); }}
         />)}
       </section>)}
@@ -397,8 +401,15 @@ function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
         const code = String(row.metric_code ?? "").trim().toUpperCase();
         return code ? code === "AVERAGE_DAILY_TURNOVER" : String(row.label ?? "").trim().toLowerCase().startsWith("average daily turnover");
       });
+      const turnoverRow = turnoverIndex >= 0
+        ? nextPortfolio[turnoverIndex]
+        : portfolioRows(nextPortfolio).find((row) => row.metric_code === "AVERAGE_DAILY_TURNOVER");
       const nextTurnover = {
-        ...(turnoverIndex >= 0 ? nextPortfolio[turnoverIndex] : portfolioRows(nextPortfolio).find((row) => row.metric_code === "AVERAGE_DAILY_TURNOVER")),
+        ...turnoverRow,
+        label: withoutPageFiveMarker(
+          "portfolio.AVERAGE_DAILY_TURNOVER",
+          String(turnoverRow?.label ?? "Average Daily Turnover (HKD)"),
+        ),
         display_value: normalizedTurnover,
         value: normalizedTurnover,
       };
@@ -420,18 +431,18 @@ function AnalyticsModule({ report, busy, run, registerPendingSave = IGNORE_PENDI
     const displayValue = portfolioDisplayValue(row);
     return {
       ...row,
-      label: titleOverrides[`portfolio.${row.metric_code}`] ?? reportTitle(report, `portfolio.${row.metric_code}`, String(locale === "zh-Hans" ? ({ AUM: "资产管理规模（百万港元）^", AVERAGE_DAILY_TURNOVER: "平均每日成交额（百万港元）^^", NUMBER_OF_HOLDINGS: "持仓数量" } as Record<string, string>)[String(row.metric_code)] ?? row.label : locale === "zh-Hant" ? ({ AUM: "資產管理規模（百萬港元）^", AVERAGE_DAILY_TURNOVER: "平均每日成交額（百萬港元）^^", NUMBER_OF_HOLDINGS: "持倉數量" } as Record<string, string>)[String(row.metric_code)] ?? row.label : row.label)),
+      label: titleOverrides[`portfolio.${row.metric_code}`] ?? reportTitle(report, `portfolio.${row.metric_code}`, String(locale === "zh-Hans" ? ({ AUM: "资产管理规模（百万港元）", AVERAGE_DAILY_TURNOVER: "平均每日成交额（百万港元）", NUMBER_OF_HOLDINGS: "持仓数量" } as Record<string, string>)[String(row.metric_code)] ?? row.label : locale === "zh-Hant" ? ({ AUM: "資產管理規模（百萬港元）", AVERAGE_DAILY_TURNOVER: "平均每日成交額（百萬港元）", NUMBER_OF_HOLDINGS: "持倉數量" } as Record<string, string>)[String(row.metric_code)] ?? row.label : row.label)),
       display_value: locale !== "en" && displayValue.endsWith(" million") ? displayValue.slice(0, -8) : displayValue,
     };
   });
   const numberLocale = locale === "zh-Hans" ? "zh-CN" : locale === "zh-Hant" ? "zh-HK" : "en-HK";
-  const defaultTitle = (key: string, fallback: string) => report.report_title_defaults?.[key] ?? fallback;
+  const defaultTitle = (key: string, fallback: string) => withoutPageFiveMarker(key, report.report_title_defaults?.[key] ?? fallback);
   const title = (key: string, fallback: string) => titleOverrides[key] ?? defaultTitle(key, fallback);
-  const setTitle = (key: string, value: string) => setTitleOverrides((current) => ({ ...current, [key]: value }));
+  const setTitle = (key: string, value: string) => setTitleOverrides((current) => ({ ...current, [key]: withoutPageFiveMarker(key, value) }));
   const resetTitle = (key: string) => setTitleOverrides((current) => { const next = { ...current }; delete next[key]; return next; });
   const top10Default = defaultTitle("top10", t("top10", { product: productTicker }));
   const sectorDefault = defaultTitle("sector_breakdown", t("sectorBreakdown", { product: productTicker }));
-  const performersDefault = defaultTitle("performers", `${t("performersIn", { month: monthName })}**`);
+  const performersDefault = defaultTitle("performers", t("performersIn", { month: monthName }));
   const portfolioDefault = defaultTitle("portfolio_analysis", t("portfolioAnalysis", { product: productTicker }));
   const top10Title = title("top10", top10Default);
   const sectorTitle = title("sector_breakdown", sectorDefault);
@@ -486,7 +497,7 @@ function EditableSectionTitle({ index, value, defaultValue, overridden, disabled
     </div>
     {editing && <div className="analytics-title-editor">
       <label htmlFor={id}>{label ?? t("analyticsSectionTitle", { index: index ?? "" })}</label>
-      <MarkerInput id={id} value={value} maxLength={200} required disabled={disabled} onValueChange={onChange} />
+      <input id={id} value={value} maxLength={200} required disabled={disabled} onChange={(event) => onChange(event.target.value)} />
       <div className="analytics-title-actions">
         <button type="button" disabled={disabled || !overridden} onClick={onReset}><RotateCcw size={16} /> {t("resetReportTitle", { title: defaultValue })}</button>
         <button type="button" onClick={() => setEditing(false)}>{t("done")}</button>

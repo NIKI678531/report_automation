@@ -550,23 +550,30 @@ def test_review_blocks_render_to_html_and_editable_docx(client):
     assert "Editable custom review content" in text
 
 
-def test_report_title_overrides_are_versioned_and_defaults_keep_markers(client):
+def test_report_title_overrides_are_versioned_and_page_five_markers_are_removed(client):
     report = client.post("/api/v1/reports", json={"report_date": "2026-08-31"}).json()
     detail = client.get(f"/api/v1/reports/{report['id']}").json()
     defaults = detail["report_title_defaults"]
     assert defaults["historical_performance"].endswith("*")
-    assert defaults["top10"] == "Top 10 3033.HK Constituents*"
-    assert defaults["performers"] == "Performers in August**"
-    assert defaults["top_performers"] == "Top Performers in August**"
-    assert defaults["portfolio.AUM"].endswith("^")
-    assert defaults["portfolio.AVERAGE_DAILY_TURNOVER"].endswith("^^")
+    assert defaults["top10"] == "Top 10 3033.HK Constituents"
+    assert defaults["performers"] == "Performers in August"
+    assert defaults["top_performers"] == "Top Performers in August"
+    assert defaults["portfolio.AUM"] == "Asset Under Management (HKD)"
+    assert defaults["portfolio.AVERAGE_DAILY_TURNOVER"] == "Average Daily Turnover (HKD)"
     content = detail["latest_document"]["content"]
-    overrides = {key: value.rstrip("*^") for key, value in defaults.items()}
-    content["title_overrides"] = overrides
+    submitted_overrides = {
+        "top10": "Largest 3033.HK positions*",
+        "performers": "August monthly movers**",
+        "portfolio.AUM": "Fund assets (HKD)^",
+        "portfolio.AVERAGE_DAILY_TURNOVER": "Monthly turnover (HKD)^^",
+    }
+    overrides = {key: value.rstrip("*^") for key, value in submitted_overrides.items()}
+    content["title_overrides"] = submitted_overrides
     saved = client.patch(f"/api/v1/reports/{report['id']}/document", json={
         "version": detail["latest_document"]["version"], "content": content,
     })
     assert saved.status_code == 200, saved.text
+    assert saved.json()["content"]["title_overrides"] == overrides
     reloaded = client.get(f"/api/v1/reports/{report['id']}").json()
     assert reloaded["latest_document"]["content"]["title_overrides"] == overrides
     assert reloaded["latest_document"]["checksum"] != detail["latest_document"]["checksum"]

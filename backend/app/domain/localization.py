@@ -34,11 +34,11 @@ REPORT_TERMS: dict[str, tuple[str, str, str]] = {
     "return_3m": ("3-month return (%)", "3个月回报（%）", "3個月回報（%）"),
     "return_6m": ("6-month return (%)", "6个月回报（%）", "6個月回報（%）"),
     "return_ytd": ("YTD return (%)", "年初至今回报（%）", "年初至今回報（%）"),
-    "top10": ("Top 10 {product} Constituents*", "{product} 十大成分股*", "{product} 十大成分股*"),
-    "sector_breakdown": ("{product} Sectors Breakdown*", "{product} 行业分布*", "{product} 行業分佈*"),
-    "performers": ("Performers in {month}**", "{month}成份股表现**", "{month}成份股表現**"),
-    "top_performers": ("Top Performers in {month}**", "{month}表现最佳成份股**", "{month}表現最佳成份股**"),
-    "bottom_performers": ("Bottom Performers in {month}**", "{month}表现最弱成份股**", "{month}表現最弱成份股**"),
+    "top10": ("Top 10 {product} Constituents", "{product} 十大成分股", "{product} 十大成分股"),
+    "sector_breakdown": ("{product} Sectors Breakdown", "{product} 行业分布", "{product} 行業分佈"),
+    "performers": ("Performers in {month}", "{month}成份股表现", "{month}成份股表現"),
+    "top_performers": ("Top Performers in {month}", "{month}表现最佳成份股", "{month}表現最佳成份股"),
+    "bottom_performers": ("Bottom Performers in {month}", "{month}表现最弱成份股", "{month}表現最弱成份股"),
     "issuer": ("Issuer", "发行人", "發行人"),
     "weight": ("Weight (%)", "权重（%）", "權重（%）"),
     "return": ("Return (%)", "回报（%）", "回報（%）"),
@@ -58,13 +58,13 @@ MONTHS_ZH = {
 
 PORTFOLIO_LABELS = {
     ZH_HANS: {
-        "AUM": "资产管理规模（百万港元）^",
-        "AVERAGE_DAILY_TURNOVER": "平均每日成交额（百万港元）^^",
+        "AUM": "资产管理规模（百万港元）",
+        "AVERAGE_DAILY_TURNOVER": "平均每日成交额（百万港元）",
         "NUMBER_OF_HOLDINGS": "持仓数量",
     },
     ZH_HANT: {
-        "AUM": "資產管理規模（百萬港元）^",
-        "AVERAGE_DAILY_TURNOVER": "平均每日成交額（百萬港元）^^",
+        "AUM": "資產管理規模（百萬港元）",
+        "AVERAGE_DAILY_TURNOVER": "平均每日成交額（百萬港元）",
         "NUMBER_OF_HOLDINGS": "持倉數量",
     },
 }

@@ -71,8 +71,8 @@ def normalize_portfolio_rows(portfolio: object, currency: str = "HKD") -> list[d
 
     by_code = {code: row for row in source if (code := code_of(row)) is not None}
     specifications = (
-        ("AUM", f"Asset Under Management ({resolved_currency})^", DISPLAY_FORMAT_V1["aum_million_places"], DISPLAY_AMOUNT_UNIT),
-        ("AVERAGE_DAILY_TURNOVER", f"Average Daily Turnover ({resolved_currency})^^", DISPLAY_FORMAT_V1["turnover_million_places"], DISPLAY_AMOUNT_UNIT),
+        ("AUM", f"Asset Under Management ({resolved_currency})", DISPLAY_FORMAT_V1["aum_million_places"], DISPLAY_AMOUNT_UNIT),
+        ("AVERAGE_DAILY_TURNOVER", f"Average Daily Turnover ({resolved_currency})", DISPLAY_FORMAT_V1["turnover_million_places"], DISPLAY_AMOUNT_UNIT),
         ("NUMBER_OF_HOLDINGS", "Number of holdings", 0, "count"),
     )
     normalized: list[dict] = []
@@ -187,7 +187,7 @@ def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
         display_value = f"{rounded:,.{places}f} {DISPLAY_AMOUNT_UNIT}"
         portfolio.append({
             "metric_code": "AUM",
-            "label": f"Asset Under Management ({aum_currency})^",
+            "label": f"Asset Under Management ({aum_currency})",
             "raw_value": format(aum_value, "f"),
             "currency": aum_currency,
             "unit": DISPLAY_AMOUNT_UNIT,
@@ -204,7 +204,7 @@ def calculate_snapshot(payload: dict) -> tuple[dict, dict]:
         display_value = f"{rounded:,.{places}f} {DISPLAY_AMOUNT_UNIT}"
         portfolio.append({
             "metric_code": "AVERAGE_DAILY_TURNOVER",
-            "label": f"Average Daily Turnover ({turnover_currency})^^",
+            "label": f"Average Daily Turnover ({turnover_currency})",
             "raw_value": format(turnover_average, "f"),
             "currency": turnover_currency,
             "unit": DISPLAY_AMOUNT_UNIT,

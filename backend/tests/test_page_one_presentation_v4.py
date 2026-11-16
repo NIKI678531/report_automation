@@ -216,7 +216,7 @@ def test_v4_render_html_uses_explicit_pdf_font_fallback_without_losing_requested
     assert "font-family:Carlito" in rendered
 
 
-def test_editable_v3_is_adapted_to_v5_shape_without_mutation_but_finalized_is_unchanged():
+def test_editable_and_finalized_v3_are_adapted_without_mutation_but_archived_is_unchanged():
     content = initial_document(
         "report-v3", date(2026, 8, 31), "3033-v3", "3033-v3",
         "3033.HK", "Hang Seng TECH Index", "EN",
@@ -224,17 +224,20 @@ def test_editable_v3_is_adapted_to_v5_shape_without_mutation_but_finalized_is_un
     document = SimpleNamespace(content=content, template_version="3033-v3")
     editable = SimpleNamespace(status=ReportStatus.EDITING)
     finalized = SimpleNamespace(status=ReportStatus.FINALIZED)
+    archived = SimpleNamespace(status=ReportStatus.ARCHIVED)
 
     adapted = document_content_for_read(editable, document)
-    locked = document_content_for_read(finalized, document)
+    finalized_content = document_content_for_read(finalized, document)
+    locked = document_content_for_read(archived, document)
 
     assert adapted["template_version"] == "3033-v3"
     assert adapted["presentation"]["schema_version"] == 3
+    assert finalized_content["presentation"]["schema_version"] == 3
     assert locked["presentation"]["schema_version"] == 1
     assert content["presentation"]["schema_version"] == 1
 
 
-def test_v3_draft_upgrade_locks_footnote_style_and_resets_footer_position():
+def test_v3_editable_upgrade_locks_footnote_style_and_resets_footer_position():
     current = initial_document(
         "report-v3", date(2026, 8, 31), "3033-v3", "3033-v3",
         "3033.HK", "Hang Seng TECH Index", "EN",
@@ -264,8 +267,11 @@ def test_v3_draft_upgrade_locks_footnote_style_and_resets_footer_position():
     adapted = document_content_for_read(
         SimpleNamespace(status=ReportStatus.EDITING), document,
     )
-    locked = document_content_for_read(
+    finalized_content = document_content_for_read(
         SimpleNamespace(status=ReportStatus.FINALIZED), document,
+    )
+    locked = document_content_for_read(
+        SimpleNamespace(status=ReportStatus.ARCHIVED), document,
     )
 
     expected_html = (
@@ -280,6 +286,7 @@ def test_v3_draft_upgrade_locks_footnote_style_and_resets_footer_position():
     assert _element(adapted, "footnote:historical")["body_style"]["line_height"] == 1.2
     assert _element(adapted, "footnote:historical")["content_html"] == expected_html
     assert adapted["sections"]["footnotes"]["historical"] == historical_text
+    assert finalized_content == adapted
     assert locked == original
     assert current == original
 
@@ -333,7 +340,7 @@ def test_v3_bottom_nudge_migration_is_distinct_across_the_full_legacy_range(
     assert _element(upgraded, "footnote:historical")["gap_pt"] == expected_gap_pt
 
 
-def test_editable_v1_is_adapted_to_v5_shape_but_finalized_v1_is_unchanged():
+def test_editable_and_finalized_v1_are_adapted_but_archived_v1_is_unchanged():
     content = initial_document(
         "report-v1", date(2026, 8, 31), "3033-v1", "3033-v1",
         "3033.HK", "Hang Seng TECH Index", "EN",
@@ -342,12 +349,15 @@ def test_editable_v1_is_adapted_to_v5_shape_but_finalized_v1_is_unchanged():
     document = SimpleNamespace(content=content, template_version="3033-v1")
 
     adapted = document_content_for_read(SimpleNamespace(status=ReportStatus.EDITING), document)
-    locked = document_content_for_read(SimpleNamespace(status=ReportStatus.FINALIZED), document)
+    finalized = document_content_for_read(SimpleNamespace(status=ReportStatus.FINALIZED), document)
+    locked = document_content_for_read(SimpleNamespace(status=ReportStatus.ARCHIVED), document)
 
     assert adapted["template_version"] == "3033-v5"
     assert adapted["presentation"]["schema_version"] == 3
     assert _element(adapted, "review:summary")["title_style"]["font_size_pt"] == 14.04
     assert _element(adapted, "historical_performance")["title_style"]["font_size_pt"] == 12
+    assert finalized["template_version"] == "3033-v5"
+    assert finalized["presentation"]["schema_version"] == 3
     assert "presentation" not in locked
     assert "presentation" not in content
 

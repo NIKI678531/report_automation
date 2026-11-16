@@ -15,7 +15,7 @@ from .page_one_presentation import (
     PageOnePresentationError,
     page_one_presentation,
 )
-from .report_titles import TITLE_KEYS, missing_report_title_tokens
+from .report_titles import TITLE_KEYS, missing_report_title_tokens, without_page_five_marker
 from .rich_text import rich_text_plain_text, sanitize_rich_text
 
 
@@ -199,7 +199,14 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
                     field,
                     "Enter a report title between 1 and 200 characters.",
                 )
-            normalized = value.strip()
+            normalized = without_page_five_marker(key, value)
+            if not normalized:
+                raise DocumentValidationError(
+                    "REPORT_TITLE_INVALID",
+                    "Report titles cannot contain only a publication marker.",
+                    field,
+                    "Enter a report title without a trailing publication marker.",
+                )
             missing_tokens = missing_report_title_tokens(result, key, normalized)
             if missing_tokens:
                 raise DocumentValidationError(
@@ -218,6 +225,22 @@ def validate_document_content(content: dict[str, Any]) -> dict[str, Any]:
     sections = result.get("sections")
     if not isinstance(sections, dict):
         raise ValueError("sections must be an object")
+    analytics = sections.get("analytics")
+    if isinstance(analytics, dict) and isinstance(analytics.get("portfolio"), list):
+        for row in analytics["portfolio"]:
+            if not isinstance(row, dict) or not isinstance(row.get("label"), str):
+                continue
+            code = str(row.get("metric_code") or "").strip().upper()
+            if not code:
+                label = row["label"].strip().lower()
+                code = (
+                    "AUM" if label.startswith("asset under management")
+                    else "AVERAGE_DAILY_TURNOVER" if label.startswith("average daily turnover")
+                    else "NUMBER_OF_HOLDINGS" if label == "number of holdings"
+                    else ""
+                )
+            if code:
+                row["label"] = without_page_five_marker(f"portfolio.{code}", row["label"])
     review = sections.get("month_in_review")
     if not isinstance(review, dict):
         raise ValueError("month_in_review must be an object")

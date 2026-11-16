@@ -635,7 +635,7 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
 
   const archived = selected.status === "ARCHIVED";
   const finalized = selected.status === "FINALIZED";
-  const canDownload = Boolean(selected.finalized_document_version) && (finalized || archived);
+  const canDownload = Boolean(selected.finalized_document_version);
 
   return <div className="shell">
     <AppHeader busy={busy} onLanguageChange={(next) => void changeLanguage(next)} />

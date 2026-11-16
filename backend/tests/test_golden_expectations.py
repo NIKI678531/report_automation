@@ -112,12 +112,16 @@ def test_performer_tables_match_the_published_returns(derived, block):
 
 
 def test_portfolio_analysis_matches_the_published_block(derived):
-    """Including the formatting: the report prints turnover with no decimals and AUM with two."""
+    """Keep the published values while applying the marker-free Page 05 title contract."""
     actual = [
         {"label": row["label"], "value": row["display_value"]}
         for row in derived["sections"]["analytics"]["portfolio"]
     ]
-    assert actual == EXPECTED["analytics"]["portfolio"]
+    expected = [
+        {**row, "label": row["label"].rstrip("*^")}
+        for row in EXPECTED["analytics"]["portfolio"]
+    ]
+    assert actual == expected
     assert [row["metric_code"] for row in derived["sections"]["analytics"]["portfolio"]] == [
         "AUM", "AVERAGE_DAILY_TURNOVER", "NUMBER_OF_HOLDINGS",
     ]

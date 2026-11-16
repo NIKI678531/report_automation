@@ -448,8 +448,8 @@ def test_module_ready_final_analytics_populates_while_other_report_slots_are_pen
         {"label": row["label"], "value": row["display_value"]}
         for row in analytics["portfolio"]
     ] == [
-        {"label": "Asset Under Management (HKD)^", "value": "N/A"},
-        {"label": "Average Daily Turnover (HKD)^^", "value": "N/A"},
+        {"label": "Asset Under Management (HKD)", "value": "N/A"},
+        {"label": "Average Daily Turnover (HKD)", "value": "N/A"},
         {"label": "Number of holdings", "value": "2"},
     ]
 

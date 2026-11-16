@@ -46,14 +46,15 @@ def lock_report(db: Session, report: Report) -> None:
 def document_content_for_read(report: Report, document: ReportDocument) -> dict[str, Any]:
     """Return an in-memory v5 adapter for editable legacy documents.
 
-    Finalized and archived documents keep their exact locked layout.  No ORM JSON value is
-    mutated: callers receive a deep copy even when no adaptation is needed.
+    Archived documents keep their exact locked layout. Finalized reports are editable working
+    copies, while exports still read the exact ``finalized_document_version``. No ORM JSON value
+    is mutated: callers receive a deep copy even when no adaptation is needed.
     """
 
     content = deepcopy(document.content)
     if (
         document.template_version in {"3033-v1", "3033-v2", "3033-v3", "3033-v4"}
-        and report.status not in {ReportStatus.FINALIZED, ReportStatus.ARCHIVED}
+        and report.status != ReportStatus.ARCHIVED
     ):
         # v1 has no presentation-aware renderer, so never expose the invalid hybrid
         # ``template_version=v1`` + ``presentation.schema_version=2``.  This is still an
@@ -197,7 +198,12 @@ def update_document(db: Session, report: Report, expected_version: int, content:
         checksum=checksum(content),
     )
     db.add(document)
-    if report.status in {ReportStatus.DATA_READY, ReportStatus.READY_TO_FINALIZE, ReportStatus.REVIEW}:
+    if report.status in {
+        ReportStatus.DATA_READY,
+        ReportStatus.READY_TO_FINALIZE,
+        ReportStatus.REVIEW,
+        ReportStatus.FINALIZED,
+    }:
         report.status = ReportStatus.EDITING
     report.version += 1
     audit(db, "document.updated", "report", report.id, request_id, {

@@ -191,9 +191,12 @@ Rules to keep intact when touching this area:
   403 — a 403 confirms the report exists.
 - Uploads are bounded while streaming, never after buffering the body, and the ceiling must stay at
   or below nginx's `client_max_body_size`. A proxy-level 413 carries none of the error envelope.
-- Downloads read `finalized_document_version`, including archived finalized reports, and never
-  refresh upstream data. Audit metadata is retained; file bytes are not. Historical RenderArtifact
-  and RenderJob rows remain intact but old render/job/artifact routes are retired (ADR-0029).
+- Downloads read `finalized_document_version`, including while a newer editable working version
+  exists and for archived finalized reports, and never refresh upstream data. Saving after finalize
+  returns the report to an editable lifecycle state without moving the download baseline; only a
+  later finalize does that. Audit metadata is retained; file bytes are not. Historical
+  RenderArtifact and RenderJob rows remain intact but old render/job/artifact routes are retired
+  (ADR-0029, ADR-0049).
 - Download URLs are HMAC-signed, TTL-bound and tied to the requesting subject; a signature is not a
   capability someone else can replay.
 - Jinja autoescape is `autoescape=True`, not `select_autoescape([...])` — the templates are named

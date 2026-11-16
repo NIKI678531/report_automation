@@ -94,9 +94,9 @@ BASELINE_RAISES = [
 # The reference prints sector weights as on-chart data labels with one decimal place.
 PAGE4_REQUIRED_LABELS = ("47.8%", "49.3%", "1.7%", "1.3%")
 PAGE4_REQUIRED_PORTFOLIO = (
-    "Asset Under Management (HKD)^",
+    "Asset Under Management (HKD)",
     "67,536.55 million",
-    "Average Daily Turnover (HKD)^^",
+    "Average Daily Turnover (HKD)",
     "12,882 million",
     "Number of holdings",
     "30",

@@ -155,15 +155,15 @@ describe("report module data responsibilities", () => {
     expect(screen.getByRole("heading", { name: "3033.HK Sectors Breakdown" })).toBeTruthy();
     expect(screen.getByRole("img", { name: /3033\.HK Sectors Breakdown/i })).toBeTruthy();
     expect(screen.getByText(/Derived by the backend from the active constituent snapshot/i)).toBeTruthy();
-    expect(screen.getByText("Asset Under Management (HKD)^")).toBeTruthy();
+    expect(screen.getByText("Asset Under Management (HKD)")).toBeTruthy();
     expect(screen.getByText("67,536.55 million").closest("data")?.getAttribute("value")).toBe("67536.55");
-    expect(screen.getByText("Average Daily Turnover (HKD)^^")).toBeTruthy();
-    expect(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)^^" })).toHaveProperty("value", "12,882 million");
+    expect(screen.getByText("Average Daily Turnover (HKD)")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)" })).toHaveProperty("value", "12,882 million");
     fireEvent.click(screen.getByRole("button", { name: "Refresh analytics" }));
     await waitFor(() => expect(calculate).toHaveBeenCalledWith(report.id));
   });
 
-  it("edits and saves all Final Analytics titles and performer subtitles with publication markers", async () => {
+  it("strips publication markers when editing and saving all Final Analytics titles", async () => {
     vi.spyOn(api, "listDatasets").mockResolvedValue([]);
     const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
     const registerPendingSave = vi.fn<(save: (() => Promise<void>) | null) => void>();
@@ -193,29 +193,30 @@ describe("report module data responsibilities", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Done" })[0]);
 
     for (const [current, replacement] of [
-      ["Asset Under Management (HKD)^", "Fund assets (HKD)^"],
-      ["Average Daily Turnover (HKD)^^", "Monthly average turnover (HKD)^^"],
+      ["Asset Under Management (HKD)", "Fund assets (HKD)^"],
+      ["Average Daily Turnover (HKD)", "Monthly average turnover (HKD)^^"],
     ]) {
       fireEvent.click(screen.getByRole("button", { name: `Edit portfolio label: ${current}` }));
       fireEvent.change(screen.getByRole("textbox", { name: `Portfolio label: ${current}` }), { target: { value: replacement } });
       fireEvent.click(screen.getByRole("button", { name: "Done" }));
     }
 
-    expect(screen.getByText("Fund assets (HKD)^")).toBeTruthy();
-    expect(screen.getByRole("textbox", { name: "Monthly average turnover (HKD)^^" })).toHaveProperty("value", "12,882 million");
+    expect(screen.getByText("Fund assets (HKD)")).toBeTruthy();
+    expect(screen.getByRole("textbox", { name: "Monthly average turnover (HKD)" })).toHaveProperty("value", "12,882 million");
+    expect(screen.queryByRole("group", { name: "Superscript footnote marker" })).toBeNull();
 
     expect(screen.getByRole("button", { name: "Refresh analytics" })).toHaveProperty("disabled", true);
     await registerPendingSave.mock.lastCall![0]!();
     expect(saveDocument).toHaveBeenCalledWith(report.id, 4, expect.objectContaining({
       title_overrides: {
-        top10: "Largest 3033.HK positions*",
-        sector_breakdown: "3033.HK industry allocation*",
-        performers: "June movers**",
-        top_performers: "June leaders^",
+        top10: "Largest 3033.HK positions",
+        sector_breakdown: "3033.HK industry allocation",
+        performers: "June movers",
+        top_performers: "June leaders",
         bottom_performers: "June laggards",
-        portfolio_analysis: "3033.HK fund profile^",
-        "portfolio.AUM": "Fund assets (HKD)^",
-        "portfolio.AVERAGE_DAILY_TURNOVER": "Monthly average turnover (HKD)^^",
+        portfolio_analysis: "3033.HK fund profile",
+        "portfolio.AUM": "Fund assets (HKD)",
+        "portfolio.AVERAGE_DAILY_TURNOVER": "Monthly average turnover (HKD)",
       },
     }));
   });
@@ -269,10 +270,10 @@ describe("report module data responsibilities", () => {
 
     render(<ReportModule report={legacyReport} active="analytics" busy={false} run={run} />);
 
-    expect(screen.getByText("Asset Under Management (HKD)^")).toBeTruthy();
-    expect(screen.getByText("Average Daily Turnover (HKD)^^")).toBeTruthy();
+    expect(screen.getByText("Asset Under Management (HKD)")).toBeTruthy();
+    expect(screen.getByText("Average Daily Turnover (HKD)")).toBeTruthy();
     expect(screen.getAllByText("N/A")).toHaveLength(1);
-    expect(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)^^" })).toHaveProperty("value", "NA");
+    expect(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)" })).toHaveProperty("value", "NA");
     expect(screen.getByText("Number of holdings").closest("dt")?.nextElementSibling?.textContent).toBe("30");
   });
 
@@ -286,7 +287,7 @@ describe("report module data responsibilities", () => {
       portfolio_analysis: "3033.HK fund statistics", "portfolio.AUM": "Assets (HKD)", "portfolio.AVERAGE_DAILY_TURNOVER": "Daily turnover (HKD)",
     };
     const { rerender } = render(<ReportModule report={edited} active="analytics" busy={false} run={run} />);
-    for (const title of ["Largest 3033.HK positions", "June monthly movers", "Leading June performers", "Lagging June performers", "3033.HK fund statistics", "3033.HK default sectors*"]) {
+    for (const title of ["Largest 3033.HK positions", "June monthly movers", "Leading June performers", "Lagging June performers", "3033.HK fund statistics", "3033.HK default sectors"]) {
       expect(screen.getByRole("heading", { name: title })).toBeTruthy();
     }
     expect(screen.getByText("Assets (HKD)")).toBeTruthy();
@@ -320,7 +321,7 @@ describe("report module data responsibilities", () => {
 
     expect(screen.getByText(aum)).toBeTruthy();
     expect(screen.getByDisplayValue(turnover)).toBeTruthy();
-    expect(screen.getByText(`Performers in ${monthName}**`)).toBeTruthy();
+    expect(screen.getByText(`Performers in ${monthName}`)).toBeTruthy();
   });
 
   it("saves only the 3033 turnover display text without changing any other report data", async () => {
@@ -332,13 +333,13 @@ describe("report module data responsibilities", () => {
     const save = screen.getByRole("button", { name: "Save" });
     expect(save).toHaveProperty("disabled", true);
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
-    fireEvent.change(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)^^" }), { target: { value: "9,876 million" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Average Daily Turnover (HKD)" }), { target: { value: "9,876 million" } });
     fireEvent.click(save);
 
     const expected = structuredClone(report.latest_document!.content);
     const sections = expected.sections as Record<string, Record<string, unknown>>;
     const portfolio = sections.analytics.portfolio as Record<string, unknown>[];
-    portfolio[1] = { ...portfolio[1], display_value: "9,876 million", value: "9,876 million" };
+    portfolio[1] = { ...portfolio[1], label: "Average Daily Turnover (HKD)", display_value: "9,876 million", value: "9,876 million" };
     await waitFor(() => expect(saveDocument).toHaveBeenCalledExactlyOnceWith(report.id, report.latest_document!.version, expected));
     expect(report).toEqual(original);
   });
@@ -394,7 +395,7 @@ describe("report module data responsibilities", () => {
     const savedPortfolio = savedSections.analytics.portfolio as Record<string, unknown>[];
     expect(savedPortfolio).toHaveLength(2);
     expect(savedPortfolio[0]).toEqual(holdings);
-    expect(savedPortfolio[1]).toEqual(expect.objectContaining({ label: "Average Daily Turnover (HKD)^^", display_value: "200 million", value: "200 million" }));
+    expect(savedPortfolio[1]).toEqual(expect.objectContaining({ label: "Average Daily Turnover (HKD)", display_value: "200 million", value: "200 million" }));
     expect({ ...savedSections.analytics, portfolio: sections.analytics.portfolio }).toEqual(sections.analytics);
   });
 
@@ -469,7 +470,6 @@ describe("report module data responsibilities", () => {
   });
 
   it.each([
-    { status: "FINALIZED", busy: false, document: true },
     { status: "ARCHIVED", busy: false, document: true },
     { status: "EDITING", busy: true, document: true },
     { status: "EDITING", busy: false, document: false },
@@ -479,6 +479,12 @@ describe("report module data responsibilities", () => {
     render(<ReportModule report={frozenReport} active="analytics" busy={busy} run={run} />);
     expect(screen.getByRole("textbox")).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
+  });
+
+  it("keeps finalized turnover editable", () => {
+    vi.spyOn(api, "listDatasets").mockResolvedValue([]);
+    render(<ReportModule report={{ ...report, status: "FINALIZED" }} active="analytics" busy={false} run={run} />);
+    expect(screen.getByRole("textbox")).toHaveProperty("disabled", false);
   });
 
   it("resets the draft for another report and keeps other products read-only", () => {
@@ -568,16 +574,24 @@ describe("report module data responsibilities", () => {
     expect(saveDocument).toHaveBeenCalledOnce();
   });
 
-  it.each(["FINALIZED", "ARCHIVED"] as const)("keeps the %s Review preview on its saved template", async (status) => {
+  it("keeps the ARCHIVED Review preview on its saved template", async () => {
     const previewSaved = vi.spyOn(api, "previewSaved").mockResolvedValue("<html>saved</html>");
     const previewDraft = vi.spyOn(api, "previewDraft").mockResolvedValue("<html>draft</html>");
     const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
-    render(<ReportModule report={{ ...report, status }} active="review" busy={false} run={run} />);
+    render(<ReportModule report={{ ...report, status: "ARCHIVED" }} active="review" busy={false} run={run} />);
     await waitFor(() => expect(previewSaved).toHaveBeenCalledWith(report.id, expect.any(AbortSignal)));
     expect(previewDraft).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Save layout" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("textbox", { name: "Historical performance footnote" })).toHaveProperty("disabled", true);
     expect(saveDocument).not.toHaveBeenCalled();
+  });
+
+  it("previews and edits a finalized Review as a new working version", async () => {
+    const previewDraft = vi.spyOn(api, "previewDraft").mockResolvedValue("<html>draft</html>");
+    vi.spyOn(api, "previewSaved").mockResolvedValue("<html>saved</html>");
+    render(<ReportModule report={{ ...report, status: "FINALIZED" }} active="review" busy={false} run={run} />);
+    await waitFor(() => expect(previewDraft).toHaveBeenCalledWith(report.id, 4, expect.any(Object), expect.any(AbortSignal)));
+    expect(screen.getByRole("textbox", { name: "Historical performance footnote" })).toHaveProperty("disabled", false);
   });
 
   it("migrates a v3 footnote into the locked v5 footer save payload", async () => {
@@ -659,7 +673,7 @@ describe("report module data responsibilities", () => {
     expect(screen.queryByLabelText("基准名称")).toBeNull();
   });
 
-  it("saves and previews title marker edits with the pending Review content, and restores defaults", async () => {
+  it("normalizes legacy Page 05 title markers in Review and restores marker-free defaults", async () => {
     const saveDocument = vi.spyOn(api, "saveDocument").mockResolvedValue({ version: 5 });
     const previewDraft = vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
     const registerPendingSave = vi.fn<(save: (() => Promise<void>) | null) => void>();
@@ -670,43 +684,48 @@ describe("report module data responsibilities", () => {
     } };
     render(<ReportModule report={editable} active="review" busy={false} run={run} registerPendingSave={registerPendingSave} />);
     fireEvent.click(screen.getByText("Report titles", { selector: "summary" }));
-    for (const label of Object.values(editable.report_title_defaults)) {
+    const replacements = {
+      "Top 10 3033.HK Constituents": "Largest 3033.HK Constituents",
+      "Asset Under Management (HKD)": "Fund Assets (HKD)",
+      "Average Daily Turnover (HKD)": "Monthly Turnover (HKD)",
+    };
+    for (const [label, replacement] of Object.entries(replacements)) {
       const field = screen.getByRole("textbox", { name: label });
       expect(field).toHaveProperty("value", label);
-      fireEvent.change(field, { target: { value: label.replace(/[*^]+$/, "") } });
+      fireEvent.change(field, { target: { value: replacement } });
     }
     fireEvent.change(screen.getByRole("textbox", { name: "Historical performance footnote" }), { target: { value: "Edited disclosure." } });
     await waitFor(() => expect(previewDraft).toHaveBeenCalledWith(report.id, 4, expect.objectContaining({
-      title_overrides: { top10: "Top 10 3033.HK Constituents", "portfolio.AUM": "Asset Under Management (HKD)", "portfolio.AVERAGE_DAILY_TURNOVER": "Average Daily Turnover (HKD)" },
+      title_overrides: { top10: "Largest 3033.HK Constituents", "portfolio.AUM": "Fund Assets (HKD)", "portfolio.AVERAGE_DAILY_TURNOVER": "Monthly Turnover (HKD)" },
     }), expect.any(AbortSignal)));
     await registerPendingSave.mock.lastCall![0]!();
     expect(saveDocument.mock.lastCall![2]).toMatchObject({
-      title_overrides: { top10: "Top 10 3033.HK Constituents", "portfolio.AUM": "Asset Under Management (HKD)" },
+      title_overrides: { top10: "Largest 3033.HK Constituents", "portfolio.AUM": "Fund Assets (HKD)", "portfolio.AVERAGE_DAILY_TURNOVER": "Monthly Turnover (HKD)" },
       sections: { footnotes: { historical: "Edited disclosure." } },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Restore default: Top 10 3033.HK Constituents*" }));
-    expect(screen.getByRole("textbox", { name: editable.report_title_defaults.top10 })).toHaveProperty("value", editable.report_title_defaults.top10);
+    fireEvent.click(screen.getByRole("button", { name: "Restore default: Top 10 3033.HK Constituents" }));
+    expect(screen.getByRole("textbox", { name: "Top 10 3033.HK Constituents" })).toHaveProperty("value", "Top 10 3033.HK Constituents");
     fireEvent.click(screen.getByRole("button", { name: "Save layout" }));
     await waitFor(() => expect(saveDocument).toHaveBeenCalledTimes(2));
     expect(saveDocument.mock.lastCall![2].title_overrides).not.toHaveProperty("top10");
   });
 
-  it("reloads title overrides per report version and keeps frozen headings read-only", () => {
+  it("reloads title overrides per report version and keeps finalized headings editable", () => {
     vi.spyOn(api, "previewDraft").mockResolvedValue("<html><body></body></html>");
     vi.spyOn(api, "previewSaved").mockResolvedValue("<html><body></body></html>");
     const editable = { ...report, report_title_defaults: { top10: "Top 3033.HK positions*" } };
     const { rerender } = render(<ReportModule report={editable} active="review" busy={false} run={run} />);
     fireEvent.click(screen.getByText("Report titles", { selector: "summary" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Top 3033.HK positions*" }), { target: { value: "Unsaved" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Top 3033.HK positions" }), { target: { value: "Unsaved" } });
     const next = structuredClone(editable);
     next.id = "report-2";
     next.latest_document!.version += 1;
     next.latest_document!.content.title_overrides = { top10: "Saved 3033.HK title" };
     rerender(<ReportModule report={next} active="review" busy={false} run={run} />);
-    expect(screen.getByRole("textbox", { name: "Top 3033.HK positions*" })).toHaveProperty("value", "Saved 3033.HK title");
+    expect(screen.getByRole("textbox", { name: "Top 3033.HK positions" })).toHaveProperty("value", "Saved 3033.HK title");
     rerender(<ReportModule report={{ ...next, status: "FINALIZED" }} active="review" busy={false} run={run} />);
-    expect(screen.getByRole("textbox", { name: "Top 3033.HK positions*" })).toHaveProperty("disabled", true);
-    expect(screen.getByRole("button", { name: "Restore default: Top 3033.HK positions*" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("textbox", { name: "Top 3033.HK positions" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Restore default: Top 3033.HK positions" })).toHaveProperty("disabled", false);
   });
 
   it("previews unsaved Review changes and ignores an older response", async () => {

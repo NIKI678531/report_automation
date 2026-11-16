@@ -1126,11 +1126,11 @@ def finalize(db: Session, report: Report, expected_version: int, request_id: str
 
     lock_report(db, report)
     ensure_report_not_archived(report)
-    if report.status == ReportStatus.FINALIZED:
-        return report
     document = latest_document(db, report.id, for_update=True)
     if document.version != expected_version:
         raise HTTPException(status_code=409, detail={"error_code": "VERSION_CONFLICT", "current_version": document.version})
+    if report.finalized_document_version == document.version:
+        return report
     advisory_failures = [
         item for item in release_gate_checks(db, report, document)
         if item.get("severity") == "BLOCKING" and item.get("status") != "PASSED"
@@ -1163,12 +1163,14 @@ def finalize(db: Session, report: Report, expected_version: int, request_id: str
             "findings": list(error.findings),
         }) from error
 
+    previous_finalized_document_version = report.finalized_document_version
     report.status = ReportStatus.READY_TO_FINALIZE
     report.finalized_document_version = document.version
     report.status = ReportStatus.FINALIZED
     report.version += 1
     audit(db, "report.finalized", "report", report.id, request_id, {
         "document_version": document.version,
+        "previous_finalized_document_version": previous_finalized_document_version,
         "document_checksum": document.checksum,
         "template_version": document.template_version,
         "design_token_version": document.content.get("design_token_version"),

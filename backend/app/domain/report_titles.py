@@ -14,6 +14,23 @@ TITLE_TERMS = (
     "top10", "sector_breakdown", "performers", "top_performers", "bottom_performers", "portfolio_analysis",
 )
 TITLE_KEYS = frozenset((*TITLE_TERMS, *(f"portfolio.{code}" for code in PORTFOLIO_METRIC_ORDER)))
+PAGE_FIVE_TITLE_KEYS = frozenset({
+    "top10",
+    "sector_breakdown",
+    "performers",
+    "top_performers",
+    "bottom_performers",
+    "portfolio_analysis",
+    *(f"portfolio.{code}" for code in PORTFOLIO_METRIC_ORDER),
+})
+
+
+def without_page_five_marker(key: str, value: str) -> str:
+    """Remove legacy publication-marker suffixes from Page 05 headings and labels."""
+
+    if key not in PAGE_FIVE_TITLE_KEYS:
+        return value.strip()
+    return re.sub(r"[\*\^]+\s*$", "", value).rstrip()
 
 
 def _normalized_bound_text(value: str) -> str:
@@ -111,4 +128,7 @@ def report_title_defaults(
 
 def resolve_report_titles(content: dict[str, Any], defaults: dict[str, str]) -> dict[str, str]:
     overrides = content.get("title_overrides") or {}
-    return {key: overrides.get(key, value) for key, value in defaults.items()}
+    return {
+        key: without_page_five_marker(key, str(overrides.get(key, value)))
+        for key, value in defaults.items()
+    }

@@ -203,6 +203,23 @@ describe("report center navigation", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/reports/" + archivedChinese.id));
   });
 
+  it("keeps the previous finalized download available while a report is being edited", async () => {
+    const working = report("editing-finalized", "2026-08-31", "EDITING");
+    working.finalized_document_version = 1;
+    working.latest_document!.version = 2;
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "listReports").mockResolvedValue([working]);
+    vi.spyOn(api, "getReport").mockResolvedValue(working);
+    vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
+
+    renderAt(`/reports/${working.id}`, true);
+
+    const downloads = await screen.findByRole("button", { name: "Downloads" });
+    expect(downloads).toHaveProperty("disabled", false);
+    fireEvent.click(downloads);
+    expect(screen.getAllByRole("menuitem")).toHaveLength(3);
+  });
+
   it("keeps the archived report language when the requested variant does not exist", async () => {
     const archived = report("only-archive", "2026-07-31", "ARCHIVED");
     vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
@@ -380,11 +397,11 @@ describe("3033 product scope", () => {
     renderAt(`/reports/${current.id}`);
     const reviewButton = await screen.findByRole("button", { name: "Review & finalize" });
     fireEvent.click(screen.getByText("Report titles", { selector: "summary" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Largest 3033.HK positions*" }), { target: { value: "Largest 3033.HK positions" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Largest 3033.HK positions" }), { target: { value: "Largest 3033.HK holdings" } });
     fireEvent.click(reviewButton);
 
     await waitFor(() => expect(finalize).toHaveBeenCalledTimes(1));
-    expect(saveDocument).toHaveBeenCalledWith("ready", 1, expect.objectContaining({ title_overrides: { top10: "Largest 3033.HK positions" } }));
+    expect(saveDocument).toHaveBeenCalledWith("ready", 1, expect.objectContaining({ title_overrides: { top10: "Largest 3033.HK holdings" } }));
     expect(finalize).toHaveBeenCalledWith("ready", 2);
     expect(saveDocument.mock.invocationCallOrder[0]).toBeLessThan(finalize.mock.invocationCallOrder[0]);
     expect(review).not.toHaveBeenCalled();

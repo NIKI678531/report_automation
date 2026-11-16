@@ -75,7 +75,7 @@ def test_translation_configuration_is_fail_closed(setting, value):
     assert any("TRANSLATION_" in problem for problem in configured.deployment_problems())
 
 
-def test_translation_target_finalized_while_queued_is_not_changed(client, translation_job_context):
+def test_translation_target_finalized_while_queued_appends_work_without_moving_baseline(client, translation_job_context):
     from app.core.database import get_db
     from app.domain.service.translations import execute_translation
 
@@ -83,10 +83,11 @@ def test_translation_target_finalized_while_queued_is_not_changed(client, transl
     job = client.post(url, json=command, headers={"Idempotency-Key": "key"}).json()
     assert client.post(f"/api/v1/reports/{target['id']}/finalize", json={"version": 1}).status_code == 200
     with next(client.app.dependency_overrides[get_db]()) as db:
-        assert execute_translation(db, job["id"]) == "FAILED"
+        assert execute_translation(db, job["id"]) == "SUCCEEDED"
     current = client.get(f"/api/v1/reports/{target['id']}").json()
-    assert current["status"] == "FINALIZED"
-    assert current["latest_document"]["version"] == 1
+    assert current["status"] == "EDITING"
+    assert current["finalized_document_version"] == 1
+    assert current["latest_document"]["version"] == 2
 
 
 # --------------------------------------------------------------------------------------------

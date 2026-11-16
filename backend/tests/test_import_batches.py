@@ -182,8 +182,8 @@ def test_split_files_plus_unknown_apply_as_one_snapshot(client):
         {"label": row["label"], "value": row["display_value"]}
         for row in analytics["portfolio"]
     ] == [
-        {"label": "Asset Under Management (HKD)^", "value": "N/A"},
-        {"label": "Average Daily Turnover (HKD)^^", "value": "N/A"},
+        {"label": "Asset Under Management (HKD)", "value": "N/A"},
+        {"label": "Average Daily Turnover (HKD)", "value": "N/A"},
         {"label": "Number of holdings", "value": "2"},
     ]
     detail = client.get(f"/api/v1/reports/{report['id']}").json()

@@ -146,8 +146,11 @@ def test_report_golden_lifecycle_and_preview(client):
         f"/api/v1/reports/{report['id']}/datasets/constituent_returns/clear",
         json={"version": finalized.json()["version"]},
     )
-    assert clear_finalized.status_code == 409
-    assert clear_finalized.json()["error_code"] == "REPORT_FINALIZED"
+    assert clear_finalized.status_code == 200, clear_finalized.text
+    working = client.get(f"/api/v1/reports/{report['id']}").json()
+    assert working["status"] == "DRAFT"
+    assert working["finalized_document_version"] == finalized.json()["finalized_document_version"]
+    assert working["latest_document"]["version"] > working["finalized_document_version"]
 
     downloads = {format_name: download_report(client, report['id'], format_name) for format_name in ["html", "pdf", "docx"]}
     outputs = {}
@@ -301,9 +304,9 @@ def test_unfinished_report_preview_keeps_layout_and_fixed_portfolio_rows(client)
     assert "Add key drivers." not in preview.text
     assert "No company news has been selected." not in preview.text
     assert 'data-metric-code="AUM"' in preview.text
-    assert "Asset Under Management (HKD)^" in preview.text
+    assert "Asset Under Management (HKD)" in preview.text
     assert 'data-metric-code="AVERAGE_DAILY_TURNOVER"' in preview.text
-    assert "Average Daily Turnover (HKD)^^" in preview.text
+    assert "Average Daily Turnover (HKD)" in preview.text
     assert 'data-metric-code="NUMBER_OF_HOLDINGS"' in preview.text
     assert 'data-layout-mode="paged"' in preview.text
     assert preview.text.count(
@@ -710,15 +713,14 @@ def test_traditional_variant_converts_chinese_editorial_and_preserves_manual_tar
         json={"version": target["version"]},
     )
     assert finalized.status_code == 200, finalized.text
-    rejected_sync = client.post(
+    resumed_sync = client.post(
         f"/api/v1/reports/{source['id']}/language-variants/{target_id}/sync",
         json={
             "source_document_version": source["latest_document"]["version"],
             "target_document_version": target["latest_document"]["version"],
         },
     )
-    assert rejected_sync.status_code == 409
-    assert rejected_sync.json()["error_code"] == "REPORT_FINALIZED"
+    assert resumed_sync.status_code == 200, resumed_sync.text
 
     preview = client.post(f"/api/v1/reports/{target_id}/preview")
     assert preview.status_code == 200, preview.text
@@ -851,7 +853,7 @@ def test_language_variants_keep_independent_title_overrides(client):
     target_id = created.json()["id"]
     target = client.get(f"/api/v1/reports/{target_id}").json()
     assert not target["latest_document"]["content"].get("title_overrides")
-    assert target["report_title_defaults"]["top10"] == "3033.HK 十大成分股*"
+    assert target["report_title_defaults"]["top10"] == "3033.HK 十大成分股"
     target_document = target["latest_document"]
     target_document["content"]["title_overrides"] = {"top10": "3033.HK 主要持仓"}
     saved_target = client.patch(f"/api/v1/reports/{target_id}/document", json={
@@ -975,6 +977,45 @@ def test_finalize_allows_missing_snapshot_for_direct_download(client):
     assert response.json()["status"] == "FINALIZED"
 
     downloads = {format_name: download_report(client, report['id'], format_name) for format_name in ["html"]}
+
+
+def test_finalized_report_can_be_edited_while_the_previous_version_remains_downloadable(client):
+    report = create_report(client)
+    finalized = client.post(
+        f"/api/v1/reports/{report['id']}/finalize",
+        json={"version": 1},
+    )
+    assert finalized.status_code == 200, finalized.text
+    assert finalized.json()["finalized_document_version"] == 1
+
+    detail = client.get(f"/api/v1/reports/{report['id']}").json()
+    content = detail["latest_document"]["content"]
+    content["title_overrides"] = {"top10": "Edited 3033.HK holdings*"}
+    saved = client.patch(
+        f"/api/v1/reports/{report['id']}/document",
+        json={"version": 1, "content": content},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["content"]["title_overrides"]["top10"] == "Edited 3033.HK holdings"
+
+    working = client.get(f"/api/v1/reports/{report['id']}").json()
+    assert working["status"] == "EDITING"
+    assert working["finalized_document_version"] == 1
+    assert working["latest_document"]["version"] == 2
+    previous_download = download_report(client, report["id"], "html")
+    assert previous_download.status_code == 200, previous_download.text
+    assert "Edited 3033.HK holdings" not in previous_download.text
+
+    refinalized = client.post(
+        f"/api/v1/reports/{report['id']}/finalize",
+        json={"version": 2},
+    )
+    assert refinalized.status_code == 200, refinalized.text
+    assert refinalized.json()["status"] == "FINALIZED"
+    assert refinalized.json()["finalized_document_version"] == 2
+    current_download = download_report(client, report["id"], "html")
+    assert current_download.status_code == 200, current_download.text
+    assert "Edited 3033.HK holdings" in current_download.text
 
 
 def test_finalized_report_creates_a_separate_revision(client):

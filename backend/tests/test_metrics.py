@@ -293,7 +293,7 @@ def test_portfolio_amounts_are_normalized_to_millions_before_display_and_average
     assert analytics["portfolio"][0]["raw_value"] == "67536.55"
     assert analytics["portfolio"][1] == {
         "metric_code": "AVERAGE_DAILY_TURNOVER",
-        "label": "Average Daily Turnover (HKD)^^",
+        "label": "Average Daily Turnover (HKD)",
         "raw_value": "12882.000",
         "currency": "HKD",
         "unit": "million",
@@ -386,8 +386,8 @@ def test_portfolio_analysis_keeps_all_three_rows_when_fund_kpis_are_missing():
     })
 
     assert [(row["metric_code"], row["label"], row["display_value"]) for row in analytics["portfolio"]] == [
-        ("AUM", "Asset Under Management (HKD)^", "N/A"),
-        ("AVERAGE_DAILY_TURNOVER", "Average Daily Turnover (HKD)^^", "N/A"),
+        ("AUM", "Asset Under Management (HKD)", "N/A"),
+        ("AVERAGE_DAILY_TURNOVER", "Average Daily Turnover (HKD)", "N/A"),
         ("NUMBER_OF_HOLDINGS", "Number of holdings", "1"),
     ]
     assert metrics["aum_value"] is None

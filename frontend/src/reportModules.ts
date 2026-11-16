@@ -31,7 +31,23 @@ interface ReportContextItem {
 }
 
 export function isReportReadOnly(report: { status: string }): boolean {
-	return report.status === "FINALIZED" || report.status === "ARCHIVED";
+	return report.status === "ARCHIVED";
+}
+
+const PAGE_FIVE_TITLE_KEYS = new Set([
+	"top10",
+	"sector_breakdown",
+	"performers",
+	"top_performers",
+	"bottom_performers",
+	"portfolio_analysis",
+	"portfolio.AUM",
+	"portfolio.AVERAGE_DAILY_TURNOVER",
+	"portfolio.NUMBER_OF_HOLDINGS",
+]);
+
+export function withoutPageFiveMarker(key: string, value: string): string {
+	return PAGE_FIVE_TITLE_KEYS.has(key) ? value.replace(/[\*\^]+\s*$/, "").trimEnd() : value;
 }
 
 interface InitialReportItem extends ReportContextItem {
@@ -112,11 +128,16 @@ export function reportConstituentsTitle(report: ReportIdentity): string {
 export function reportTitleOverrides(content?: Record<string, unknown>): Record<string, string> {
 	const value = content?.title_overrides;
 	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+	return Object.fromEntries(Object.entries(value)
+		.filter((entry): entry is [string, string] => typeof entry[1] === "string")
+		.map(([key, title]) => [key, withoutPageFiveMarker(key, title)]));
 }
 
 export function reportTitle(report: ReportIdentity, key: string, fallback: string): string {
-	return reportTitleOverrides(report.latest_document?.content)[key] ?? report.report_title_defaults?.[key] ?? fallback;
+	return withoutPageFiveMarker(
+		key,
+		reportTitleOverrides(report.latest_document?.content)[key] ?? report.report_title_defaults?.[key] ?? fallback,
+	);
 }
 
 export function reportMonthName(report: ReportIdentity): string {
