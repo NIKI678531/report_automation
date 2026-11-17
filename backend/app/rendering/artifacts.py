@@ -63,7 +63,7 @@ def renderer_version_for(format_name: str) -> str:
     return (
         f"{settings.renderer_version}-paged-compliance-v8" if format_name == "pdf"
         else "html-reader-compliance-v12" if format_name == "html"
-        else "docx-compliance-v9"
+        else "docx-compliance-v10"
     )
 
 
@@ -1277,20 +1277,30 @@ def _render_historical_docx(
     content_parent = document
     content_width = usable_width
     if is_controlled:
+        # Word otherwise treats the heading and each table row as independent break candidates.
+        # Keep the complete Historical Performance module in one non-splitting wrapper row. The
+        # group is small enough to fit an opening page by contract; if preceding Review content
+        # grows too tall, the canonical overflow gate remains responsible for rejecting it.
         group_x = int(historical.get("x") or 0)
         group_w = int(historical.get("w") or 12)
-        if group_x != 0 or group_w != 12:
+        if group_x == 0 and group_w == 12:
+            wrapper = document.add_table(rows=1, cols=1)
+            _set_table_geometry(wrapper, [usable_width])
+            content_parent = wrapper.rows[0].cells[0]
+        else:
             column_widths = [usable_width // 12] * 12
             column_widths[-1] += usable_width - sum(column_widths)
             wrapper = document.add_table(rows=1, cols=12)
             _set_table_geometry(wrapper, column_widths)
-            _prevent_row_split(wrapper.rows[0])
-            for cell in wrapper.rows[0].cells:
-                _set_cell_margins(cell, top=0, right=0, bottom=0, left=0)
             content_parent = wrapper.rows[0].cells[group_x].merge(
                 wrapper.rows[0].cells[group_x + group_w - 1]
             )
             content_width = sum(column_widths[group_x:group_x + group_w])
+        _set_table_borders(wrapper)
+        _prevent_row_split(wrapper.rows[0])
+        for cell in wrapper.rows[0].cells:
+            _set_cell_margins(cell, top=0, right=0, bottom=0, left=0)
+            _set_cell_borders(cell)
     title_style = historical.get("title_style") if is_controlled else {}
     if content_parent is document:
         history_heading = document.add_paragraph(style="Heading 1")

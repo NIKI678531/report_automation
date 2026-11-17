@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core import entra
@@ -50,6 +51,9 @@ def create_app() -> FastAPI:
     # a 401/403 envelope, and a response without CORS headers is reported as an opaque network
     # failure instead.
     application.add_middleware(AuthorizationMiddleware)
+    # Preview HTML can contain embedded report fonts. Compress it at the API boundary so concurrent
+    # editors do not each pay the full transfer cost over cross-region links.
+    application.add_middleware(GZipMiddleware, minimum_size=1024)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_allow_origins),

@@ -67,7 +67,7 @@ describe("FastAPI client", () => {
 
     await expect(api.previewDraft("report/1", 7, content, controller.signal)).resolves.toBe("<html>preview</html>");
     expect(fetchMock).toHaveBeenCalledWith(
-      "/remote/fund-cmt-auto/api/v1/reports/report%2F1/preview",
+      "/remote/fund-cmt-auto/api/v1/reports/report%2F1/preview?scope=review",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ version: 7, content }),
@@ -83,7 +83,7 @@ describe("FastAPI client", () => {
 
     await expect(api.previewSaved("report/1", controller.signal)).resolves.toBe("<html>saved</html>");
     expect(fetchMock).toHaveBeenCalledWith(
-      "/remote/fund-cmt-auto/api/v1/reports/report%2F1/preview",
+      "/remote/fund-cmt-auto/api/v1/reports/report%2F1/preview?scope=review",
       expect.objectContaining({ signal: controller.signal }),
     );
     fetchMock.mockRestore();

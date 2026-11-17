@@ -148,24 +148,33 @@ def preview_document_content(
     expected_version: int | None = None,
     content: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return canonical preview content without writing a version or audit event."""
+    """Return canonical preview content without writing a version or audit event.
+
+    Rendering is CPU work and the response can traverse a slow cross-region link. Detach the
+    report and return the database connection before either happens, so a burst of previews does
+    not consume the entire MySQL pool while Jinja or the client is busy.
+    """
 
     current = latest_document(db, report.id)
     if content is None:
-        return document_content_for_read(report, current)
-    ensure_report_editable(report)
-    # Preview does not mutate the append-only document. The supplied version identifies the
-    # editor's base for compatibility with the save payload, but a newer saved version must not
-    # prevent the user from rendering and recovering their unsaved draft. update_document keeps
-    # the optimistic-lock check for the actual write boundary.
-    _ = expected_version
-    product = resolve_product(db, report.product_code, report.report_date)
-    try:
-        return canonicalize_document_content(
-            report, product, content, current_content=current.content
-        )
-    except (DocumentValidationError, PageOnePresentationError, ValueError) as error:
-        raise _validation_http_exception(error) from error
+        result = document_content_for_read(report, current)
+    else:
+        ensure_report_editable(report)
+        # Preview does not mutate the append-only document. The supplied version identifies the
+        # editor's base for compatibility with the save payload, but a newer saved version must not
+        # prevent the user from rendering and recovering their unsaved draft. update_document keeps
+        # the optimistic-lock check for the actual write boundary.
+        _ = expected_version
+        product = resolve_product(db, report.product_code, report.report_date)
+        try:
+            result = canonicalize_document_content(
+                report, product, content, current_content=current.content
+            )
+        except (DocumentValidationError, PageOnePresentationError, ValueError) as error:
+            raise _validation_http_exception(error) from error
+    db.expunge(report)
+    db.close()
+    return result
 
 
 def update_document(db: Session, report: Report, expected_version: int, content: dict, request_id: str) -> ReportDocument:

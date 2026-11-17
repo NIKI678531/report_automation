@@ -318,6 +318,82 @@ def test_unfinished_report_preview_keeps_layout_and_fixed_portfolio_rows(client)
         assert f'<span class="page-number">{page}</span>' in preview.text
 
 
+def test_review_scoped_preview_only_returns_opening_pages_and_is_not_cacheable(client):
+    report = create_report(client)
+
+    preview = client.post(f"/api/v1/reports/{report['id']}/preview?scope=review")
+
+    assert preview.status_code == 200, preview.text
+    assert preview.headers["cache-control"] == "no-store"
+    assert preview.headers["x-content-type-options"] == "nosniff"
+    assert preview.headers["content-encoding"] == "gzip"
+    assert preview.text.count('class="report-page') == 1
+    assert 'data-section-key="month_in_review"' in preview.text
+    assert 'data-section-key="company_news"' not in preview.text
+    assert 'data-section-key="constituents"' not in preview.text
+    assert 'data-section-key="analytics"' not in preview.text
+    assert 'data-section-key="disclaimer"' not in preview.text
+
+
+def test_chinese_review_scoped_preview_uses_frontend_font_assets(client):
+    report = client.post("/api/v1/reports", json={
+        "report_date": "2026-06-30",
+        "language_mode": "ZH_HANS",
+    }).json()
+
+    preview = client.post(f"/api/v1/reports/{report['id']}/preview?scope=review")
+
+    assert preview.status_code == 200, preview.text
+    assert "language-zh-hans" in preview.text
+    assert "Embedded Noto Sans CJK SC" in preview.text
+    assert 'src:url("data:font/' not in preview.text
+
+
+def test_review_scoped_preview_handles_twenty_concurrent_editors(client, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.core.database import get_db
+
+    report = create_report(client)
+    endpoint = f"/api/v1/reports/{report['id']}/preview?scope=review"
+    # The default test fixture intentionally uses one StaticPool connection, which cannot execute
+    # simultaneous cursors. Clone it to a file-backed pool that mirrors production's 5+5 limit.
+    source_engine = client.app.state.testing_sessionmaker.kw["bind"]
+    concurrent_engine = create_engine(
+        f"sqlite:///{tmp_path / 'concurrent-preview.db'}",
+        connect_args={"check_same_thread": False},
+        pool_size=5,
+        max_overflow=5,
+        pool_timeout=5,
+    )
+    with source_engine.raw_connection() as source, concurrent_engine.raw_connection() as target:
+        source.driver_connection.backup(target.driver_connection)
+    ConcurrentSession = sessionmaker(
+        bind=concurrent_engine, autoflush=False, expire_on_commit=False,
+    )
+
+    def concurrent_db():
+        db = ConcurrentSession()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    previous_dependency = client.app.dependency_overrides[get_db]
+    client.app.dependency_overrides[get_db] = concurrent_db
+    try:
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            responses = list(pool.map(lambda _: client.post(endpoint), range(20)))
+    finally:
+        client.app.dependency_overrides[get_db] = previous_dependency
+        concurrent_engine.dispose()
+
+    assert [response.status_code for response in responses] == [200] * 20
+    assert all(response.text.count('class="report-page') == 1 for response in responses)
+
+
 def test_simplified_chinese_variant_rebuilds_snapshot_lineage_and_is_independent(client):
     from sqlalchemy import select
 

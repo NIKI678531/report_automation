@@ -90,9 +90,10 @@ UAT 使用已配置的 UAT AWS profile。先确认目标账号：
 aws sts get-caller-identity
 # UAT 示例；PRD 对应 449732370091 和 docker-compose.prd.yml。
 aws ecr get-login-password --region ap-east-1 | docker login --username AWS --password-stdin 978533598453.dkr.ecr.ap-east-1.amazonaws.com
+export APP_BUILD_SHA=$(git rev-parse HEAD)
 docker compose -f docker-compose.uat.yml build
 # 同时保存完整 git SHA，必须在发布前保留已知可用版本。
-TAG=$(git rev-parse HEAD)
+TAG=$APP_BUILD_SHA
 REGISTRY=978533598453.dkr.ecr.ap-east-1.amazonaws.com
 for COMPONENT in srvapp webapp; do
   IMAGE="$REGISTRY/ih-uat-remote-fund-cmt-auto-$COMPONENT"
@@ -127,14 +128,19 @@ kubectl --context "$CONTEXT" cluster-info
 kubectl --context "$CONTEXT" apply -f k8s/uat/namespace.yaml -f k8s/uat/configmap.yaml
 sh k8s/create-secret.sh uat --context "$CONTEXT"
 kubectl --context "$CONTEXT" apply -f k8s/uat/
-# 首次 apply 会创建 Pod；已有 Deployment 需要显式 restart，latest/配置变化不会自动滚动。
-kubectl --context "$CONTEXT" -n ih rollout restart deploy/ih-uat-remote-fund-cmt-auto-srvapp
+# 将前后端和 migration 固定到同一次构建的 SHA；不要让两个地区各自解析可变 latest。
+SHA=REPLACE-WITH-FULL-GIT-SHA
+REGISTRY=978533598453.dkr.ecr.ap-east-1.amazonaws.com
+kubectl --context "$CONTEXT" -n ih set image deploy/ih-uat-remote-fund-cmt-auto-srvapp \
+  srvapp="$REGISTRY/ih-uat-remote-fund-cmt-auto-srvapp:$SHA" \
+  migrate="$REGISTRY/ih-uat-remote-fund-cmt-auto-srvapp:$SHA"
+kubectl --context "$CONTEXT" -n ih set image deploy/ih-uat-remote-fund-cmt-auto-webapp \
+  webapp="$REGISTRY/ih-uat-remote-fund-cmt-auto-webapp:$SHA"
 kubectl --context "$CONTEXT" -n ih rollout status deploy/ih-uat-remote-fund-cmt-auto-srvapp --timeout=10m
-kubectl --context "$CONTEXT" -n ih rollout restart deploy/ih-uat-remote-fund-cmt-auto-webapp
 kubectl --context "$CONTEXT" -n ih rollout status deploy/ih-uat-remote-fund-cmt-auto-webapp --timeout=5m
 ```
 
-首次部署可省略 restart，避免触发第二次迁移。PRD 将路径与对象名中的 `uat` 替换成 `prd`。
+PRD 将路径、对象名、账号和 registry 中的 `uat` 替换成 `prd`。
 不 apply `.txt` Secret 模板；更新 Secret 是整份更新，漏 key 会被本地校验拒绝。
 如果其他工具管理相同 Secret 字段，先协调所有权；脚本不强行覆盖 server-side apply 冲突。
 
@@ -142,13 +148,14 @@ kubectl --context "$CONTEXT" -n ih rollout status deploy/ih-uat-remote-fund-cmt-
 
 按 [CHECKLIST.md](CHECKLIST.md) 检查，日常命令见 [RUNBOOK.md](RUNBOOK.md)。
 API 容器的浅健康检查 `/api/v1/health` 只检查 API 响应；从 webapp/平台访问时路径为
-`/remote/fund-cmt-auto/api/v1/health`。nginx 探针 `/healthz` 不依赖 API。
+`/remote/fund-cmt-auto/api/v1/health`，响应中的 `build_sha` 必须等于本次发布 SHA；前端远程
+根元素的 `data-build-sha` 也必须相同。nginx 探针 `/healthz` 不依赖 API。
 深检查 `/api/v1/health/deep`（或容器内 `python -m app.core.health`）只返回数据库状态，
 不输出连接信息；它不是 Kubernetes 探针。预检脚本会检查导出临时目录；三格式下载需单独验证生成、响应与临时文件清理。
 
-回滚时先保存故障日志，从发布记录取上一对已知可用 git SHA 镜像，分别重新推成 latest，再 restart 两个 Deployment。
-也可同时将 YAML 中 API、migration 和 webapp 的 image 改成旧 SHA 后 apply。
-不要仅运行 `rollout undo`：相同 latest 标签不会恢复旧镜像，ConfigMap/Secret 也不会随 ReplicaSet 回退。
+回滚时先保存故障日志，从发布记录取上一对已知可用 git SHA 镜像，用上述 `kubectl set image`
+同时将 API、migration 和 webapp 改成旧 SHA。
+不要仅运行 `rollout undo`：ConfigMap/Secret 不会随 ReplicaSet 回退，且必须保证三个容器仍为同一 SHA。
 数据库默认前向修复；旧镜像必须兼容当前 schema，不能随意执行 downgrade。
 若回滚到成品持久化版本，须同步恢复其存储配置、凭据和匹配前端；新导出没有历史文件可迁移。
 若回滚到 Celery 版本，必须同步恢复其 Redis/worker、TASK_MODE 和 Secret，不能只退镜像。

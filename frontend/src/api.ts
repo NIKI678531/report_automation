@@ -394,7 +394,7 @@ export const api = {
   finalize: (id: string, version: number) => request<Report>(`/reports/${id}/finalize`, { method: "POST", body: JSON.stringify({ version }) }),
   saveDocument: (id: string, version: number, content: Record<string, unknown>) => request<{ version: number }>(`/reports/${id}/document`, { method: "PATCH", body: JSON.stringify({ version, content }) }),
   previewDraft: async (id: string, version: number, content: Record<string, unknown>, signal?: AbortSignal) => {
-    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview`), {
+    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview?scope=review`), {
       method: "POST",
       body: JSON.stringify({ version, content }),
       signal,
@@ -402,7 +402,7 @@ export const api = {
     return response.text();
   },
   previewSaved: async (id: string, signal?: AbortSignal) => {
-    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview`), { signal });
+    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview?scope=review`), { signal });
     return response.text();
   },
   listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),

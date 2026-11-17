@@ -74,4 +74,4 @@ def test_ecr_builds_need_no_secrets_or_login_arguments(tmp_path, environment, ac
     for component, service in services.items():
         assert service["image"] == f"{account}.dkr.ecr.ap-east-1.amazonaws.com/ih-{environment}-remote-fund-cmt-auto-{component}:latest"
         assert not service.get("environment")
-        assert not service["build"].get("args")
+        assert service["build"].get("args") == {"APP_BUILD_SHA": "development"}

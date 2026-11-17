@@ -25,6 +25,14 @@ import {
   Trash2,
 } from "lucide-react";
 import GridLayout, { WidthProvider, type Layout } from "react-grid-layout";
+import carlito400Url from "@fontsource/carlito/files/carlito-latin-400-normal.woff2";
+import carlito400ItalicUrl from "@fontsource/carlito/files/carlito-latin-400-italic.woff2";
+import carlito700Url from "@fontsource/carlito/files/carlito-latin-700-normal.woff2";
+import carlito700ItalicUrl from "@fontsource/carlito/files/carlito-latin-700-italic.woff2";
+import notoSansSc400Url from "@fontsource/noto-sans-sc/files/noto-sans-sc-chinese-simplified-400-normal.woff2";
+import notoSansSc700Url from "@fontsource/noto-sans-sc/files/noto-sans-sc-chinese-simplified-700-normal.woff2";
+import notoSansTc400Url from "@fontsource/noto-sans-tc/files/noto-sans-tc-chinese-traditional-400-normal.woff2";
+import notoSansTc700Url from "@fontsource/noto-sans-tc/files/noto-sans-tc-chinese-traditional-700-normal.woff2";
 import { useLocale } from "../../i18n";
 import { MarkerInput, MarkerTextarea } from "../../components/SuperscriptMarkerControl";
 import { BoundedNumberInput, RichTypographyEditor, TextStyleControls, textStyleProperties } from "./RichTypographyEditor";
@@ -352,6 +360,32 @@ const PREVIEW_DOCUMENT_STYLE = `
   .report-page:not([data-section-key="month_in_review"]):not([data-review-preview-fallback="true"]) { display: none !important; }
 `;
 
+// PDF rendering uses the metric-compatible Carlito face installed in the backend image. Embed
+// that exact family in the browser preview as a versioned frontend asset as well; otherwise a
+// workstation with Microsoft Calibri and one without it can wrap the same report differently.
+// The Calibri alias also covers existing inline report styles without introducing a second set of
+// layout CSS.
+function previewFontFace(family: string, source: string, weight: number, style = "normal"): string {
+  return `@font-face{font-family:'${family}';font-style:${style};font-display:block;font-weight:${weight};src:url('${source}') format('woff2');}`;
+}
+
+const latinFaces = [
+  [carlito400Url, 400, "normal"],
+  [carlito400ItalicUrl, 400, "italic"],
+  [carlito700Url, 700, "normal"],
+  [carlito700ItalicUrl, 700, "italic"],
+] as const;
+const PREVIEW_LATIN_FONT_CSS = latinFaces.flatMap(([source, weight, style]) => [
+  previewFontFace("Carlito", source, weight, style),
+  previewFontFace("Calibri", source, weight, style),
+]).join("\n");
+const PREVIEW_CJK_FONT_CSS = [
+  previewFontFace("Embedded Noto Sans CJK SC", notoSansSc400Url, 400),
+  previewFontFace("Embedded Noto Sans CJK SC", notoSansSc700Url, 700),
+  previewFontFace("Embedded Noto Sans CJK TC", notoSansTc400Url, 400),
+  previewFontFace("Embedded Noto Sans CJK TC", notoSansTc700Url, 700),
+].join("\n");
+
 function reviewPreviewPages(document: Document): HTMLElement[] {
   const tagged = [...document.querySelectorAll<HTMLElement>('.report-page[data-section-key="month_in_review"]')];
   if (tagged.length) return tagged;
@@ -372,7 +406,7 @@ export function preparePreviewDocument(document: Document): HTMLElement[] {
   if (!document.querySelector("style[data-review-preview]")) {
     const style = document.createElement("style");
     style.dataset.reviewPreview = "true";
-    style.textContent = PREVIEW_DOCUMENT_STYLE;
+    style.textContent = `${PREVIEW_LATIN_FONT_CSS}\n${PREVIEW_CJK_FONT_CSS}\n${PREVIEW_DOCUMENT_STYLE}`;
     document.head.append(style);
   }
   return pages;
@@ -547,7 +581,10 @@ function PreviewPane({ html, busy, error, collapsed, onToggle, selectedId, onSel
   }, [onGroupDownRoomChange, resizePreview]);
   return <section className="review-preview-pane" aria-label={t("livePreview")}>
     <header><span><Eye size={16} /> {t("livePreview")}</span><div className="review-preview-header-actions">{busy && <small>{t("updatingPreview")}</small>}<button type="button" className="icon-button review-preview-toggle" aria-label={t(collapsed ? "expandPreview" : "collapsePreview")} title={t(collapsed ? "expandPreview" : "collapsePreview")} aria-expanded={!collapsed} aria-controls={contentId} onClick={onToggle}>{collapsed ? <ChevronLeft size={17} /> : <ChevronRight size={17} />}</button></div></header>
-    <div id={contentId} className="review-preview-content">{error ? <div className="review-preview-error" role="status">{error}</div> : reviewHtml ? <iframe ref={iframeRef} title={t("livePreview")} sandbox="allow-same-origin" srcDoc={reviewHtml} onLoad={bindPreview} /> : <div className="review-preview-placeholder">{t("updatingPreview")}</div>}</div>
+    <div id={contentId} className="review-preview-content">
+      {reviewHtml ? <iframe ref={iframeRef} title={t("livePreview")} sandbox="allow-same-origin" srcDoc={reviewHtml} onLoad={bindPreview} /> : <div className="review-preview-placeholder">{t("updatingPreview")}</div>}
+      {error && <div className="review-preview-error" role="status">{error}</div>}
+    </div>
   </section>;
 }
 

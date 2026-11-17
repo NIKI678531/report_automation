@@ -195,6 +195,19 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const previewSequence = useRef(0);
+  type PreviewJob = {
+    sequence: number;
+    reportId: string;
+    frozen: boolean;
+    version: number;
+    content: JsonRecord;
+  };
+  const previewQueued = useRef<PreviewJob | null>(null);
+  const previewRunning = useRef(false);
+  const previewTimer = useRef<number | null>(null);
+  const previewController = useRef<AbortController | null>(null);
+  const previewMounted = useRef(true);
+  const runPreviewRef = useRef<(job: PreviewJob) => void>(() => undefined);
   useEffect(() => {
     setBlocks(initialBlocks);
     setPresentation(initialPresentation);
@@ -231,24 +244,67 @@ function ReviewModule({ report, busy, run, registerPendingSave = IGNORE_PENDING_
   }, [blocks, content, defaultReviewTitle, historicalFootnote, presentation, terminology, titleOverrides]);
   const persist = useCallback(async () => { await api.saveDocument(report.id, version, draftContent); }, [draftContent, report.id, version]);
   const frozen = isReportReadOnly(report);
+  runPreviewRef.current = (job: PreviewJob) => {
+    if (!previewMounted.current) return;
+    previewRunning.current = true;
+    const controller = new AbortController();
+    previewController.current = controller;
+    const request = job.frozen
+      ? api.previewSaved(job.reportId, controller.signal)
+      : api.previewDraft(job.reportId, job.version, job.content, controller.signal);
+    void request
+      .then((html) => {
+        if (previewMounted.current && job.sequence === previewSequence.current) {
+          setPreviewHtml(html);
+          setPreviewError("");
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!controller.signal.aborted && previewMounted.current && job.sequence === previewSequence.current) {
+          setPreviewError(String(caught));
+        }
+      })
+      .finally(() => {
+        if (previewController.current === controller) previewController.current = null;
+        previewRunning.current = false;
+        if (!previewMounted.current) return;
+        const queued = previewQueued.current;
+        if (queued && queued.sequence > job.sequence) {
+          previewQueued.current = null;
+          runPreviewRef.current(queued);
+        } else if (job.sequence === previewSequence.current) {
+          setPreviewBusy(false);
+        }
+      });
+  };
+  useEffect(() => {
+    previewMounted.current = true;
+    return () => {
+      previewMounted.current = false;
+      if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
+      previewController.current?.abort();
+    };
+  }, []);
   useEffect(() => {
     if (!report.latest_document) return undefined;
-    const controller = new AbortController();
     const sequence = ++previewSequence.current;
+    const job = { sequence, reportId: report.id, frozen, version, content: draftContent };
+    previewQueued.current = job;
     setPreviewBusy(true);
     setPreviewError("");
-    const timer = window.setTimeout(() => {
-      (frozen
-        ? api.previewSaved(report.id, controller.signal)
-        : api.previewDraft(report.id, version, draftContent, controller.signal))
-        .then((html) => { if (sequence === previewSequence.current) setPreviewHtml(html); })
-        .catch((caught: unknown) => {
-          if (controller.signal.aborted || sequence !== previewSequence.current) return;
-          setPreviewError(String(caught));
-        })
-        .finally(() => { if (sequence === previewSequence.current) setPreviewBusy(false); });
+    if (previewTimer.current !== null) window.clearTimeout(previewTimer.current);
+    previewTimer.current = window.setTimeout(() => {
+      previewTimer.current = null;
+      if (previewRunning.current || previewQueued.current?.sequence !== sequence) return;
+      previewQueued.current = null;
+      runPreviewRef.current(job);
     }, 300);
-    return () => { window.clearTimeout(timer); controller.abort(); };
+    return () => {
+      if (previewTimer.current !== null) {
+        window.clearTimeout(previewTimer.current);
+        previewTimer.current = null;
+      }
+    };
   }, [draftContent, frozen, report.id, report.latest_document, version]);
   const dirty = !frozen && (
     JSON.stringify(blocks) !== JSON.stringify(initialBlocks)

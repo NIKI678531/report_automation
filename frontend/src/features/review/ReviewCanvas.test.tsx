@@ -621,6 +621,11 @@ describe("Review page-one layout controls", () => {
     expect(reviewHtml).not.toContain("Company News");
     expect(reviewHtml).toContain("width: 210mm !important");
     expect(reviewHtml).toContain("height: 297mm !important");
+    expect(reviewHtml).toContain("font-family:'Carlito'");
+    expect(reviewHtml).toContain("font-family:'Calibri'");
+    expect(reviewHtml).toContain("font-family:'Embedded Noto Sans CJK SC'");
+    expect(reviewHtml).toContain("font-family:'Embedded Noto Sans CJK TC'");
+    expect(reviewHtml).toContain("font-display:block");
   });
 
   it("waits for an iframe srcDoc document to create its head before binding the preview", () => {

@@ -462,6 +462,7 @@ def render_html(
     document: dict[str, Any],
     *,
     preview: bool = False,
+    opening_only: bool = False,
     layout_mode: Literal["continuous", "paged"] = "continuous",
 ) -> str:
     if preview:
@@ -522,7 +523,13 @@ def render_html(
         sections=sections,
         language_mode=language_mode,
         html_language="zh-CN" if is_zh_hans(language_mode) else "zh-HK" if is_zh_hant(language_mode) else "en",
-        cjk_font_css=_embedded_cjk_font_css(language_mode) if is_chinese(language_mode) else "",
+        # The interactive opening-page preview receives cacheable WOFF assets from the frontend.
+        # PDF/full HTML remain self-contained and therefore continue to embed the approved faces.
+        cjk_font_css=(
+            _embedded_cjk_font_css(language_mode)
+            if is_chinese(language_mode) and not opening_only
+            else ""
+        ),
         # Exporter-level contract: legacy finalized documents keep their content identity while
         # all three data footnotes share the current Constituents/Analytics typography.
         footnote_tokens=tokens.get("footnote") or _render_tokens("3033-v5")["footnote"],
@@ -545,6 +552,7 @@ def render_html(
         disclaimer=disclaimer.template_context(),
         logo_data=logo,
         review_title=review_display_title(document),
+        preview_opening_only=opening_only,
         enable_review_layout=enable_review_layout,
         page_one=page_one,
         review_page_count=(

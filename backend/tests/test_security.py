@@ -515,7 +515,9 @@ def test_entra_refuses_a_non_bearer_authorization_header(client, entra_settings)
 
 def test_entra_still_serves_the_health_probe(client, entra_settings):
     """A liveness probe holds no token, so an ENTRA deployment would never come up healthy."""
-    assert client.get("/api/v1/health").status_code == 200
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    assert response.json()["build_sha"] == settings.app_build_sha
 
 
 # --- signature validation; needs the [entra] extra -------------------------------------------

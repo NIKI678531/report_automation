@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12.13-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
+ARG APP_BUILD_SHA=development
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/backend \
@@ -7,7 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \
     TZ=Asia/Hong_Kong \
     AUTH_MODE=REMOTE \
-    TASK_MODE=EAGER
+    TASK_MODE=EAGER \
+    APP_BUILD_SHA=${APP_BUILD_SHA}
+LABEL org.opencontainers.image.revision=${APP_BUILD_SHA}
 WORKDIR /app/backend
 # Calibri-compatible Carlito and both Noto packages are the existing report font contract.
 RUN apt-get update \

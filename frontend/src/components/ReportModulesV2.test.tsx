@@ -728,7 +728,7 @@ describe("report module data responsibilities", () => {
     expect(screen.getByRole("button", { name: "Restore default: Top 3033.HK positions" })).toHaveProperty("disabled", false);
   });
 
-  it("previews unsaved Review changes and ignores an older response", async () => {
+  it("coalesces unsaved Review changes behind one in-flight preview", async () => {
     const pending: Array<{ resolve: (html: string) => void }> = [];
     const previewDraft = vi.spyOn(api, "previewDraft").mockImplementation(() => new Promise<string>((resolve) => pending.push({ resolve })));
 
@@ -736,8 +736,15 @@ describe("report module data responsibilities", () => {
     await waitFor(() => expect(previewDraft).toHaveBeenCalledTimes(1), { timeout: 1200 });
 
     fireEvent.change(screen.getByRole("textbox", { name: "Historical performance footnote" }), {
+      target: { value: "Intermediate footnote draft." },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Historical performance footnote" }), {
       target: { value: "Unsaved footnote draft." },
     });
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+    expect(previewDraft).toHaveBeenCalledTimes(1);
+
+    pending[0].resolve('<html><body data-preview="old"></body></html>');
     await waitFor(() => expect(previewDraft).toHaveBeenCalledTimes(2), { timeout: 1200 });
     expect(previewDraft.mock.calls[1][2]).toEqual(expect.objectContaining({
       sections: expect.objectContaining({
@@ -748,8 +755,6 @@ describe("report module data responsibilities", () => {
 
     pending[1].resolve('<html><body data-preview="new"></body></html>');
     await waitFor(() => expect(screen.getByTitle("Live paged preview").getAttribute("srcdoc")).toContain('data-preview="new"'));
-    pending[0].resolve('<html><body data-preview="old"></body></html>');
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
     expect(screen.getByTitle("Live paged preview").getAttribute("srcdoc")).toContain('data-preview="new"');
   });
 

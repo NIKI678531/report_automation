@@ -30,7 +30,7 @@ export default function RemoteApp({ standalone = false }: { standalone?: boolean
     document.head.append(fontSheet);
     return () => fontSheet.remove();
   }, []);
-  return <div ref={element} data-fund-cmt-auto="">
+  return <div ref={element} data-fund-cmt-auto="" data-build-sha={__APP_BUILD_SHA__}>
     {shadow && createPortal(<>
       <style>{surfaceCss}</style>
       <div className="fund-cmt-surface">

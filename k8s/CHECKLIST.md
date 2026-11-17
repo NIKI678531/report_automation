@@ -22,6 +22,7 @@
 - [ ] 宿主注册 `fundCmtAuto` / `./App` / `/fund-cmt-auto`，remote URL 为 `/remote/fund-cmt-auto/remoteEntry.js`。
 - [ ] `remoteEntry.js` 为 JavaScript、Cache-Control 为 no-store；不存在的 chunk 返回 404，不回退 HTML。
 - [ ] 保存当前镜像 digest/版本及配置版本；新镜像同时保留 git SHA 标签。
+- [ ] API、migration、webapp 固定到同一完整 git SHA，不以两地各自解析的 `latest` 作为发布基线。
 - [ ] 等待渲染和翻译任务结束；确认 Recreate 短暂停机窗口。
 
 ## 发布后
@@ -29,6 +30,9 @@
 - [ ] migration init container 完成，API 为 1/1 Ready，webapp 为 1/1 Ready。
 - [ ] 日志有应用 INFO、没有探针刷屏，没有启动配置错误。
 - [ ] webapp `/healthz` 与 `/remote/fund-cmt-auto/api/v1/health` 均为 200，深检查各依赖为 ok。
+- [ ] API `build_sha`、前端 `data-build-sha` 和三个 Pod image tag/imageID 一致；新加坡与香港检查结果一致。
+- [ ] 20 名并发编辑的 Review Live Preview 无空白、无数据库连接池超时；响应为 gzip 且仅含 opening pages。
+- [ ] 用 Microsoft Word 打开 DOCX，第一页同时包含 Month in Review、完整 Historical Performance 表和 footnote，第二页才开始 Company News。
 - [ ] 宿主加载、返回/重新进入、编辑保存、预览/签名下载正常；宿主样式和语言保持正常。
 - [ ] 通过远程平台实际创建/编辑报告、取得所需数据、按需下载 HTML/PDF/DOCX；重复下载、归档定稿下载正常，临时文件清理且 export.generated 审计存在。
 - [ ] 上游 provider 仅对业务实际启用的能力做真实验证；关闭的翻译保持 DISABLED。

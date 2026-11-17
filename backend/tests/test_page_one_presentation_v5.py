@@ -8,6 +8,7 @@ from zipfile import ZipFile
 import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 
 from app.domain.document import initial_document, validate_document_content
 from app.core.config import settings
@@ -287,6 +288,38 @@ def test_v5_docx_footer_follows_historical_to_its_review_section(tmp_path):
     second_footer = "\n".join(paragraph.text for paragraph in exported.sections[1].footer.paragraphs)
     assert "Source¹" not in first_footer
     assert "Source¹" in second_footer
+
+
+def test_v5_docx_keeps_historical_heading_and_complete_table_in_one_wrapper_row(tmp_path):
+    content = _document()
+    content["sections"]["historical_performance"]["rows"] = [
+        {
+            "name": "3033.HK",
+            "return_1m": "0.01",
+            "return_3m": "0.02",
+            "return_6m": "0.03",
+            "return_ytd": "0.04",
+        },
+        {
+            "name": "HSTECH Index",
+            "return_1m": "0.05",
+            "return_3m": "0.06",
+            "return_6m": "0.07",
+            "return_ytd": "0.08",
+        },
+    ]
+    destination = tmp_path / "v5-history-wrapper.docx"
+
+    render_docx(_report(), content, destination)
+
+    exported = Document(destination)
+    wrapper = next(
+        table for table in exported.tables
+        if "Historical Performance" in table.cell(0, 0).text
+    )
+    assert wrapper.rows[0]._tr.trPr.find(qn("w:cantSplit")) is not None
+    assert len(wrapper.cell(0, 0).tables) == 1
+    assert len(wrapper.cell(0, 0).tables[0].rows) == 3
 
 
 def test_finalized_v4_content_can_still_render_with_legacy_body_footnote():

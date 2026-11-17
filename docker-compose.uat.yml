@@ -6,8 +6,12 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        APP_BUILD_SHA: ${APP_BUILD_SHA:-development}
   webapp:
     image: 978533598453.dkr.ecr.ap-east-1.amazonaws.com/ih-uat-remote-fund-cmt-auto-webapp:latest
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      args:
+        APP_BUILD_SHA: ${APP_BUILD_SHA:-development}

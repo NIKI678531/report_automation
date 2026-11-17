@@ -351,6 +351,7 @@
 {% set analytics_page = review_page_count + 3 if v4 else 4 %}
 {% set disclaimer_page = review_page_count + 4 if v4 else 5 %}
 
+{% if not preview_opening_only %}
 <section class="report-page" data-page="{{ company_page }}" data-section-key="company_news">
   {{ chrome(company_page) }}<main class="page-body"><h2>{{ t('company_news') }}</h2><ul class="news-list">{% for item in sections.company_news %}{% set source = item.get('source_name', '') %}{% if item.get('title') or item.get('summary') or source %}<li><div class="news-title">{{ item.get('title', '') }}</div>{% if source %}<div class="news-meta">{{ source }}</div>{% endif %}<div>{{ item.get('summary', '') }}</div></li>{% endif %}{% endfor %}</ul></main>
 </section>
@@ -370,6 +371,7 @@
   {{ chrome(disclaimer_page, 'Monthly Commentary | ' ~ disclaimer_report_date_long) }}
   <main class="page-body"><h2 id="disclaimer-title">{{ disclaimer.title }}</h2><div class="disclaimer-copy">{% for paragraph in disclaimer.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}<p class="disclaimer-issuer">{{ disclaimer.issuer }}</p></div></main>
 </section>
+{% endif %}
 </article>
 {% if product_sidebar %}</div>{% endif %}
 </body></html>

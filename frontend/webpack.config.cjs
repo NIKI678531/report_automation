@@ -1,4 +1,5 @@
 const path = require('node:path');
+const webpack = require('webpack');
 const { container: { ModuleFederationPlugin } } = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
@@ -27,6 +28,9 @@ module.exports = (_env, argv) => ({
     { test: /\.(woff2?|ttf|svg|png)$/, type: 'asset/resource' },
   ] },
   plugins: [
+    new webpack.DefinePlugin({
+      __APP_BUILD_SHA__: JSON.stringify(process.env.APP_BUILD_SHA || 'development'),
+    }),
     new ModuleFederationPlugin({
       name: 'fundCmtAuto',
       filename: 'remoteEntry.js',

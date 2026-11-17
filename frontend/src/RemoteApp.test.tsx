@@ -15,7 +15,9 @@ it("keeps host history/language untouched and cleans up on strict-mode unmount",
   document.documentElement.lang = "fr";
   const hostState = window.history.state;
   const view = render(<StrictMode><RemoteApp /></StrictMode>);
-  const shadow = view.container.querySelector("[data-fund-cmt-auto]")!.shadowRoot!;
+  const remoteRoot = view.container.querySelector("[data-fund-cmt-auto]")!;
+  expect(remoteRoot.getAttribute("data-build-sha")).toBe("test-build");
+  const shadow = remoteRoot.shadowRoot!;
   const remote = within(shadow as unknown as HTMLElement);
   await remote.findByRole("heading", { name: "Report center" });
   expect(view.container.querySelector("h1")).toBeNull();

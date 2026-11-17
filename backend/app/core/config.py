@@ -95,6 +95,7 @@ _LOCAL_DATAWAREHOUSE_CANDIDATES = (
 
 class Settings(BaseModel):
     app_name: str = "Monthly Commentary API"
+    app_build_sha: str = _env_str("APP_BUILD_SHA", "development")
     api_prefix: str = "/api/v1"
     # Anchored to this file instead of the CWD: alembic runs from backend/ while uvicorn runs from the
     # repository root, and a relative sqlite URL made each of them create its own stray database file.

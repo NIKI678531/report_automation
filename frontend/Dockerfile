@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.7
 # Root context is intentional: this repository uses npm workspaces and one root lockfile.
 FROM node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS build
+ARG APP_BUILD_SHA=development
+ENV APP_BUILD_SHA=${APP_BUILD_SHA}
 WORKDIR /src
 COPY package.json package-lock.json ./
 COPY frontend/package.json ./frontend/package.json
@@ -10,6 +12,8 @@ COPY frontend ./frontend
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.30.0-alpine@sha256:808f7846d21a9c94cf53833e8807a00a33fd0b65cc47fb05b79efe366c2d201f
+ARG APP_BUILD_SHA=development
+LABEL org.opencontainers.image.revision=${APP_BUILD_SHA}
 USER root
 RUN apk add --no-cache tzdata \
  && rm -f /etc/nginx/conf.d/default.conf \

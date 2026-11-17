@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from sqlalchemy import or_, select
 
+from app.core.config import settings
 from app.domain.models import AuditEvent
 from .deps import Db, require_role
 
@@ -20,7 +21,12 @@ MAX_AUDIT_PAGE = 500
 
 @router.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "commentary-api", "architecture": {"frontend": "React", "backend": "FastAPI"}}
+    return {
+        "status": "ok",
+        "service": "commentary-api",
+        "build_sha": settings.app_build_sha,
+        "architecture": {"frontend": "React", "backend": "FastAPI"},
+    }
 
 
 @router.get("/health/deep", dependencies=[require_role("ADMIN", error_code="HEALTH_ACCESS_FORBIDDEN")])

@@ -6,7 +6,7 @@ Everything numeric arrives through the snapshot and calculation endpoints in
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Header, Response, status
 from sqlalchemy import select
@@ -186,9 +186,15 @@ def finalize(report_id: str, command: FinalizeRequest, db: Db, x_request_id: Req
     return service.finalize(db, report, command.version, x_request_id)
 
 
-def _preview_response(report: Report, content: dict) -> Response:
+def _preview_response(report: Report, content: dict, *, opening_only: bool = False) -> Response:
     try:
-        html = render_html(report, content, preview=True, layout_mode="paged")
+        html = render_html(
+            report,
+            content,
+            preview=True,
+            opening_only=opening_only,
+            layout_mode="paged",
+        )
     except DisclaimerResourceError as error:
         raise HTTPException(status_code=503, detail={
             "error_code": "DISCLAIMER_RESOURCE_INVALID",
@@ -196,15 +202,24 @@ def _preview_response(report: Report, content: dict) -> Response:
             "severity": "BLOCKING",
             "fix_hint": "Restore the approved versioned disclaimer resource before previewing.",
         }) from error
-    return Response(html, media_type="text/html")
+    return Response(
+        html,
+        media_type="text/html",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.get("/reports/{report_id}/preview", include_in_schema=False)
-def preview_saved(report_id: str, db: Db) -> Response:
+def preview_saved(
+    report_id: str,
+    db: Db,
+    scope: Literal["report", "review"] = "report",
+) -> Response:
     report = service.get_report(db, report_id)
     return _preview_response(
         report,
         service.preview_document_content(db, report),
+        opening_only=scope == "review",
     )
 
 
@@ -213,6 +228,7 @@ def preview_draft(
     report_id: str,
     db: Db,
     command: PreviewRequest | None = None,
+    scope: Literal["report", "review"] = "report",
 ) -> Response:
     report = service.get_report(db, report_id)
     return _preview_response(
@@ -223,4 +239,5 @@ def preview_draft(
             expected_version=command.version if command else None,
             content=command.content if command else None,
         ),
+        opening_only=scope == "review",
     )

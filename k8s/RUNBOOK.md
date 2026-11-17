@@ -21,7 +21,9 @@ kubectl --context "$CONTEXT" -n ih exec deploy/$APP-webapp -c webapp -- wget -qO
 
 | 症状 | 检查 |
 |---|---|
-| ImagePullBackOff | ECR 账号/仓库名、latest 是否已推送、节点角色权限 |
+| ImagePullBackOff | ECR 账号/仓库名、指定 git SHA 标签是否已推送、节点角色权限 |
+| 两地预览不同 | 对比 API `/health` 的 `build_sha`、前端 `data-build-sha`、Pod imageID；三者及两地必须一致 |
+| Live Preview 空白／长时间更新 | 检查 preview 状态码、gzip、响应大小及 MySQL pool timeout；确认请求使用 `scope=review` |
 | Init:CrashLoopBackOff | migrate 日志、必填配置、MySQL 权限、迁移 schema 状态 |
 | srvapp 0/1 Ready | 检查 API 日志、启动配置、内存/CPU 和正在执行的长请求 |
 | nginx FATAL | API_UPSTREAM、conf.d/tmp 权限、envsubst 过滤器 |
