@@ -446,11 +446,11 @@ def test_simplified_chinese_variant_rebuilds_snapshot_lineage_and_is_independent
     preview = client.post(f"/api/v1/reports/{variant['id']}/preview")
     assert preview.status_code == 200, preview.text
     assert 'lang="zh-CN"' in preview.text
-    assert '@font-face{font-family:"Embedded Noto Sans CJK SC"' in preview.text
-    # The face must travel inside the document rather than be named and hoped for. Which container
-    # carries it depends on the host: a variable .ttf on Windows, Debian's .ttc collection in the
-    # image and on CI — asserting one of them asserts the developer's laptop, not the property.
-    assert 'src:url("data:font/' in preview.text
+    # Interactive previews use the frontend's cacheable WOFF2 assets. Keeping the full Noto TTC
+    # collections out of this response avoids a roughly 53 MB document crossing the proxy.
+    assert '@font-face{font-family:"Embedded Noto Sans CJK SC"' not in preview.text
+    assert 'src:url("data:font/' not in preview.text
+    assert len(preview.content) < 500_000
     assert "公司新闻" in preview.text
     assert "Company News" not in preview.text
     assert 'data-layout-mode="paged"' in preview.text

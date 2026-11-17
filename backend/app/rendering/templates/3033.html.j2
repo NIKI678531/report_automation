@@ -14,10 +14,10 @@
     body.language-zh-hant { font-family:"Embedded Noto Sans CJK TC","Noto Sans CJK TC","PingFang HK","Microsoft JhengHei",Calibri,Carlito,Arial,sans-serif; }
     .report-page { position:relative; width:210mm; height:297mm; margin:8mm auto; padding:5mm 7mm 15mm; background:var(--paper); overflow:hidden; page-break-after:always; }
     .report-page:last-child { page-break-after:auto; }
-    .page-header { height:8mm; color:var(--deep); font-size:11pt; border-bottom:0.45pt solid var(--deep); padding:0 3mm; }
+    .page-header { height:8mm; color:var(--deep); font-size:{{ page_tokens.headerFontPt }}pt; border-bottom:0.45pt solid var(--deep); padding:0 3mm; }
     .page-body { padding:3mm 3mm 0; }
     .page-footer { position:absolute; left:10mm; right:8mm; bottom:3mm; height:12mm; }
-    .page-footer img { position:absolute; right:0; bottom:0; width:44mm; height:auto; }
+    .page-footer img { position:absolute; right:0; bottom:0; width:{{ page_tokens.footerLogoWidthMm }}mm; height:auto; }
     .page-number { position:absolute; right:0; bottom:-1.5mm; transform:translateX(5mm); color:#777; font-size:8pt; }
     h1 { margin:0 0 1.5mm; padding-bottom:3mm; border-bottom:0.45pt solid var(--deep); color:var(--deep); font-size:24pt; line-height:1.05; }
     .report-title-line { display:block; }

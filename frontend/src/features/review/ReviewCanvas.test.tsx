@@ -12,6 +12,7 @@ import {
   pageOnePreviewHtml,
   pageOnePresentation,
   preparePreviewDocument,
+  reportPreviewHtml,
   retargetHistoricalFootnoteStyles,
   richHtmlToPlainText,
   type PageOnePresentation,
@@ -626,6 +627,25 @@ describe("Review page-one layout controls", () => {
     expect(reviewHtml).toContain("font-family:'Embedded Noto Sans CJK SC'");
     expect(reviewHtml).toContain("font-family:'Embedded Noto Sans CJK TC'");
     expect(reviewHtml).toContain("font-display:block");
+  });
+
+  it("keeps every page in the full preview while using the same fonts and fixed A4 canvas", () => {
+    const previewHtml = `<!doctype html><html><head></head><body><article class="report-document">
+      <section class="report-page" data-page="1" data-section-key="month_in_review">Review</section>
+      <section class="report-page" data-page="2" data-section-key="company_news">Company News</section>
+    </article></body></html>`;
+
+    const reportHtml = reportPreviewHtml(previewHtml);
+
+    expect(reportHtml).toContain("Review");
+    expect(reportHtml).toContain("Company News");
+    expect(reportHtml).toContain('data-report-preview="true"');
+    expect(reportHtml).toContain('data-preview-csp="true"');
+    expect(reportHtml).toContain("default-src 'none'");
+    expect(reportHtml).toContain("font-family:'Calibri'");
+    expect(reportHtml).toContain("font-family:'Embedded Noto Sans CJK SC'");
+    expect(reportHtml).toContain("width: 210mm !important");
+    expect(reportHtml).toContain("height: 297mm !important");
   });
 
   it("waits for an iframe srcDoc document to create its head before binding the preview", () => {

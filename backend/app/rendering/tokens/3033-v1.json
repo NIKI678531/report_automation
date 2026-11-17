@@ -10,7 +10,9 @@
     "marginTopMm": 7.0,
     "marginRightMm": 10.0,
     "marginBottomMm": 12.0,
-    "marginLeftMm": 10.0
+    "marginLeftMm": 10.0,
+    "headerFontPt": 11.0,
+    "footerLogoWidthMm": 44.0
   },
   "font": {
     "family": "Calibri, Carlito, Arial, sans-serif",

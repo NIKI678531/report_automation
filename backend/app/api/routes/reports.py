@@ -193,6 +193,10 @@ def _preview_response(report: Report, content: dict, *, opening_only: bool = Fal
             content,
             preview=True,
             opening_only=opening_only,
+            # Interactive previews receive the same cacheable WOFF2 faces from the frontend.
+            # Embedding two complete Noto TTC collections made a Chinese full-report preview
+            # roughly 53 MB before compression and exposed it to proxy truncation/corruption.
+            embed_cjk_fonts=False,
             layout_mode="paged",
         )
     except DisclaimerResourceError as error:

@@ -401,8 +401,8 @@ export const api = {
     });
     return response.text();
   },
-  previewSaved: async (id: string, signal?: AbortSignal) => {
-    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview?scope=review`), { signal });
+  previewSaved: async (id: string, signal?: AbortSignal, scope: "review" | "report" = "review") => {
+    const response = await fetchChecked(apiUrl(`/reports/${encodeURIComponent(id)}/preview?scope=${scope}`), { signal });
     return response.text();
   },
   listDatasets: (id: string) => request<DatasetSlot[]>(`/reports/${id}/datasets`),

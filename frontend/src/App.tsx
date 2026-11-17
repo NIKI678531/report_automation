@@ -4,11 +4,11 @@ import { AlertTriangle, Archive, ArrowLeft, CalendarDays, ChevronDown, Download,
 import { api, type OutputFormat, type Product, type Report, type ReportLanguage } from "./api";
 import { type ModuleId, ModuleNav } from "./components/ModuleNav";
 import { ReportModule } from "./components/ReportModulesV2";
+import { reportPreviewHtml } from "./features/review/ReviewCanvas";
 import { TranslationStatus } from "./features/review/TranslationStatus";
 import type { PendingSave, RegisterPendingSave } from "./pendingSave";
 import { FOOTNOTE_SECTIONS, isReportReadOnly, reportsForContext, reviewHasContent, selectReportForMonth } from "./reportModules";
 import { LocaleProvider, reportLocale, useLocale, type Locale } from "./i18n";
-import { apiUrl } from "./remoteConfig";
 
 const PRODUCT_CODE = "3033";
 const OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string }> = [
@@ -579,11 +579,16 @@ function ReportEditor({ initial, activeModule, setActiveModule }: { initial: { r
     preview.opener = null;
     setBusy(true);
     setError("");
+    let previewUrl = "";
     try {
       const current = await flushPendingEdits(selected);
       if (!current) throw new Error(t("unavailable"));
-      preview.location.replace(apiUrl(`/reports/${current.id}/preview`));
+      const html = await api.previewSaved(current.id, undefined, "report");
+      previewUrl = URL.createObjectURL(new Blob([reportPreviewHtml(html)], { type: "text/html;charset=utf-8" }));
+      preview.location.replace(previewUrl);
+      window.setTimeout(() => URL.revokeObjectURL(previewUrl), 60_000);
     } catch (caught) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
       preview.close();
       setError(String(caught));
     } finally {

@@ -89,6 +89,17 @@ describe("FastAPI client", () => {
     fetchMock.mockRestore();
   });
 
+  it("loads the complete saved report for the standalone preview", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>report</html>", { status: 200 }));
+
+    await expect(api.previewSaved("report/1", undefined, "report")).resolves.toBe("<html>report</html>");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/remote/fund-cmt-auto/api/v1/reports/report%2F1/preview?scope=report",
+      expect.any(Object),
+    );
+    fetchMock.mockRestore();
+  });
+
   it("loads the effective product catalog", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("[]", { status: 200 }));
     await api.listProducts("2026-06-30");

@@ -51,6 +51,96 @@ PAGE5_REQUIRED_TEXT = (
 POINTS_PER_MM = 72 / 25.4
 
 
+def verify_cross_format_pdf(
+    canonical_pdf: Path,
+    word_pdf: Path,
+    evidence_root: Path,
+    *,
+    max_pixel_difference_ratio: float = 0.12,
+) -> dict:
+    """Compare the canonical Chromium PDF with a PDF saved by a Word renderer.
+
+    DOCX and HTML are necessarily rendered by different layout engines. The contract here is
+    therefore structural parity plus a deliberately wider visual threshold than the canonical
+    PDF baseline. The evidence images make an accepted engine-level difference inspectable.
+    """
+
+    if not 0 <= max_pixel_difference_ratio <= 1:
+        raise ValueError("max_pixel_difference_ratio must be between 0 and 1")
+    canonical_document = pdfium.PdfDocument(str(canonical_pdf))
+    word_document = pdfium.PdfDocument(str(word_pdf))
+    try:
+        canonical_sizes = [
+            [round(page.get_width(), 2), round(page.get_height(), 2)]
+            for page in canonical_document
+        ]
+        word_sizes = [
+            [round(page.get_width(), 2), round(page.get_height(), 2)]
+            for page in word_document
+        ]
+    finally:
+        canonical_document.close()
+        word_document.close()
+
+    canonical_pages = _render(canonical_pdf, evidence_root / "canonical-pages")
+    word_pages = _render(word_pdf, evidence_root / "word-pages")
+    (evidence_root / "diff-pages").mkdir(parents=True, exist_ok=True)
+    comparisons = [
+        {
+            "page": index + 1,
+            **_difference(
+                canonical_page,
+                word_page,
+                evidence_root / "diff-pages" / f"page-{index + 1:02d}.png",
+            ),
+        }
+        for index, (canonical_page, word_page) in enumerate(
+            zip(canonical_pages, word_pages, strict=False)
+        )
+    ]
+    page_count_passed = len(canonical_pages) == len(word_pages)
+    canonical_a4_passed = all(
+        abs(width - 595.2) <= 1 and abs(height - 841.92) <= 1
+        for width, height in canonical_sizes
+    )
+    word_a4_passed = all(
+        abs(width - 595.2) <= 1 and abs(height - 841.92) <= 1
+        for width, height in word_sizes
+    )
+    visual_passed = (
+        page_count_passed
+        and len(comparisons) == len(canonical_pages)
+        and all(
+            page["pixel_difference_ratio"] <= max_pixel_difference_ratio
+            for page in comparisons
+        )
+    )
+    manifest = {
+        "schema_version": "1.0",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "canonical_pdf": str(canonical_pdf.resolve()),
+        "word_pdf": str(word_pdf.resolve()),
+        "thresholds": {"pixel_difference_ratio": max_pixel_difference_ratio},
+        "structural": {
+            "canonical_page_count": len(canonical_pages),
+            "word_page_count": len(word_pages),
+            "page_count_passed": page_count_passed,
+            "canonical_page_sizes": canonical_sizes,
+            "word_page_sizes": word_sizes,
+            "canonical_a4_passed": canonical_a4_passed,
+            "word_a4_passed": word_a4_passed,
+        },
+        "pages": comparisons,
+        "visual_passed": visual_passed,
+        "passed": page_count_passed and canonical_a4_passed and word_a4_passed and visual_passed,
+    }
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    (evidence_root / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return manifest
+
+
 def verify_pdf(
     actual_pdf: Path,
     reference_pdf: Path,

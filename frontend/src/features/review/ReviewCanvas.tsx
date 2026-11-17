@@ -360,6 +360,28 @@ const PREVIEW_DOCUMENT_STYLE = `
   .report-page:not([data-section-key="month_in_review"]):not([data-review-preview-fallback="true"]) { display: none !important; }
 `;
 
+const REPORT_PREVIEW_DOCUMENT_STYLE = `
+  @media screen {
+    .report-document {
+      width: 210mm !important;
+      min-width: 210mm !important;
+      margin: 0 auto !important;
+    }
+    .report-page {
+      display: block !important;
+      width: 210mm !important;
+      min-width: 210mm !important;
+      max-width: 210mm !important;
+      height: 297mm !important;
+      min-height: 297mm !important;
+      max-height: 297mm !important;
+      margin: 8mm auto !important;
+      overflow: hidden !important;
+    }
+    .report-title-product { white-space: nowrap !important; }
+  }
+`;
+
 // PDF rendering uses the metric-compatible Carlito face installed in the backend image. Embed
 // that exact family in the browser preview as a versioned frontend asset as well; otherwise a
 // workstation with Microsoft Calibri and one without it can wrap the same report differently.
@@ -385,6 +407,25 @@ const PREVIEW_CJK_FONT_CSS = [
   previewFontFace("Embedded Noto Sans CJK TC", notoSansTc400Url, 400),
   previewFontFace("Embedded Noto Sans CJK TC", notoSansTc700Url, 700),
 ].join("\n");
+const PREVIEW_FONT_CSS = `${PREVIEW_LATIN_FONT_CSS}\n${PREVIEW_CJK_FONT_CSS}`;
+const PREVIEW_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src 'self' data:; base-uri 'none'; form-action 'none'";
+
+function appendPreviewStyle(document: Document, kind: "review" | "report"): void {
+  if (!document.querySelector("meta[data-preview-csp]")) {
+    const policy = document.createElement("meta");
+    policy.httpEquiv = "Content-Security-Policy";
+    policy.content = PREVIEW_CSP;
+    policy.dataset.previewCsp = "true";
+    document.head.prepend(policy);
+  }
+  const selector = `style[data-${kind}-preview]`;
+  if (document.querySelector(selector)) return;
+  const style = document.createElement("style");
+  if (kind === "review") style.dataset.reviewPreview = "true";
+  else style.dataset.reportPreview = "true";
+  style.textContent = `${PREVIEW_FONT_CSS}\n${kind === "review" ? PREVIEW_DOCUMENT_STYLE : REPORT_PREVIEW_DOCUMENT_STYLE}`;
+  document.head.append(style);
+}
 
 function reviewPreviewPages(document: Document): HTMLElement[] {
   const tagged = [...document.querySelectorAll<HTMLElement>('.report-page[data-section-key="month_in_review"]')];
@@ -403,12 +444,7 @@ export function preparePreviewDocument(document: Document): HTMLElement[] {
   document.querySelectorAll<HTMLElement>(".report-page").forEach((candidate) => {
     if (!kept.has(candidate)) candidate.remove();
   });
-  if (!document.querySelector("style[data-review-preview]")) {
-    const style = document.createElement("style");
-    style.dataset.reviewPreview = "true";
-    style.textContent = `${PREVIEW_LATIN_FONT_CSS}\n${PREVIEW_CJK_FONT_CSS}\n${PREVIEW_DOCUMENT_STYLE}`;
-    document.head.append(style);
-  }
+  appendPreviewStyle(document, "review");
   return pages;
 }
 
@@ -416,6 +452,13 @@ export function pageOnePreviewHtml(html: string): string {
   if (!html) return "";
   const document = new DOMParser().parseFromString(html, "text/html");
   preparePreviewDocument(document);
+  return `<!doctype html>${document.documentElement.outerHTML}`;
+}
+
+export function reportPreviewHtml(html: string): string {
+  if (!html) return "";
+  const document = new DOMParser().parseFromString(html, "text/html");
+  appendPreviewStyle(document, "report");
   return `<!doctype html>${document.documentElement.outerHTML}`;
 }
 

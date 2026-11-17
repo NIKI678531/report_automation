@@ -270,7 +270,7 @@ def test_every_output_format_reads_the_same_display_value(client, tmp_path):
         assert section.footer.is_linked_to_previous is False
         assert "Monthly Commentary | June 30, 2026" in section.header.paragraphs[0].text
         assert section.header.paragraphs[0].runs[0].font.name == "Calibri"
-        assert section.header.paragraphs[0].runs[0].font.size.pt == 12
+        assert section.header.paragraphs[0].runs[0].font.size.pt == 11
         assert len(section.footer._element.xpath(".//a:blip")) == 1
         assert len(section.footer.tables) == 1
         assert len(section.footer.tables[0].rows) == 2

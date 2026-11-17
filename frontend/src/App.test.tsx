@@ -370,6 +370,34 @@ describe("3033 product scope", () => {
     expect(reviewButton.querySelector(".module-state")?.classList.contains("ready")).toBe(true);
   });
 
+  it("opens the standalone preview from the lightweight report endpoint in a font-stable blob", async () => {
+    const current = report("preview-report", "2026-07-31", "EDITING");
+    vi.spyOn(api, "listProducts").mockResolvedValue([product3033]);
+    vi.spyOn(api, "listReports").mockResolvedValue([current]);
+    vi.spyOn(api, "getReport").mockResolvedValue(current);
+    vi.spyOn(api, "refreshAutomaticData").mockResolvedValue({ changed: false });
+    vi.spyOn(api, "previewDraft").mockResolvedValue("<html><head></head><body></body></html>");
+    const previewSaved = vi.spyOn(api, "previewSaved").mockResolvedValue(
+      '<!doctype html><html><head></head><body><section class="report-page">Report</section></body></html>',
+    );
+    const replace = vi.fn();
+    const close = vi.fn();
+    vi.spyOn(window, "open").mockReturnValue({ opener: window, location: { replace }, close } as unknown as Window);
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:report-preview");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    renderAt(`/reports/${current.id}`);
+    const previewButton = (await screen.findAllByRole("button", { name: "Preview" }))
+      .find((button) => button.getAttribute("title") === "Preview");
+    expect(previewButton).toBeTruthy();
+    fireEvent.click(previewButton!);
+
+    await waitFor(() => expect(previewSaved).toHaveBeenCalledWith(current.id, undefined, "report"));
+    expect(createObjectURL).toHaveBeenCalledWith(expect.objectContaining({ type: "text/html;charset=utf-8" }));
+    expect(replace).toHaveBeenCalledWith("blob:report-preview");
+    expect(close).not.toHaveBeenCalled();
+  });
+
   it("saves title edits before finalizing without blocking on review findings and opens downloads", async () => {
     let current = report("ready", "2026-07-31", "EDITING");
     current.report_title_defaults = { top10: "Largest 3033.HK positions*" };

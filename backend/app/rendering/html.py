@@ -463,6 +463,7 @@ def render_html(
     *,
     preview: bool = False,
     opening_only: bool = False,
+    embed_cjk_fonts: bool = True,
     layout_mode: Literal["continuous", "paged"] = "continuous",
 ) -> str:
     if preview:
@@ -527,12 +528,13 @@ def render_html(
         # PDF/full HTML remain self-contained and therefore continue to embed the approved faces.
         cjk_font_css=(
             _embedded_cjk_font_css(language_mode)
-            if is_chinese(language_mode) and not opening_only
+            if is_chinese(language_mode) and embed_cjk_fonts
             else ""
         ),
         # Exporter-level contract: legacy finalized documents keep their content identity while
         # all three data footnotes share the current Constituents/Analytics typography.
         footnote_tokens=tokens.get("footnote") or _render_tokens("3033-v5")["footnote"],
+        page_tokens=tokens["page"],
         calibri_font_css=_embedded_calibri_font_css() if template_version == "3033-v6" else "",
         product_sidebar=(
             _product_sidebar_context(reader_tokens["productSidebar"], report, heading)

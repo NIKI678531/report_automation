@@ -292,6 +292,7 @@ def _footer_table(
     footnote_x: int = 0,
     footnote_w: int = 12,
     footnote_font_name: str | None = None,
+    logo_width_mm: float = 44.0,
     dynamic_page_number: bool = False,
     profile_page_number: int | None = None,
 ) -> None:
@@ -379,7 +380,7 @@ def _footer_table(
     _clear_paragraph(logo_paragraph)
     _format_paragraph(logo_paragraph, alignment=WD_ALIGN_PARAGRAPH.RIGHT, after=0, line_spacing=1.0)
     logo_paragraph.add_run().add_picture(
-        str(Path(__file__).parent / "static" / "csop-logo.png"), width=Cm(4.6)
+        str(Path(__file__).parent / "static" / "csop-logo.png"), width=Cm(logo_width_mm / 10)
     )
 
     number_row = table.rows[1]
@@ -436,7 +437,7 @@ def _page_setup(
     _set_run_font(
         header.add_run(f"{term('monthly_commentary', language_mode)} | {long_date(report.report_date, language_mode)}"),
         font_name,
-        size=12,
+        size=float(page["headerFontPt"]),
         color=RGBColor.from_string(deep),
     )
     if banner:
@@ -459,6 +460,7 @@ def _page_setup(
         footnote_x=footnote_x,
         footnote_w=footnote_w,
         footnote_font_name="Calibri",
+        logo_width_mm=float(page["footerLogoWidthMm"]),
         dynamic_page_number=dynamic_page_number,
         profile_page_number=profile_page_number,
     )

@@ -33,7 +33,9 @@ jobs:
       # PDF and compares it with the approved report, so a runner without them is not measuring
       # this project's rendering -- it is measuring whatever Chromium fell back to. Carlito stands
       # in for Calibri (metric-compatible); the Noto CJK pair is what the Chinese variants embed.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-noto-cjk fonts-noto-cjk-extra
+      # LibreOffice supplies the deterministic Linux DOCX renderer for the cross-format guard.
+      # Release acceptance still feeds a PDF saved by Microsoft Word to verify_word_visual.py.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-noto-cjk fonts-noto-cjk-extra libreoffice-writer
       - run: fc-list | grep -Ei 'carlito|notosanscjk' | sort
       # Public CA of this disposable service; the DA contract suite only accepts localhost/da_contract.
       - run: docker exec ${{ job.services.mysql.id }} cat /var/lib/mysql/ca.pem > /tmp/da-test-ca.pem
