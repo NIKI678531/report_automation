@@ -451,6 +451,82 @@ def test_v6_docx_footer_uses_calibri_and_preserves_position(tmp_path):
     assert not any("Source" in paragraph.text for paragraph in exported.paragraphs)
 
 
+def test_v6_docx_footer_at_lowest_position_does_not_clip_word_glyphs(tmp_path):
+    content = _document("3033-v6")
+    _element(content, "footnote:historical")["footer_bottom_mm"] = 16
+    destination = tmp_path / "v6-lowest-footer.docx"
+
+    render_docx(_report(), content, destination)
+
+    exported = Document(destination)
+    paragraph = next(
+        paragraph for paragraph in exported.sections[0].footer.paragraphs
+        if "Source" in paragraph.text
+    )
+    positions = [
+        run._element.find(".//" + qn("w:position"))
+        for run in paragraph.runs
+        if run.text
+    ]
+    assert all(position is None for position in positions)
+
+
+def test_v6_docx_review_body_uses_word_pagination_compensation(tmp_path):
+    content = _document("3033-v6")
+    summary = next(
+        block
+        for block in content["sections"]["month_in_review"]["blocks"]
+        if block["block_id"] == "summary"
+    )
+    summary["content"] = "<p>Opening-page review copy.</p>"
+    destination = tmp_path / "v6-word-review-pagination.docx"
+
+    render_docx(_report(), content, destination)
+
+    exported = Document(destination)
+    paragraph = next(
+        paragraph for paragraph in exported.paragraphs
+        if paragraph.text == "Opening-page review copy."
+    )
+    assert paragraph.runs[0].font.size.pt == 9.5
+    assert paragraph.paragraph_format.line_spacing.pt == pytest.approx(9.5)
+
+
+def test_v6_docx_constituent_names_match_pdf_single_line_display(tmp_path):
+    content = _document("3033-v6")
+    names = ["XIAOMI CORP-CLASS B", "MEITUAN DIANPING-CLASS B"]
+    content["sections"]["constituents"] = [
+        {
+            "security_code": str(index),
+            "issuer": name,
+            "display_name": name,
+            "close_price": "1",
+            "weight": "0.1",
+            "return_1m": "0.1",
+            "return_3m": "0.1",
+            "return_6m": "0.1",
+            "return_ytd": "0.1",
+        }
+        for index, name in enumerate(names, start=1)
+    ]
+    before = [row["display_name"] for row in content["sections"]["constituents"]]
+    destination = tmp_path / "v6-word-constituent-names.docx"
+
+    render_docx(_report(), content, destination)
+
+    exported = Document(destination)
+    cell_text = {
+        cell.text
+        for table in exported.tables
+        for row in table.rows
+        for cell in row.cells
+    }
+    assert "XIAOMI CORP-CLASS B" in cell_text
+    assert "MEITUAN DIANPING..." in cell_text
+    assert "MEITUAN DIANPING-CLASS B" not in cell_text
+    assert [row["display_name"] for row in content["sections"]["constituents"]] == before
+
+
 @pytest.mark.parametrize("version", [f"3033-v{number}" for number in range(1, 7)])
 @pytest.mark.parametrize("product_code", ["3033", "3149"])
 def test_all_word_exports_use_updated_footers_without_changing_source(tmp_path, version, product_code):

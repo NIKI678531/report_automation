@@ -543,7 +543,7 @@ def test_docx_review_title_and_complete_body_use_independent_two_character_inden
 
 
 @pytest.mark.parametrize("steps", range(-3, 5))
-def test_docx_footnote_nudge_keeps_every_allowed_position_distinct(steps: int):
+def test_docx_footnote_nudge_clamps_unsafe_negative_word_positions(steps: int):
     document = Document()
     _footer_table(
         document.sections[0],
@@ -559,7 +559,11 @@ def test_docx_footnote_nudge_keeps_every_allowed_position_distinct(steps: int):
         footnote_bottom_nudge_pt=steps * 4,
     )
 
-    assert f'w:position w:val="{steps * 8}"' in document.sections[0].footer._element.xml
+    footer_xml = document.sections[0].footer._element.xml
+    if steps <= 0:
+        assert "w:position" not in footer_xml
+    else:
+        assert f'w:position w:val="{steps * 8}"' in footer_xml
 
 
 def test_chromium_preflight_detects_horizontal_scroll_overflow(monkeypatch):

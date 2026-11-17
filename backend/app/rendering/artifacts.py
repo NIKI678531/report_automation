@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from html import unescape
 from io import BytesIO
@@ -58,13 +59,14 @@ LAYOUT_POLICY_VERSION = "paged-layout-advisory-v4"
 DATA_FOOTNOTE_FONT_SIZE_PT = 8.0
 DATA_FOOTNOTE_LINE_HEIGHT = 1.2
 WORD_TABLE_LEFT_NUDGE_TWIPS = 108
+WORD_CONSTITUENT_NAME_WIDTH_UNITS = 19
 
 
 def renderer_version_for(format_name: str) -> str:
     return (
         f"{settings.renderer_version}-paged-compliance-v8" if format_name == "pdf"
         else "html-reader-compliance-v12" if format_name == "html"
-        else "docx-compliance-v11"
+        else "docx-compliance-v12"
     )
 
 
@@ -78,6 +80,30 @@ def _font_name(tokens: dict[str, Any], language_mode: str) -> str:
     if is_zh_hant(language_mode):
         return "Noto Sans CJK TC"
     return str(tokens["font"]["family"]).split(",", 1)[0].strip().strip('"')
+
+
+def _word_single_line_text(value: Any, *, max_units: int) -> str:
+    """Approximate CSS ellipsis for fixed-width Word table cells."""
+
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+
+    def units(character: str) -> int:
+        if unicodedata.combining(character):
+            return 0
+        return 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+
+    if sum(units(character) for character in text) <= max_units:
+        return text
+    budget = max(0, max_units - 3)
+    result: list[str] = []
+    used = 0
+    for character in text:
+        width = units(character)
+        if used + width > budget:
+            break
+        result.append(character)
+        used += width
+    return "".join(result).rstrip() + "..."
 
 
 def _set_run_font(
@@ -335,7 +361,11 @@ def _footer_table(
             )
             run.italic = False
             run.underline = False
-            _set_run_vertical_position(run, footnote_bottom_nudge_pt)
+            # Lowering a glyph inside Word's fixed 9.6 pt line box clips the text in Print
+            # Layout even though Word's PDF exporter can still paint it. Keep the editable
+            # footer on its safe baseline for values below 20 mm; positive nudges remain safe.
+            if footnote_bottom_nudge_pt > 0:
+                _set_run_vertical_position(run, footnote_bottom_nudge_pt)
     else:
         _format_paragraph(
             anchor,
@@ -773,6 +803,8 @@ def _append_rich_text(
     alignment,
     style_roles: dict[str, Any] | None = None,
     default_style: dict[str, Any] | None = None,
+    size_adjustment_pt: float = 0,
+    line_height_adjustment: float = 0,
 ) -> None:
     parser = _RichTextExtractor()
     parser.feed(value)
@@ -823,6 +855,7 @@ def _append_rich_text(
             "line-height",
             fallback=float(default_style.get("line_height") or resolved_line_height),
         )
+        resolved_line_height = max(1.0, resolved_line_height - line_height_adjustment)
         resolved_size = float(
             ((style_roles or {}).get("font_size_pt") or {}).get(
                 block_values.get("data-font-size-role"), size
@@ -834,6 +867,7 @@ def _append_rich_text(
             "font-size",
             fallback=float(default_style.get("font_size_pt") or resolved_size),
         )
+        resolved_size = max(1.0, resolved_size - size_adjustment_pt)
         _format_paragraph(
             paragraph,
             alignment=resolved_alignment,
@@ -1016,6 +1050,11 @@ def _review_block(
         }.get(str(body_style.get("text_align") or "left"), WD_ALIGN_PARAGRAPH.LEFT),
         style_roles=style_roles,
         default_style=body_style,
+        # Calibri's Word layout occupies more vertical space than Chromium's embedded font
+        # metrics. Compact only the controlled Word flow so the opening page retains the
+        # canonical PDF section boundary; the PDF typography itself remains unchanged.
+        size_adjustment_pt=0.5 if style_roles is not None else 0,
+        line_height_adjustment=0.2 if style_roles is not None else 0,
     )
 
 
@@ -1602,7 +1641,21 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     _table(
         document,
         [term("stock_code", language_mode), term("stock_name", language_mode), term("closing_price_hkd", language_mode), term("weighting_pct", language_mode), term("return_1m", language_mode), term("return_3m", language_mode), term("return_6m", language_mode), term("return_ytd", language_mode)],
-        [[str(x.get("security_code", "")), str(x.get("display_name") or ""), price(x.get("close_price"), language_mode), pct(x.get("weight"), language_mode), pct(x.get("return_1m"), language_mode), pct(x.get("return_3m"), language_mode), pct(x.get("return_6m"), language_mode), pct(x.get("return_ytd"), language_mode)] for x in constituents],
+        [
+            [
+                str(x.get("security_code", "")),
+                _word_single_line_text(
+                    x.get("display_name"), max_units=WORD_CONSTITUENT_NAME_WIDTH_UNITS
+                ),
+                price(x.get("close_price"), language_mode),
+                pct(x.get("weight"), language_mode),
+                pct(x.get("return_1m"), language_mode),
+                pct(x.get("return_3m"), language_mode),
+                pct(x.get("return_6m"), language_mode),
+                pct(x.get("return_ytd"), language_mode),
+            ]
+            for x in constituents
+        ],
         widths=constituent_widths,
         font_name=font_name,
         blue=blue_hex,
