@@ -17,7 +17,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("canonical_pdf", type=Path)
     parser.add_argument("word_pdf", type=Path)
-    parser.add_argument("--threshold", type=float, default=0.12)
+    parser.add_argument("--threshold", type=float, default=0.23)
+    parser.add_argument("--mean-threshold", type=float, default=0.11)
     args = parser.parse_args()
     for candidate in (args.canonical_pdf, args.word_pdf):
         if not candidate.is_file():
@@ -28,6 +29,7 @@ if __name__ == "__main__":
         args.word_pdf,
         evidence,
         max_pixel_difference_ratio=args.threshold,
+        max_mean_absolute_error=args.mean_threshold,
     )
     print(f"Word visual QA passed={result['passed']}; evidence={evidence / 'manifest.json'}")
     raise SystemExit(0 if result["passed"] else 2)

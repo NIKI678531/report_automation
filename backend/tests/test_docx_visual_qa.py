@@ -58,6 +58,52 @@ def _content() -> dict:
     content["sections"]["footnotes"]["historical"] = (
         "Source: CSOP. Past performance is not indicative of future performance."
     )
+    content["sections"]["company_news"] = [
+        {
+            "title": f"Constituent company update {index}",
+            "source_name": "Approved business news source",
+            "summary": (
+                "The company reported a monthly operating update covering demand, investment "
+                "and market conditions. Management continues to monitor execution and risk."
+            ),
+        }
+        for index in range(1, 7)
+    ]
+    content["sections"]["constituents"] = [
+        {
+            "security_code": str(1000 + index),
+            "display_name": f"Constituent {index}",
+            "close_price": str(20 + index / 10),
+            "weight": str((31 - index) / 465),
+            "return_1m": str((index - 15) / 100),
+            "return_3m": str((index - 18) / 100),
+            "return_6m": str((index - 20) / 100),
+            "return_ytd": str((index - 12) / 100),
+        }
+        for index in range(1, 31)
+    ]
+    analytics = content["sections"]["analytics"]
+    analytics["top10"] = [
+        {"display_issuer": f"Constituent {index}", "weight": str((11 - index) / 55)}
+        for index in range(1, 11)
+    ]
+    analytics["top"] = [
+        {"display_issuer": f"Top performer {index}", "return": str(index / 10)}
+        for index in range(1, 4)
+    ]
+    analytics["bottom"] = [
+        {"display_issuer": f"Bottom performer {index}", "return": str(-index / 10)}
+        for index in range(1, 4)
+    ]
+    analytics["portfolio"] = [
+        {"metric_code": "AUM", "display_value": "62,674.82 million"},
+        {"metric_code": "AVERAGE_DAILY_TURNOVER", "display_value": "12,882 million"},
+        {"metric_code": "NUMBER_OF_HOLDINGS", "display_value": "30"},
+    ]
+    content["sections"]["footnotes"].update(
+        constituents="Constituent source and return measurement periods.",
+        analytics="Portfolio analytics source and calculation methodology.",
+    )
     return content
 
 
@@ -104,3 +150,4 @@ def test_docx_renderer_stays_within_the_canonical_paged_pdf(tmp_path: Path):
     assert result["structural"]["canonical_a4_passed"] is True
     assert result["structural"]["word_a4_passed"] is True
     assert result["visual_passed"] is True
+    assert result["passed"] is True

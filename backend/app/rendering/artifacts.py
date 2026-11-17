@@ -57,13 +57,14 @@ MINOR_LAYOUT_OVERFLOW_TOLERANCE_MM = 3.0
 LAYOUT_POLICY_VERSION = "paged-layout-advisory-v4"
 DATA_FOOTNOTE_FONT_SIZE_PT = 8.0
 DATA_FOOTNOTE_LINE_HEIGHT = 1.2
+WORD_TABLE_LEFT_NUDGE_TWIPS = 108
 
 
 def renderer_version_for(format_name: str) -> str:
     return (
         f"{settings.renderer_version}-paged-compliance-v8" if format_name == "pdf"
         else "html-reader-compliance-v12" if format_name == "html"
-        else "docx-compliance-v10"
+        else "docx-compliance-v11"
     )
 
 
@@ -495,9 +496,10 @@ def _table(
     header_style: dict[str, Any] | None = None,
     body_style: dict[str, Any] | None = None,
     cell_padding_y_pt: float | None = None,
+    indent_twips: int = 0,
 ):
     table = parent.add_table(rows=1 if headers is not None else 0, cols=len(widths))
-    _set_table_geometry(table, widths)
+    _set_table_geometry(table, widths, indent=indent_twips)
     _set_table_borders(table, color="000000" if body_borders else None, size=4)
     if headers is not None:
         header_row = table.rows[0]
@@ -516,7 +518,8 @@ def _table(
                 if cell_padding_y_pt is not None else 75
             )
             _set_cell_margins(cell, top=header_padding, right=55, bottom=header_padding, left=55)
-            _set_cell_borders(cell, color="FFFFFF", size=5)
+            # Canonical HTML uses one uninterrupted blue band rather than a white cell grid.
+            _set_cell_borders(cell)
             paragraph = cell.paragraphs[0]
             resolved_header_size = float(
                 (header_style or {}).get("font_size_pt") or header_font_size or font_size
@@ -570,7 +573,7 @@ def _table(
             color = RGBColor(0, 0, 0)
             if blue_first and index == 0:
                 _shade(cell, blue)
-                _set_cell_borders(cell, color="FFFFFF", size=5, edges=("top", "bottom", "left", "right"))
+                _set_cell_borders(cell)
                 color = RGBColor(255, 255, 255)
             paragraph = cell.paragraphs[0]
             alignment = alignments[index] if alignments else WD_ALIGN_PARAGRAPH.LEFT
@@ -606,7 +609,7 @@ def _table(
                     run.italic = bool(body_style.get("italic", False))
                     run.underline = bool(body_style.get("underline", False))
     # Rows appended after the initial grid need their tcW values materialized as well.
-    _set_table_geometry(table, widths)
+    _set_table_geometry(table, widths, indent=indent_twips)
     return table
 
 
@@ -907,6 +910,30 @@ def _remove_initial_empty_paragraph(cell) -> None:
         cell._tc.remove(cell.paragraphs[0]._element)
 
 
+def _compact_empty_table_paragraphs(cell, font_name: str) -> None:
+    """Collapse Word's mandatory paragraphs around adjacent nested tables and images."""
+
+    compacted = 0
+    for paragraph in cell.paragraphs:
+        if paragraph.text or paragraph._p.xpath(".//a:blip"):
+            continue
+        _clear_paragraph(paragraph)
+        # Retain the canonical 1.4 mm gap after the blue title, but collapse the mandatory
+        # trailing cell paragraph so it does not push the next report module down.
+        _format_paragraph(
+            paragraph,
+            after=0,
+            line_spacing=Pt(5 if compacted == 0 else 1),
+        )
+        _set_run_font(
+            paragraph.add_run("\u200b"),
+            font_name,
+            size=1,
+            color=RGBColor(255, 255, 255),
+        )
+        compacted += 1
+
+
 def _review_block(
     parent,
     block: dict[str, Any],
@@ -951,7 +978,9 @@ def _review_block(
         heading_run,
         str(title_style.get("font_family") or font_name),
         size=float(title_style.get("font_size_pt") or 14),
-        bold=bool(title_style.get("bold", True)),
+        # Legacy v1/v2 HTML always renders module headings as bold h3 elements. Their Word
+        # adapter must not accidentally consume a stale non-bold editor style that HTML ignores.
+        bold=True if style_roles is None else bool(title_style.get("bold", True)),
         color=RGBColor.from_string(
             str(title_style.get("color") or f"#{deep}").lstrip("#").upper()
         ),
@@ -1034,7 +1063,11 @@ def _review_flow(
         table = parent.add_table(rows=1, cols=column_count)
         unit = width // column_count
         widths = [unit] * (column_count - 1) + [width - unit * (column_count - 1)]
-        _set_table_geometry(table, widths)
+        _set_table_geometry(
+            table,
+            widths,
+            indent=WORD_TABLE_LEFT_NUDGE_TWIPS if not hasattr(parent, "_tc") else 0,
+        )
         _set_table_borders(table)
         row = table.rows[0]
         _prevent_row_split(row)
@@ -1287,13 +1320,17 @@ def _render_historical_docx(
         group_w = int(historical.get("w") or 12)
         if group_x == 0 and group_w == 12:
             wrapper = document.add_table(rows=1, cols=1)
-            _set_table_geometry(wrapper, [usable_width])
+            _set_table_geometry(
+                wrapper, [usable_width], indent=WORD_TABLE_LEFT_NUDGE_TWIPS
+            )
             content_parent = wrapper.rows[0].cells[0]
         else:
             column_widths = [usable_width // 12] * 12
             column_widths[-1] += usable_width - sum(column_widths)
             wrapper = document.add_table(rows=1, cols=12)
-            _set_table_geometry(wrapper, column_widths)
+            _set_table_geometry(
+                wrapper, column_widths, indent=WORD_TABLE_LEFT_NUDGE_TWIPS
+            )
             content_parent = wrapper.rows[0].cells[group_x].merge(
                 wrapper.rows[0].cells[group_x + group_w - 1]
             )
@@ -1453,6 +1490,8 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     title.add_run(report_heading.commentary)
     _format_paragraph(title, before=0, after=6, line_spacing=1.0, keep_with_next=True)
     _set_paragraph_border(title, color=deep_hex, size=2, space=7)
+    for run in title.runs:
+        _set_run_font(run, font_name, size=float(tokens["font"]["reportTitlePt"]), bold=True, color=deep)
     enable_review_layout = content.get("template_version") != "3033-v1"
     if page_one is not None and page_one["review_layout"] is not None:
         _review_layout(
@@ -1524,7 +1563,9 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         dynamic_page_number=is_controlled, profile_page_number=2,
     )
     news_heading = document.add_heading(titles["company_news"], 1)
-    _format_paragraph(news_heading, before=3, after=5, keep_with_next=True)
+    _format_paragraph(news_heading, before=11, after=5, keep_with_next=True)
+    for run in news_heading.runs:
+        _set_run_font(run, font_name, size=14, bold=True, color=deep)
     for item in sections["company_news"]:
         if not any(str(item.get(field) or "").strip() for field in ("title", "summary", "source_name")):
             continue
@@ -1537,7 +1578,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         source_name = item.get("source_name")
         if source_name:
             _set_run_font(paragraph.add_run("\n" + source_name), font_name, size=9)
-        _set_run_font(paragraph.add_run("\n" + item["summary"]), font_name, size=10)
+        _set_run_font(paragraph.add_run("\n" + item["summary"]), font_name, size=9.5)
 
     constituent_page_number = review_page_count + 2
     page3 = document.add_section(WD_SECTION.NEW_PAGE)
@@ -1551,9 +1592,9 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
     for run in heading.runs:
         _set_run_font(run, font_name, size=16, bold=True, color=deep)
     rebalance = document.add_paragraph(f"({term('next_rebalancing_date', language_mode, date=rebalancing_date_text(content.get('next_rebalancing_date'), language_mode))})")
-    _format_paragraph(rebalance, alignment=WD_ALIGN_PARAGRAPH.CENTER, after=8, line_spacing=1.0, keep_with_next=True)
+    _format_paragraph(rebalance, alignment=WD_ALIGN_PARAGRAPH.CENTER, after=0, line_spacing=1.0, keep_with_next=True)
     for run in rebalance.runs:
-        _set_run_font(run, font_name, size=12)
+        _set_run_font(run, font_name, size=10)
     constituents = sections["constituents"]
     percentages = (0.06, 0.17, 0.12, 0.12, 0.13, 0.13, 0.13)
     constituent_widths = [int(usable_width * value) for value in percentages]
@@ -1569,8 +1610,9 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         header_font_size=9.3,
         blue_first=True,
         alignments=[WD_ALIGN_PARAGRAPH.CENTER] * 8,
-        header_height_cm=1.35,
-        row_height_cm=0.53,
+        header_height_cm=1.20,
+        row_height_cm=0.556,
+        indent_twips=WORD_TABLE_LEFT_NUDGE_TWIPS,
     )
 
     analytics_page_number = review_page_count + 3
@@ -1581,9 +1623,14 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         dynamic_page_number=is_controlled, profile_page_number=4,
     )
     analytics = sections["analytics"]
+    analytics_spacer = document.add_paragraph()
+    _format_paragraph(analytics_spacer, after=0, line_spacing=Pt(5))
+    _set_run_font(
+        analytics_spacer.add_run("\u200b"), font_name, size=1, color=RGBColor(255, 255, 255)
+    )
     outer = document.add_table(rows=1, cols=2)
     outer_widths = [int(usable_width * 0.49), usable_width - int(usable_width * 0.49)]
-    _set_table_geometry(outer, outer_widths)
+    _set_table_geometry(outer, outer_widths, indent=WORD_TABLE_LEFT_NUDGE_TWIPS)
     _set_table_borders(outer)
     left, right = outer.rows[0].cells
     for cell in (left, right):
@@ -1601,7 +1648,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         blue=blue_hex,
         font_size=11,
         alignments=[WD_ALIGN_PARAGRAPH.LEFT, WD_ALIGN_PARAGRAPH.RIGHT],
-        row_height_cm=0.62,
+        row_height_cm=0.82,
     )
     _remove_initial_empty_paragraph(left)
     _add_blue_title(right, titles["sector_breakdown"], None, width=outer_widths[1] - 170, font_name=font_name, blue=blue_hex)
@@ -1619,16 +1666,22 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         title=titles["sector_breakdown"],
     )
     chart_paragraph = right.add_paragraph()
-    _format_paragraph(chart_paragraph, alignment=WD_ALIGN_PARAGRAPH.CENTER)
+    _format_paragraph(chart_paragraph, alignment=WD_ALIGN_PARAGRAPH.CENTER, before=2.5)
     if chart.get("has_data"):
-        picture = chart_paragraph.add_run().add_picture(_sector_chart_image(chart, sector_series, font_name), width=Cm(7.2))
+        picture = chart_paragraph.add_run().add_picture(
+            _sector_chart_image(chart, sector_series, font_name), width=Cm(9.4)
+        )
         picture._inline.docPr.set("title", str(chart["title"]))
         picture._inline.docPr.set("descr", str(chart.get("alt_text") or ""))
         _sector_legend(right, chart["rows"], font_name=font_name)
     _remove_initial_empty_paragraph(right)
+    _compact_empty_table_paragraphs(left, font_name)
+    _compact_empty_table_paragraphs(right, font_name)
 
     performers = document.add_table(rows=1, cols=2)
-    _set_table_geometry(performers, outer_widths)
+    _set_table_geometry(
+        performers, outer_widths, indent=WORD_TABLE_LEFT_NUDGE_TWIPS
+    )
     _set_table_borders(performers)
     for index, (title_text, rows) in enumerate((
         (titles["top_performers"], [[x.get("display_issuer", ""), pct(x["return"], language_mode)] for x in analytics["top"]]),
@@ -1637,7 +1690,7 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         cell = performers.rows[0].cells[index]
         cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
         _set_cell_borders(cell)
-        _set_cell_margins(cell, top=230, right=170 if index == 0 else 0, left=170 if index == 1 else 0)
+        _set_cell_margins(cell, top=550, right=170 if index == 0 else 0, left=170 if index == 1 else 0)
         heading = cell.paragraphs[0]
         _clear_paragraph(heading)
         _format_paragraph(heading, after=5, keep_with_next=True)
@@ -1651,7 +1704,9 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
         )
 
     portfolio_heading = document.add_heading(titles["portfolio_analysis"], 1)
-    _format_paragraph(portfolio_heading, before=12, after=5, keep_with_next=True)
+    _format_paragraph(portfolio_heading, before=20, after=5, keep_with_next=True)
+    for run in portfolio_heading.runs:
+        _set_run_font(run, font_name, size=14, bold=True, color=deep)
     portfolio_rows = normalize_portfolio_rows(analytics.get("portfolio"), "HKD")
     if is_chinese(language_mode):
         for row in portfolio_rows:
@@ -1664,7 +1719,9 @@ def render_docx(report: Report, content: dict, destination: Path) -> None:
                 row["display_value"] = localized_portfolio_value(row.get("display_value"), language_mode)
     portfolio_table = document.add_table(rows=0, cols=2)
     portfolio_widths = [int(usable_width * 0.63), usable_width - int(usable_width * 0.63)]
-    _set_table_geometry(portfolio_table, portfolio_widths)
+    _set_table_geometry(
+        portfolio_table, portfolio_widths, indent=WORD_TABLE_LEFT_NUDGE_TWIPS
+    )
     _set_table_borders(portfolio_table)
     for values in [[titles[f"portfolio.{item['metric_code']}"], item["display_value"]] for item in portfolio_rows]:
         row = portfolio_table.add_row()

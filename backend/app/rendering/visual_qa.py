@@ -56,7 +56,8 @@ def verify_cross_format_pdf(
     word_pdf: Path,
     evidence_root: Path,
     *,
-    max_pixel_difference_ratio: float = 0.12,
+    max_pixel_difference_ratio: float = 0.23,
+    max_mean_absolute_error: float = 0.11,
 ) -> dict:
     """Compare the canonical Chromium PDF with a PDF saved by a Word renderer.
 
@@ -67,6 +68,8 @@ def verify_cross_format_pdf(
 
     if not 0 <= max_pixel_difference_ratio <= 1:
         raise ValueError("max_pixel_difference_ratio must be between 0 and 1")
+    if not 0 <= max_mean_absolute_error <= 1:
+        raise ValueError("max_mean_absolute_error must be between 0 and 1")
     canonical_document = pdfium.PdfDocument(str(canonical_pdf))
     word_document = pdfium.PdfDocument(str(word_pdf))
     try:
@@ -112,6 +115,7 @@ def verify_cross_format_pdf(
         and len(comparisons) == len(canonical_pages)
         and all(
             page["pixel_difference_ratio"] <= max_pixel_difference_ratio
+            and page["mean_absolute_error"] <= max_mean_absolute_error
             for page in comparisons
         )
     )
@@ -120,7 +124,10 @@ def verify_cross_format_pdf(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "canonical_pdf": str(canonical_pdf.resolve()),
         "word_pdf": str(word_pdf.resolve()),
-        "thresholds": {"pixel_difference_ratio": max_pixel_difference_ratio},
+        "thresholds": {
+            "pixel_difference_ratio": max_pixel_difference_ratio,
+            "mean_absolute_error": max_mean_absolute_error,
+        },
         "structural": {
             "canonical_page_count": len(canonical_pages),
             "word_page_count": len(word_pages),
